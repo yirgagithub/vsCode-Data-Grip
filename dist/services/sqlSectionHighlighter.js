@@ -37,15 +37,40 @@ exports.SqlSectionHighlighter = void 0;
 exports.rangeFromPlain = rangeFromPlain;
 const vscode = __importStar(require("vscode"));
 class SqlSectionHighlighter {
-    decoration = vscode.window.createTextEditorDecorationType({
+    singleLineDecoration = vscode.window.createTextEditorDecorationType({
         border: '1px solid',
-        borderColor: new vscode.ThemeColor('focusBorder'),
+        borderColor: new vscode.ThemeColor('testing.iconPassed'),
         borderRadius: '3px',
-        backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground'),
-        overviewRulerColor: new vscode.ThemeColor('focusBorder'),
+        overviewRulerColor: new vscode.ThemeColor('testing.iconPassed'),
         overviewRulerLane: vscode.OverviewRulerLane.Right
     });
+    firstLineDecoration = vscode.window.createTextEditorDecorationType({
+        isWholeLine: true,
+        borderWidth: '1px 1px 0 1px',
+        borderStyle: 'solid',
+        borderColor: new vscode.ThemeColor('testing.iconPassed'),
+        overviewRulerColor: new vscode.ThemeColor('testing.iconPassed'),
+        overviewRulerLane: vscode.OverviewRulerLane.Right
+    });
+    middleLineDecoration = vscode.window.createTextEditorDecorationType({
+        isWholeLine: true,
+        borderWidth: '0 1px',
+        borderStyle: 'solid',
+        borderColor: new vscode.ThemeColor('testing.iconPassed')
+    });
+    lastLineDecoration = vscode.window.createTextEditorDecorationType({
+        isWholeLine: true,
+        borderWidth: '0 1px 1px 1px',
+        borderStyle: 'solid',
+        borderColor: new vscode.ThemeColor('testing.iconPassed'),
+        borderRadius: '0 0 3px 3px'
+    });
     activeRanges = new Map();
+    highlight(editor, range) {
+        const targetRange = this.clampRange(editor.document, range);
+        this.activeRanges.set(editor.document.uri.toString(), targetRange);
+        this.applyDecorations(editor, targetRange);
+    }
     async reveal(documentUri, range, expectedSql) {
         let document;
         try {
@@ -62,14 +87,14 @@ class SqlSectionHighlighter {
         });
         const targetRange = this.resolveRange(document, range, expectedSql);
         this.activeRanges.set(document.uri.toString(), targetRange);
-        editor.setDecorations(this.decoration, [targetRange]);
+        this.applyDecorations(editor, targetRange);
         editor.revealRange(targetRange, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
         return editor;
     }
     refreshVisibleEditors() {
         for (const editor of vscode.window.visibleTextEditors) {
             const range = this.activeRanges.get(editor.document.uri.toString());
-            editor.setDecorations(this.decoration, range ? [range] : []);
+            this.applyDecorations(editor, range);
         }
     }
     clear(documentUri) {
@@ -82,7 +107,32 @@ class SqlSectionHighlighter {
         this.refreshVisibleEditors();
     }
     dispose() {
-        this.decoration.dispose();
+        this.singleLineDecoration.dispose();
+        this.firstLineDecoration.dispose();
+        this.middleLineDecoration.dispose();
+        this.lastLineDecoration.dispose();
+    }
+    applyDecorations(editor, range) {
+        editor.setDecorations(this.singleLineDecoration, []);
+        editor.setDecorations(this.firstLineDecoration, []);
+        editor.setDecorations(this.middleLineDecoration, []);
+        editor.setDecorations(this.lastLineDecoration, []);
+        if (!range) {
+            return;
+        }
+        if (range.start.line === range.end.line) {
+            editor.setDecorations(this.singleLineDecoration, [range]);
+            return;
+        }
+        const firstLine = editor.document.lineAt(range.start.line).range;
+        const lastLine = editor.document.lineAt(range.end.line).range;
+        const middleLines = [];
+        for (let line = range.start.line + 1; line < range.end.line; line += 1) {
+            middleLines.push(editor.document.lineAt(line).range);
+        }
+        editor.setDecorations(this.firstLineDecoration, [firstLine]);
+        editor.setDecorations(this.middleLineDecoration, middleLines);
+        editor.setDecorations(this.lastLineDecoration, [lastLine]);
     }
     resolveRange(document, range, expectedSql) {
         const direct = this.clampRange(document, range);

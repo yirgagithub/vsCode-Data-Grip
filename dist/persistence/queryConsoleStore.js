@@ -127,10 +127,9 @@ class QueryConsoleStore {
         }
     }
     defaultContent(connection, uri) {
-        const pathLine = uri ? `-- File: ${uri.fsPath}\n` : '';
         return connection
-            ? `-- ${connection.name} / ${connection.database}\n-- Schema: ${connection.defaultSchema ?? 'public'}\n${pathLine}\nselect *\nfrom \nlimit 100;\n`
-            : `-- SQL Console\n${pathLine}\n`;
+            ? `-- ${connection.name} / ${connection.database}\n-- Schema: ${connection.defaultSchema ?? 'public'}\n\nselect *\nfrom \nlimit 100;\n`
+            : `-- SQL Console\n\n`;
     }
     safeName(value) {
         return value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'sql-console';

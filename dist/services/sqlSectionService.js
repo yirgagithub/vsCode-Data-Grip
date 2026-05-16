@@ -48,6 +48,13 @@ class SqlSectionService {
         const node = this.treeService.findNode(document, selection);
         return node ? this.toSection(node) : undefined;
     }
+    detectExecutable(document, selection) {
+        const node = this.treeService.findExecutableNode(document, selection);
+        return node ? this.toSection(node) : undefined;
+    }
+    getSyntaxIssues(document) {
+        return this.treeService.getSyntaxIssues(document).map((issue) => new vscode.Diagnostic(issue.range, issue.message, vscode.DiagnosticSeverity.Error));
+    }
     outline(document) {
         return this.getSections(document).map((section) => new vscode.SymbolInformation(section.kind === 'cte' && section.name ? `CTE ${section.name}` : `SQL section ${section.index + 1}`, vscode.SymbolKind.Function, section.sql.replace(/\s+/g, ' ').slice(0, 80), new vscode.Location(document.uri, section.range)));
     }

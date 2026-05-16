@@ -98,10 +98,9 @@ export class QueryConsoleStore {
   }
 
   private defaultContent(connection: ConnectionConfig | undefined, uri?: vscode.Uri): string {
-    const pathLine = uri ? `-- File: ${uri.fsPath}\n` : '';
     return connection
-      ? `-- ${connection.name} / ${connection.database}\n-- Schema: ${connection.defaultSchema ?? 'public'}\n${pathLine}\nselect *\nfrom \nlimit 100;\n`
-      : `-- SQL Console\n${pathLine}\n`;
+      ? `-- ${connection.name} / ${connection.database}\n-- Schema: ${connection.defaultSchema ?? 'public'}\n\nselect *\nfrom \nlimit 100;\n`
+      : `-- SQL Console\n\n`;
   }
 
   private safeName(value: string): string {

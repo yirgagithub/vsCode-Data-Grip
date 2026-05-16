@@ -83,8 +83,131 @@ class SqlQueryTreeService {
         }
         return this.findSmallestContainingNode(roots, offset, offset);
     }
+    findExecutableNode(document, selection) {
+        const node = this.findNode(document, selection);
+        if (!node) {
+            return undefined;
+        }
+        if (node.kind !== 'cte') {
+            return node;
+        }
+        return this.getTree(document).find((root) => node.start >= root.start && node.end <= root.end);
+    }
     getRootNodes(document) {
         return this.getTree(document);
+    }
+    getSyntaxIssues(document) {
+        const text = document.getText();
+        const issues = [];
+        const stack = [];
+        let single = false;
+        let double = false;
+        let lineComment = false;
+        let blockCommentStart;
+        let dollarTag;
+        for (let i = 0; i < text.length; i += 1) {
+            const char = text[i];
+            const next = text[i + 1];
+            if (lineComment) {
+                if (char === '\n') {
+                    lineComment = false;
+                }
+                continue;
+            }
+            if (blockCommentStart !== undefined) {
+                if (char === '*' && next === '/') {
+                    blockCommentStart = undefined;
+                    i += 1;
+                }
+                continue;
+            }
+            if (dollarTag) {
+                if (text.startsWith(dollarTag, i)) {
+                    i += dollarTag.length - 1;
+                    dollarTag = undefined;
+                }
+                continue;
+            }
+            if (single) {
+                if (char === "'" && next === "'") {
+                    i += 1;
+                }
+                else if (char === "'") {
+                    single = false;
+                }
+                continue;
+            }
+            if (double) {
+                if (char === '"' && next === '"') {
+                    i += 1;
+                }
+                else if (char === '"') {
+                    double = false;
+                }
+                continue;
+            }
+            if (char === '-' && next === '-') {
+                lineComment = true;
+                i += 1;
+                continue;
+            }
+            if (char === '/' && next === '*') {
+                blockCommentStart = i;
+                i += 1;
+                continue;
+            }
+            if (char === "'") {
+                single = true;
+                continue;
+            }
+            if (char === '"') {
+                double = true;
+                continue;
+            }
+            if (char === '$') {
+                const match = text.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
+                if (match) {
+                    dollarTag = match[0];
+                    i += dollarTag.length - 1;
+                    continue;
+                }
+            }
+            if (char === '(') {
+                stack.push(i);
+            }
+            else if (char === ')') {
+                const open = stack.pop();
+                if (open === undefined) {
+                    issues.push({
+                        message: 'Unexpected closing parenthesis.',
+                        range: new vscode.Range(document.positionAt(i), document.positionAt(i + 1))
+                    });
+                }
+            }
+        }
+        for (const open of stack) {
+            issues.push({
+                message: 'Missing closing parenthesis.',
+                range: new vscode.Range(document.positionAt(open), document.positionAt(open + 1))
+            });
+        }
+        if (single) {
+            issues.push(this.endOfDocumentIssue(document, 'Unterminated string literal.'));
+        }
+        if (double) {
+            issues.push(this.endOfDocumentIssue(document, 'Unterminated quoted identifier.'));
+        }
+        if (blockCommentStart !== undefined) {
+            issues.push({
+                message: 'Unterminated block comment.',
+                range: new vscode.Range(document.positionAt(blockCommentStart), document.positionAt(blockCommentStart + 2))
+            });
+        }
+        if (dollarTag) {
+            issues.push(this.endOfDocumentIssue(document, `Unterminated dollar quote ${dollarTag}.`));
+        }
+        issues.push(...this.getDanglingClauseIssues(document));
+        return issues;
     }
     parseChildren(document, text, baseOffset, counter) {
         const children = [];
@@ -212,6 +335,10 @@ class SqlQueryTreeService {
                             children.push(child);
                         }
                     }
+                    const nestedBaseOffset = baseOffset + i + 1;
+                    const nestedChildren = this.parseChildren(document, inner, nestedBaseOffset, counter)
+                        .filter((child) => !children.some((existing) => existing.start === child.start && existing.end === child.end));
+                    children.push(...nestedChildren);
                     i = close + 1;
                     continue;
                 }
@@ -462,6 +589,155 @@ class SqlQueryTreeService {
     }
     stripQuotes(value) {
         return value.replace(/^"|"$/g, '');
+    }
+    getDanglingClauseIssues(document) {
+        const text = document.getText();
+        const issues = [];
+        for (const statement of (0, sqlSplitter_1.splitSqlStatements)(text)) {
+            const tokens = this.wordTokens(text, statement.start, statement.end);
+            for (let index = 0; index < tokens.length; index += 1) {
+                const token = tokens[index];
+                const word = token.word.toLowerCase();
+                if (!['from', 'join', 'update', 'into'].includes(word)) {
+                    continue;
+                }
+                const next = tokens[index + 1]?.word.toLowerCase();
+                if (!next || this.isClauseBoundary(next)) {
+                    issues.push({
+                        message: `Expected a table name after ${word.toUpperCase()}.`,
+                        range: new vscode.Range(document.positionAt(token.start), document.positionAt(token.end))
+                    });
+                }
+            }
+        }
+        return issues;
+    }
+    wordTokens(text, start, end) {
+        const tokens = [];
+        let i = start;
+        let single = false;
+        let double = false;
+        let lineComment = false;
+        let blockComment = false;
+        let dollarTag;
+        while (i < end) {
+            const char = text[i];
+            const next = text[i + 1];
+            if (lineComment) {
+                lineComment = char !== '\n';
+                i += 1;
+                continue;
+            }
+            if (blockComment) {
+                if (char === '*' && next === '/') {
+                    blockComment = false;
+                    i += 2;
+                }
+                else {
+                    i += 1;
+                }
+                continue;
+            }
+            if (dollarTag) {
+                if (text.startsWith(dollarTag, i)) {
+                    i += dollarTag.length;
+                    dollarTag = undefined;
+                }
+                else {
+                    i += 1;
+                }
+                continue;
+            }
+            if (single) {
+                if (char === "'" && next === "'") {
+                    i += 2;
+                }
+                else {
+                    single = char !== "'";
+                    i += 1;
+                }
+                continue;
+            }
+            if (double) {
+                if (char === '"' && next === '"') {
+                    i += 2;
+                }
+                else {
+                    double = char !== '"';
+                    i += 1;
+                }
+                continue;
+            }
+            if (char === '-' && next === '-') {
+                lineComment = true;
+                i += 2;
+                continue;
+            }
+            if (char === '/' && next === '*') {
+                blockComment = true;
+                i += 2;
+                continue;
+            }
+            if (char === "'") {
+                single = true;
+                i += 1;
+                continue;
+            }
+            if (char === '"') {
+                double = true;
+                i += 1;
+                continue;
+            }
+            if (char === '$') {
+                const match = text.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
+                if (match) {
+                    dollarTag = match[0];
+                    i += dollarTag.length;
+                    continue;
+                }
+            }
+            if (this.isWordChar(char)) {
+                const tokenStart = i;
+                while (i < end && this.isWordChar(text[i])) {
+                    i += 1;
+                }
+                tokens.push({ word: text.slice(tokenStart, i), start: tokenStart, end: i });
+                continue;
+            }
+            i += 1;
+        }
+        return tokens;
+    }
+    isClauseBoundary(word) {
+        return [
+            'where',
+            'group',
+            'order',
+            'limit',
+            'having',
+            'union',
+            'intersect',
+            'except',
+            'join',
+            'left',
+            'right',
+            'inner',
+            'outer',
+            'full',
+            'cross',
+            'on',
+            'using',
+            'set',
+            'values',
+            'returning'
+        ].includes(word);
+    }
+    endOfDocumentIssue(document, message) {
+        const end = document.positionAt(document.getText().length);
+        return {
+            message,
+            range: new vscode.Range(end, end)
+        };
     }
     nodeId(documentUri, kind, start, end, name) {
         return `${documentUri}:${kind}:${start}-${end}${name ? `:${name}` : ''}`;

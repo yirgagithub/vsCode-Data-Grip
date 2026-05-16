@@ -67,7 +67,7 @@
       },
       {
         "command": "database.executeCurrentQuery",
-        "title": "Run Current Query",
+        "title": "Run SQL",
         "category": "Database",
         "icon": "$(play)"
       },
@@ -84,7 +84,7 @@
       },
       {
         "command": "database.executeFile",
-        "title": "Run SQL File",
+        "title": "Run Script",
         "category": "Database",
         "icon": "$(run-all)"
       },
@@ -595,18 +595,6 @@
           "command": "database.aiExplainSql",
           "when": "editorLangId == sql",
           "group": "ai@2"
-        }
-      ],
-      "editor/title": [
-        {
-          "command": "database.executeCurrentQuery",
-          "when": "editorLangId == sql",
-          "group": "navigation@1"
-        },
-        {
-          "command": "database.executeFile",
-          "when": "editorLangId == sql",
-          "group": "navigation@2"
         }
       ],
       "editor/title/context": [

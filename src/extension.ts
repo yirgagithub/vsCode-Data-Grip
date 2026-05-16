@@ -29,6 +29,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const schemaContext = new SchemaContextService(connectionManager);
   const sectionService = new SqlSectionService();
   const highlighter = new SqlSectionHighlighter();
+  const sqlDiagnostics = vscode.languages.createDiagnosticCollection('database-sql');
   const aiAdapter = new VsCodeLanguageModelSqlAdapter();
   let queryMap: QueryMapProvider;
   const results = new ResultsPanelProvider(
@@ -57,6 +58,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     treeView,
     highlighter,
+    sqlDiagnostics,
     vscode.window.registerWebviewViewProvider(ResultsPanelProvider.viewType, results),
     vscode.window.registerWebviewViewProvider(QueryMapProvider.viewType, queryMap)
   );
@@ -70,18 +72,31 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(registerSqlStatementCodeLens(sectionService));
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
     queryMap.updateFromEditor(editor);
+    highlightActiveSqlSection(editor);
     highlighter.refreshVisibleEditors();
+    updateSqlDiagnostics(editor?.document);
+  }));
+  context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection((event) => {
+    highlightActiveSqlSection(event.textEditor);
   }));
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((event) => {
     const editor = vscode.window.activeTextEditor;
     if (editor?.document.uri.toString() === event.document.uri.toString()) {
       queryMap.updateFromEditor(editor);
-      highlighter.clear(event.document.uri.toString());
+      highlightActiveSqlSection(editor);
     }
+    updateSqlDiagnostics(event.document);
+  }));
+  context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => {
+    sqlDiagnostics.delete(document.uri);
   }));
   queryMap.updateConsoles(consoleStore.getAll(), connectionManager.getConnections());
   queryMap.updateFromEditor(vscode.window.activeTextEditor);
   queryMap.updateResults(results.getTabs());
+  highlightActiveSqlSection(vscode.window.activeTextEditor);
+  for (const document of vscode.workspace.textDocuments) {
+    updateSqlDiagnostics(document);
+  }
 
   const register = (command: string, callback: (...args: unknown[]) => unknown) => {
     context.subscriptions.push(vscode.commands.registerCommand(command, async (...args) => {
@@ -391,8 +406,8 @@ export function activate(context: vscode.ExtensionContext): void {
     const detected = mode === 'file'
       ? { sql: editor.document.getText(), range: new vscode.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length)) }
       : mode === 'selection'
-        ? sectionService.detect(editor.document, editor.selection)
-        : sectionService.detect(editor.document, editor.selection);
+        ? selectedSql(editor)
+        : selectedSql(editor) ?? sectionService.detectExecutable(editor.document, editor.selection);
 
     if (!detected?.sql.trim()) {
       void vscode.window.showInformationMessage('No SQL section to run.');
@@ -400,6 +415,44 @@ export function activate(context: vscode.ExtensionContext): void {
     }
 
     await executeDetected(editor, detected);
+  }
+
+  function highlightActiveSqlSection(editor: vscode.TextEditor | undefined): void {
+    if (!editor || editor.document.languageId !== 'sql') {
+      return;
+    }
+    const section = selectedSql(editor) ?? sectionService.detectExecutable(editor.document, editor.selection);
+    if (!section?.sql.trim()) {
+      highlighter.clear(editor.document.uri.toString());
+      return;
+    }
+    highlighter.highlight(editor, {
+      startLine: section.range.start.line,
+      startColumn: section.range.start.character,
+      endLine: section.range.end.line,
+      endColumn: section.range.end.character
+    });
+  }
+
+  function selectedSql(editor: vscode.TextEditor): { sql: string; range: vscode.Range } | undefined {
+    if (editor.selection.isEmpty) {
+      return undefined;
+    }
+    const range = trimSelection(editor.document, editor.selection);
+    if (range.isEmpty) {
+      return undefined;
+    }
+    return {
+      sql: editor.document.getText(range),
+      range
+    };
+  }
+
+  function updateSqlDiagnostics(document: vscode.TextDocument | undefined): void {
+    if (!document || document.languageId !== 'sql') {
+      return;
+    }
+    sqlDiagnostics.set(document.uri, sectionService.getSyntaxIssues(document));
   }
 
   async function executeDetected(editor: vscode.TextEditor, detected: { sql: string; range: vscode.Range; index?: number; id?: string }): Promise<void> {
@@ -511,6 +564,15 @@ function connectionIdFromArg(value: unknown): string | undefined {
   return maybe?.connection?.id ?? maybe?.id;
 }
 
+function trimSelection(document: vscode.TextDocument, selection: vscode.Selection): vscode.Range {
+  const text = document.getText(selection);
+  const leading = text.match(/^\s*/)?.[0].length ?? 0;
+  const trailing = text.match(/\s*$/)?.[0].length ?? 0;
+  const startOffset = document.offsetAt(selection.start) + leading;
+  const endOffset = document.offsetAt(selection.end) - trailing;
+  return new vscode.Range(document.positionAt(startOffset), document.positionAt(Math.max(startOffset, endOffset)));
+}
+
 function registerSqlCompletions(
   connectionManager: ConnectionManager,
   schemaContext: SchemaContextService,
@@ -545,38 +607,6 @@ function registerSqlCompletions(
       return items;
     }
   }, '.', ' ', '"');
-}
-
-function registerSqlStatementCodeLens(sectionService: SqlSectionService): vscode.Disposable {
-  const emitter = new vscode.EventEmitter<void>();
-  const documentEvents = vscode.workspace.onDidChangeTextDocument((event) => {
-    if (event.document.languageId === 'sql') {
-      emitter.fire();
-    }
-  });
-
-  const provider = vscode.languages.registerCodeLensProvider('sql', {
-    onDidChangeCodeLenses: emitter.event,
-    provideCodeLenses(document) {
-      return sectionService.getSections(document).map((section, index) => {
-        const preview = section.sql.replace(/\s+/g, ' ').slice(0, 72);
-        return new vscode.CodeLens(section.range, {
-          title: `$(play) Run Query ${index + 1}`,
-          tooltip: preview,
-          command: 'database.executeStatementRange',
-          arguments: [
-            document.uri.toString(),
-            section.range.start.line,
-            section.range.start.character,
-            section.range.end.line,
-            section.range.end.character
-          ]
-        });
-      });
-    }
-  });
-
-  return vscode.Disposable.from(documentEvents, provider, emitter);
 }
 
 async function getMetadataCompletionItems(
@@ -640,6 +670,35 @@ function filterMetadataItems(items: vscode.CompletionItem[], linePrefix: string)
     return items;
   }
   return items.filter((item) => item.kind === vscode.CompletionItemKind.Keyword);
+}
+
+function registerSqlStatementCodeLens(sectionService: SqlSectionService): vscode.Disposable {
+  const emitter = new vscode.EventEmitter<void>();
+  const documentEvents = vscode.workspace.onDidChangeTextDocument((event) => {
+    if (event.document.languageId === 'sql') {
+      emitter.fire();
+    }
+  });
+
+  const provider = vscode.languages.registerCodeLensProvider('sql', {
+    onDidChangeCodeLenses: emitter.event,
+    provideCodeLenses(document) {
+      return sectionService.getSections(document).map((section) => new vscode.CodeLens(section.range, {
+        title: '$(play)',
+        tooltip: section.sql.replace(/\s+/g, ' ').slice(0, 120),
+        command: 'database.executeStatementRange',
+        arguments: [
+          document.uri.toString(),
+          section.range.start.line,
+          section.range.start.character,
+          section.range.end.line,
+          section.range.end.character
+        ]
+      }));
+    }
+  });
+
+  return vscode.Disposable.from(documentEvents, provider, emitter);
 }
 
 function stripQuotes(value: string): string {

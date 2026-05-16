@@ -8,15 +8,41 @@ export interface PlainRange {
 }
 
 export class SqlSectionHighlighter implements vscode.Disposable {
-  private readonly decoration = vscode.window.createTextEditorDecorationType({
+  private readonly singleLineDecoration = vscode.window.createTextEditorDecorationType({
     border: '1px solid',
-    borderColor: new vscode.ThemeColor('focusBorder'),
+    borderColor: new vscode.ThemeColor('testing.iconPassed'),
     borderRadius: '3px',
-    backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground'),
-    overviewRulerColor: new vscode.ThemeColor('focusBorder'),
+    overviewRulerColor: new vscode.ThemeColor('testing.iconPassed'),
     overviewRulerLane: vscode.OverviewRulerLane.Right
   });
+  private readonly firstLineDecoration = vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    borderWidth: '1px 1px 0 1px',
+    borderStyle: 'solid',
+    borderColor: new vscode.ThemeColor('testing.iconPassed'),
+    overviewRulerColor: new vscode.ThemeColor('testing.iconPassed'),
+    overviewRulerLane: vscode.OverviewRulerLane.Right
+  });
+  private readonly middleLineDecoration = vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    borderWidth: '0 1px',
+    borderStyle: 'solid',
+    borderColor: new vscode.ThemeColor('testing.iconPassed')
+  });
+  private readonly lastLineDecoration = vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    borderWidth: '0 1px 1px 1px',
+    borderStyle: 'solid',
+    borderColor: new vscode.ThemeColor('testing.iconPassed'),
+    borderRadius: '0 0 3px 3px'
+  });
   private readonly activeRanges = new Map<string, vscode.Range>();
+
+  highlight(editor: vscode.TextEditor, range: PlainRange): void {
+    const targetRange = this.clampRange(editor.document, range);
+    this.activeRanges.set(editor.document.uri.toString(), targetRange);
+    this.applyDecorations(editor, targetRange);
+  }
 
   async reveal(documentUri: string, range: PlainRange, expectedSql?: string): Promise<vscode.TextEditor | undefined> {
     let document: vscode.TextDocument;
@@ -34,7 +60,7 @@ export class SqlSectionHighlighter implements vscode.Disposable {
     });
     const targetRange = this.resolveRange(document, range, expectedSql);
     this.activeRanges.set(document.uri.toString(), targetRange);
-    editor.setDecorations(this.decoration, [targetRange]);
+    this.applyDecorations(editor, targetRange);
     editor.revealRange(targetRange, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
     return editor;
   }
@@ -42,7 +68,7 @@ export class SqlSectionHighlighter implements vscode.Disposable {
   refreshVisibleEditors(): void {
     for (const editor of vscode.window.visibleTextEditors) {
       const range = this.activeRanges.get(editor.document.uri.toString());
-      editor.setDecorations(this.decoration, range ? [range] : []);
+      this.applyDecorations(editor, range);
     }
   }
 
@@ -56,7 +82,34 @@ export class SqlSectionHighlighter implements vscode.Disposable {
   }
 
   dispose(): void {
-    this.decoration.dispose();
+    this.singleLineDecoration.dispose();
+    this.firstLineDecoration.dispose();
+    this.middleLineDecoration.dispose();
+    this.lastLineDecoration.dispose();
+  }
+
+  private applyDecorations(editor: vscode.TextEditor, range: vscode.Range | undefined): void {
+    editor.setDecorations(this.singleLineDecoration, []);
+    editor.setDecorations(this.firstLineDecoration, []);
+    editor.setDecorations(this.middleLineDecoration, []);
+    editor.setDecorations(this.lastLineDecoration, []);
+    if (!range) {
+      return;
+    }
+    if (range.start.line === range.end.line) {
+      editor.setDecorations(this.singleLineDecoration, [range]);
+      return;
+    }
+
+    const firstLine = editor.document.lineAt(range.start.line).range;
+    const lastLine = editor.document.lineAt(range.end.line).range;
+    const middleLines: vscode.Range[] = [];
+    for (let line = range.start.line + 1; line < range.end.line; line += 1) {
+      middleLines.push(editor.document.lineAt(line).range);
+    }
+    editor.setDecorations(this.firstLineDecoration, [firstLine]);
+    editor.setDecorations(this.middleLineDecoration, middleLines);
+    editor.setDecorations(this.lastLineDecoration, [lastLine]);
   }
 
   private resolveRange(document: vscode.TextDocument, range: PlainRange, expectedSql?: string): vscode.Range {
