@@ -1,0 +1,1 @@
+{"version":3,"file":"identifiers.js","sourceRoot":"","sources":["../../src/utils/identifiers.ts"],"names":[],"mappings":";;AAAA,0CAEC;AAED,sCAEC;AAND,SAAgB,eAAe,CAAC,UAAkB;IAChD,OAAO,IAAI,UAAU,CAAC,OAAO,CAAC,IAAI,EAAE,IAAI,CAAC,GAAG,CAAC;AAC/C,CAAC;AAED,SAAgB,aAAa,CAAC,MAAc,EAAE,IAAY;IACxD,OAAO,GAAG,eAAe,CAAC,MAAM,CAAC,IAAI,eAAe,CAAC,IAAI,CAAC,EAAE,CAAC;AAC/D,CAAC"}
