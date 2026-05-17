@@ -7,6 +7,8 @@ import {
   IndexInfo,
   KeyInfo,
   QueryExecutionResult,
+  TablePreviewOptions,
+  QueryValidationResult,
   SchemaInfo,
   TableInfo,
   TestConnectionResult,
@@ -21,6 +23,7 @@ export interface DatabaseDriver {
   connect(config: ConnectionConfigWithPassword): Promise<DbConnection>;
   disconnect(connectionId: string): Promise<void>;
   executeQuery(params: ExecuteQueryParams): Promise<QueryExecutionResult>;
+  validateQuery(params: ExecuteQueryParams): Promise<QueryValidationResult>;
   cancelQuery(executionId: string): Promise<void>;
 
   getSchemas(connectionId: string): Promise<SchemaInfo[]>;
@@ -30,6 +33,6 @@ export interface DatabaseDriver {
   getIndexes(connectionId: string, schema: string, table: string): Promise<IndexInfo[]>;
   getPrimaryKeys(connectionId: string, schema: string, table: string): Promise<KeyInfo[]>;
   getForeignKeys(connectionId: string, schema: string, table: string): Promise<ForeignKeyInfo[]>;
-  getTablePreview(connectionId: string, schema: string, table: string, limit: number): Promise<QueryExecutionResult>;
+  getTablePreview(connectionId: string, schema: string, table: string, limit: number, options?: TablePreviewOptions): Promise<QueryExecutionResult>;
   getTableDDL(connectionId: string, schema: string, table: string): Promise<string>;
 }

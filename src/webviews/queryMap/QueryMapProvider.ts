@@ -9,6 +9,7 @@ interface QueryMapItem {
   index: number;
   kind: SqlQueryNode['kind'];
   name?: string;
+  title: string;
   preview: string;
   line: number;
   disabled: boolean;
@@ -27,7 +28,6 @@ interface QueryMapItem {
 interface QueryMapDocumentGroup {
   id: string;
   documentTitle: string;
-  filePath: string;
   items: QueryMapItem[];
 }
 
@@ -40,6 +40,7 @@ interface QueryMapGroup {
 
 type QueryMapMessage =
   | { type: 'ready' }
+  | { type: 'open'; documentUri: string }
   | { type: 'reveal'; documentUri: string; nodeId: string }
   | { type: 'run'; documentUri: string; nodeId: string };
 
@@ -76,22 +77,14 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
   }
 
   refreshGroups(): void {
-    const consoleByUri = new Map(this.consoleRecords.map((record) => [record.documentUri, record]));
     const connectionById = new Map(this.connections.map((connection) => [connection.id, connection]));
-    const sqlDocuments = vscode.workspace.textDocuments.filter((document) => document.languageId === 'sql');
     const groupsByConnection = new Map<string, QueryMapGroup>();
 
-    for (const document of sqlDocuments) {
-      const documentUri = document.uri.toString();
-      const record = consoleByUri.get(documentUri);
-      const connection = record ? connectionById.get(record.connectionId) : undefined;
-      const connectionId = record?.connectionId ?? 'no-connection';
-      const connectionName = connection?.name ?? 'No connection';
+    for (const record of this.consoleRecords) {
+      const connection = connectionById.get(record.connectionId);
+      const connectionId = record.connectionId;
+      const connectionName = connection?.name ?? 'Unknown connection';
       const databaseName = connection?.database;
-      const tree = this.sectionService.getTree(document);
-      if (!tree.length && !record) {
-        continue;
-      }
       const group = groupsByConnection.get(connectionId) ?? {
         id: connectionId,
         connectionName,
@@ -99,10 +92,9 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
         documents: []
       };
       group.documents.push({
-        id: documentUri,
-        documentTitle: document.fileName.split(/[\\/]/).pop() ?? document.uri.toString(),
-        filePath: document.uri.fsPath || document.uri.toString(),
-        items: tree.map((node) => this.toItem(documentUri, node))
+        id: record.documentUri,
+        documentTitle: this.documentTitle(record.documentUri),
+        items: []
       });
       groupsByConnection.set(connectionId, group);
     }
@@ -114,6 +106,15 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
       }))
       .sort((a, b) => `${a.connectionName}:${a.databaseName ?? ''}`.localeCompare(`${b.connectionName}:${b.databaseName ?? ''}`));
     this.postState();
+  }
+
+  private documentTitle(documentUri: string): string {
+    try {
+      const uri = vscode.Uri.parse(documentUri);
+      return uri.fsPath.split(/[\\/]/).pop() || uri.toString();
+    } catch {
+      return documentUri.split(/[\\/]/).pop() || documentUri;
+    }
   }
 
   updateResults(tabs: QueryResultTab[]): void {
@@ -130,6 +131,9 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
       return;
     }
     const editor = await this.openDocument(message.documentUri);
+    if (message.type === 'open') {
+      return;
+    }
     if (!editor) {
       return;
     }
@@ -167,9 +171,8 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
       index: section.index,
       kind: section.kind,
       name: section.name,
-      preview: section.name
-        ? `${section.name} · ${section.sql.replace(/\s+/g, ' ').trim().slice(0, 100)}`
-        : section.sql.replace(/\s+/g, ' ').trim().slice(0, 120) || `Section ${section.index + 1}`,
+      title: this.itemTitle(section),
+      preview: this.previewSql(section.sql, 160),
       line: section.range.start.line + 1,
       disabled: !section.sql.trim(),
       range: {
@@ -195,6 +198,26 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
       durationMs: tab.executionTimeMs,
       rowCount: tab.rowCount
     };
+  }
+
+  private previewSql(sql: string, maxLength: number): string {
+    return sql
+      .split(/\r?\n/)
+      .map((line) => line.replace(/--.*$/, '').trim())
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .slice(0, maxLength);
+  }
+
+  private itemTitle(section: SqlQueryNode): string {
+    if (section.kind === 'cte') {
+      return section.name ? `CTE ${section.name}` : `CTE ${section.index + 1}`;
+    }
+    if (section.kind === 'subquery') {
+      return `Subquery ${section.index + 1}`;
+    }
+    return `Query ${section.index + 1}`;
   }
 
   private postState(): void {
@@ -234,27 +257,21 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
-    .header { padding: 8px 10px; border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border)); color: var(--vscode-descriptionForeground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); font-family: var(--vscode-font-family); font-size: 13px; }
     .empty { min-height: 140px; display: grid; place-items: center; padding: 18px; color: var(--vscode-descriptionForeground); text-align: center; }
-    .list { display: grid; gap: 1px; padding: 4px 0; }
-    .group { display: grid; gap: 2px; padding: 9px 10px 5px; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border)); background: var(--vscode-sideBarSectionHeader-background, transparent); }
-    .group:first-child { border-top: 0; }
-    .group strong { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .group small { min-width: 0; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .document { display: grid; gap: 2px; padding: 6px 10px 4px 18px; color: var(--vscode-foreground); }
-    .document strong { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .document small { min-width: 0; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .item { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; padding: 7px 8px 7px 10px; border-left: 2px solid transparent; background: transparent; }
-    .item:hover { background: var(--vscode-list-hoverBackground); }
-    .item:focus-within { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
-    .item.completed { border-left-color: var(--vscode-testing-iconPassed); }
-    .item.failed { border-left-color: var(--vscode-errorForeground); }
-    .main { min-width: 0; background: transparent; color: var(--vscode-foreground); border: 0; padding: 0; text-align: left; height: auto; }
-    .preview { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .meta { display: flex; gap: 6px; margin-top: 3px; color: var(--vscode-descriptionForeground); font-size: 11px; white-space: nowrap; overflow: hidden; }
-    .run { width: 26px; height: 24px; border: 1px solid transparent; border-radius: 3px; background: transparent; color: var(--vscode-foreground); }
-    .run:hover { background: var(--vscode-toolbar-hoverBackground); border-color: var(--vscode-panel-border); }
+    .list { display: grid; gap: 1px; padding: 6px 0 8px; }
+    .tree-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; min-height: 32px; padding-right: 8px; }
+    .tree-row:hover { background: var(--vscode-list-hoverBackground); }
+    .tree-row:focus-within { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+    .twisty, .spacer { width: 22px; height: 28px; display: grid; place-items: center; flex: 0 0 auto; }
+    .twisty { border: 0; background: transparent; color: var(--vscode-icon-foreground); padding: 0; }
+    .spacer { color: transparent; }
+    .node-main { min-width: 0; background: transparent; color: var(--vscode-foreground); border: 0; padding: 2px 0; text-align: left; height: auto; }
+    .node-label { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; line-height: 1.25; }
+    .node-meta { display: block; margin-top: 1px; color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .group-row .node-label { font-weight: 600; }
+    .document-row { color: var(--vscode-foreground); }
+    .document-row .node-label { font-weight: 400; }
     button { font: inherit; cursor: pointer; }
     button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
   </style>
@@ -264,13 +281,63 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const root = document.getElementById('root');
+    let currentState = { groups: [] };
+    let collapsed = (vscode.getState() && vscode.getState().collapsed) || {};
+
+    function saveCollapsed() {
+      vscode.setState({ collapsed });
+    }
+
+    function isCollapsed(id) {
+      return collapsed[id] === true;
+    }
+
+    function toggle(id) {
+      collapsed[id] = !isCollapsed(id);
+      saveCollapsed();
+      render(currentState);
+    }
+
+    function appendTwisty(row, id, hasChildren) {
+      if (!hasChildren) {
+        const spacer = document.createElement('span');
+        spacer.className = 'spacer';
+        row.appendChild(spacer);
+        return;
+      }
+      const twisty = document.createElement('button');
+      twisty.className = 'twisty';
+      twisty.title = isCollapsed(id) ? 'Expand' : 'Collapse';
+      twisty.textContent = isCollapsed(id) ? '▸' : '▾';
+      twisty.onclick = (event) => {
+        event.stopPropagation();
+        toggle(id);
+      };
+      row.appendChild(twisty);
+    }
+
+    function appendNodeMain(row, labelText, metaText, titleText, onclick) {
+      const main = document.createElement('button');
+      main.className = 'node-main';
+      main.title = titleText || labelText;
+      main.onclick = onclick;
+      const label = document.createElement('span');
+      label.className = 'node-label';
+      label.textContent = labelText;
+      main.appendChild(label);
+      if (metaText) {
+        const meta = document.createElement('span');
+        meta.className = 'node-meta';
+        meta.textContent = metaText;
+        main.appendChild(meta);
+      }
+      row.appendChild(main);
+    }
+
     function render(state) {
-      const groups = state.groups || [];
+      currentState = state || { groups: [] };
+      const groups = currentState.groups || [];
       root.innerHTML = '';
-      const header = document.createElement('div');
-      header.className = 'header';
-      header.textContent = 'Query Map';
-      root.appendChild(header);
       if (!groups.length) {
         const empty = document.createElement('div');
         empty.className = 'empty';
@@ -281,53 +348,39 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
       const list = document.createElement('div');
       list.className = 'list';
       for (const group of groups) {
-        const groupHeader = document.createElement('div');
-        groupHeader.className = 'group';
-        groupHeader.innerHTML = '<strong></strong><small></small>';
-        groupHeader.querySelector('strong').textContent = group.connectionName + (group.databaseName ? ' / ' + group.databaseName : '');
-        groupHeader.querySelector('small').textContent = group.documents.length + ' document' + (group.documents.length === 1 ? '' : 's');
-        list.appendChild(groupHeader);
+        const groupId = 'group:' + group.id;
+        const groupRow = document.createElement('div');
+        groupRow.className = 'tree-row group-row';
+        appendTwisty(groupRow, groupId, group.documents.length > 0);
+        appendNodeMain(
+          groupRow,
+          group.connectionName + (group.databaseName ? ' / ' + group.databaseName : ''),
+          group.documents.length + ' document' + (group.documents.length === 1 ? '' : 's'),
+          'Toggle connection',
+          () => toggle(groupId)
+        );
+        groupRow.appendChild(document.createElement('span'));
+        list.appendChild(groupRow);
+        if (isCollapsed(groupId)) {
+          continue;
+        }
         for (const documentGroup of group.documents) {
-          const docHeader = document.createElement('div');
-          docHeader.className = 'document';
-          docHeader.innerHTML = '<strong></strong><small></small>';
-          docHeader.querySelector('strong').textContent = documentGroup.documentTitle;
-          docHeader.querySelector('small').textContent = documentGroup.filePath;
-          list.appendChild(docHeader);
-          for (const item of documentGroup.items) {
-            renderItem(item, 0, documentGroup.id);
-          }
+          const docRow = document.createElement('div');
+          docRow.className = 'tree-row document-row';
+          docRow.style.paddingLeft = '28px';
+          appendTwisty(docRow, '', false);
+          appendNodeMain(
+            docRow,
+            documentGroup.documentTitle,
+            '',
+            'Open console',
+            () => vscode.postMessage({ type: 'open', documentUri: documentGroup.id })
+          );
+          docRow.appendChild(document.createElement('span'));
+          list.appendChild(docRow);
         }
       }
       root.appendChild(list);
-
-      function renderItem(item, depth, documentUri) {
-        const row = document.createElement('div');
-        row.className = 'item ' + (item.status || '');
-        row.style.paddingLeft = (10 + depth * 16) + 'px';
-        const main = document.createElement('button');
-        main.className = 'main';
-        main.title = 'Reveal SQL section';
-        main.onclick = () => vscode.postMessage({ type: 'reveal', documentUri, nodeId: item.id });
-        const preview = document.createElement('span');
-        preview.className = 'preview';
-        preview.textContent = item.preview;
-        const meta = document.createElement('span');
-        meta.className = 'meta';
-        const details = ['L' + item.line, item.status, item.rowCount !== undefined ? item.rowCount + ' rows' : undefined, item.durationMs !== undefined ? item.durationMs + 'ms' : undefined].filter(Boolean);
-        meta.textContent = details.join(' · ');
-        main.append(preview, meta);
-        const run = document.createElement('button');
-        run.className = 'run';
-        run.title = 'Run this query node';
-        run.textContent = '▶';
-        run.onclick = () => vscode.postMessage({ type: 'run', documentUri, nodeId: item.id });
-        row.append(main, run);
-        list.appendChild(row);
-        for (const child of item.children || []) {
-          renderItem(child, depth + 1, documentUri);
-        }
-      }
     }
     window.addEventListener('message', (event) => {
       if (event.data.type === 'state') render(event.data);

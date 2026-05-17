@@ -4,7 +4,6 @@ exports.ResultGrid = ResultGrid;
 const jsx_runtime_1 = require("react/jsx-runtime");
 const react_1 = require("react");
 const format_1 = require("../format");
-const vscode_1 = require("../vscode");
 const ROW_HEIGHT = 24;
 const BUFFER = 12;
 const GRID_COLUMNS = '56px repeat(var(--column-count), minmax(128px, 240px))';
@@ -12,52 +11,89 @@ const OPERATORS = ['contains', 'equals', 'not equals', 'starts with', 'ends with
 function ResultGrid({ tab, resultSet }) {
     const [scrollTop, setScrollTop] = (0, react_1.useState)(0);
     const [sort, setSort] = (0, react_1.useState)(tab.sort[0]);
-    const [globalFilter, setGlobalFilter] = (0, react_1.useState)('');
+    const [whereFilter, setWhereFilter] = (0, react_1.useState)('');
+    const [orderBy, setOrderBy] = (0, react_1.useState)(tab.sort[0] ? `${tab.sort[0].column} ${tab.sort[0].direction}` : '');
+    const [columnFiltersVisible, setColumnFiltersVisible] = (0, react_1.useState)(false);
     const [filters, setFilters] = (0, react_1.useState)([]);
     const [openFilterColumn, setOpenFilterColumn] = (0, react_1.useState)();
-    const [selected, setSelected] = (0, react_1.useState)();
+    const [selection, setSelection] = (0, react_1.useState)();
     const [inspectorOpen, setInspectorOpen] = (0, react_1.useState)(false);
+    const [pageOffset, setPageOffset] = (0, react_1.useState)(0);
     const rows = resultSet?.rows ?? [];
     const fields = resultSet?.fields ?? [];
+    const pageLimit = tab.maxRows && tab.maxRows > 0 ? tab.maxRows : Math.max(rows.length, 1);
     const gridColumnStyle = { '--column-count': fields.length, gridTemplateColumns: GRID_COLUMNS };
     const visibleRows = (0, react_1.useMemo)(() => {
-        let filtered = globalFilter
-            ? rows.filter((row) => Object.values(row).some((value) => (0, format_1.formatValue)(value).toLowerCase().includes(globalFilter.toLowerCase())))
+        let filtered = whereFilter
+            ? rows.filter((row) => Object.values(row).some((value) => (0, format_1.formatValue)(value).toLowerCase().includes(whereFilter.toLowerCase())))
             : rows;
         filtered = filtered.filter((row) => filters.every((filter) => matchesFilter(row[filter.column], filter)));
-        if (!sort) {
+        const order = parseOrderBy(orderBy, fields.map((field) => field.name)) ?? sort;
+        if (!order) {
             return filtered;
         }
         return [...filtered].sort((a, b) => {
-            const av = (0, format_1.formatValue)(a[sort.column]);
-            const bv = (0, format_1.formatValue)(b[sort.column]);
-            return sort.direction === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+            const av = (0, format_1.formatValue)(a[order.column]);
+            const bv = (0, format_1.formatValue)(b[order.column]);
+            return order.direction === 'asc' ? av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' }) : bv.localeCompare(av, undefined, { numeric: true, sensitivity: 'base' });
         });
-    }, [rows, sort, globalFilter, filters]);
+    }, [rows, sort, whereFilter, filters, orderBy, fields]);
+    const pageStart = Math.min(pageOffset, Math.max(0, Math.floor((visibleRows.length - 1) / pageLimit) * pageLimit));
+    const pageRows = visibleRows.slice(pageStart, pageStart + pageLimit);
     const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER);
-    const end = Math.min(visibleRows.length, start + 80);
-    const slice = visibleRows.slice(start, end);
+    const end = Math.min(pageRows.length, start + 80);
+    const slice = pageRows.slice(start, end);
+    const selectedCell = selection?.type === 'cell' ? selection : undefined;
+    const selectedRow = selection?.type === 'row' ? selection.rowIndex : undefined;
+    const selectedColumn = selection?.type === 'column' ? selection.column : selectedCell?.column;
+    const pageEnd = pageStart + pageRows.length;
+    const hasNextPage = pageEnd < visibleRows.length;
     if (!resultSet) {
         return (0, jsx_runtime_1.jsx)("section", { className: "grid-empty", children: "No result set." });
     }
-    return ((0, jsx_runtime_1.jsxs)("section", { className: "grid-shell", children: [(0, jsx_runtime_1.jsxs)("div", { className: "filter-row", children: [(0, jsx_runtime_1.jsx)("input", { value: globalFilter, onChange: (event) => setGlobalFilter(event.target.value), placeholder: "Filter fetched rows" }), (0, jsx_runtime_1.jsxs)("span", { children: [visibleRows.length, " visible"] }), filters.length > 0 && (0, jsx_runtime_1.jsx)("button", { className: "tool", onClick: () => setFilters([]), children: "Clear column filters" }), (0, jsx_runtime_1.jsx)("span", { className: "toolbar-spacer" }), (0, jsx_runtime_1.jsx)("button", { className: "tool", disabled: !selected, onClick: () => selected && vscode_1.vscode.postMessage({ type: 'copy', text: (0, format_1.formatValue)(selected.value) }), children: "Copy Cell" }), (0, jsx_runtime_1.jsx)("button", { className: "tool", disabled: !selected, onClick: () => setInspectorOpen((open) => !open), children: "Inspector" })] }), (0, jsx_runtime_1.jsxs)("div", { className: `grid-layout ${inspectorOpen ? 'with-inspector' : ''}`, children: [(0, jsx_runtime_1.jsxs)("div", { className: "grid", onScroll: (event) => setScrollTop(event.currentTarget.scrollTop), children: [(0, jsx_runtime_1.jsxs)("div", { className: "grid-header", style: gridColumnStyle, children: [(0, jsx_runtime_1.jsx)("div", { className: "cell rownum", children: "#" }), fields.map((field) => {
+    return ((0, jsx_runtime_1.jsxs)("section", { className: "grid-shell", children: [(0, jsx_runtime_1.jsxs)("div", { className: "criteria-row", children: [(0, jsx_runtime_1.jsxs)("label", { className: "criteria", children: [(0, jsx_runtime_1.jsx)("span", { className: "criteria-icon", children: "\u25BD" }), (0, jsx_runtime_1.jsx)("strong", { children: "WHERE" }), (0, jsx_runtime_1.jsx)("input", { value: whereFilter, onChange: (event) => {
+                                    setWhereFilter(event.target.value);
+                                    setPageOffset(0);
+                                } })] }), (0, jsx_runtime_1.jsxs)("label", { className: "criteria", children: [(0, jsx_runtime_1.jsx)("span", { className: "criteria-icon order", children: "\u2261" }), (0, jsx_runtime_1.jsx)("strong", { children: "ORDER BY" }), (0, jsx_runtime_1.jsx)("input", { value: orderBy, onChange: (event) => {
+                                    setOrderBy(event.target.value);
+                                    setPageOffset(0);
+                                } })] })] }), (0, jsx_runtime_1.jsxs)("div", { className: `grid-layout ${inspectorOpen ? 'with-inspector' : ''}`, children: [(0, jsx_runtime_1.jsxs)("div", { className: "grid result-grid", onScroll: (event) => setScrollTop(event.currentTarget.scrollTop), children: [(0, jsx_runtime_1.jsxs)("div", { className: "grid-header", style: gridColumnStyle, children: [(0, jsx_runtime_1.jsx)("div", { className: "cell rownum", children: "#" }), fields.map((field) => {
                                         const activeFilter = filters.find((filter) => filter.column === field.name);
-                                        return ((0, jsx_runtime_1.jsxs)("div", { className: `cell header-cell ${activeFilter ? 'filtered' : ''}`, children: [(0, jsx_runtime_1.jsxs)("button", { className: "header-title", onClick: () => setSort((current) => current?.column === field.name && current.direction === 'asc' ? { column: field.name, direction: 'desc' } : { column: field.name, direction: 'asc' }), children: [(0, jsx_runtime_1.jsx)("span", { children: field.name }), field.dataTypeName && (0, jsx_runtime_1.jsx)("small", { children: field.dataTypeName }), sort?.column === field.name && (0, jsx_runtime_1.jsx)("span", { className: "sort-mark", children: sort.direction })] }), (0, jsx_runtime_1.jsx)("button", { className: "filter-button", title: "Filter column", onClick: () => setOpenFilterColumn(openFilterColumn === field.name ? undefined : field.name), children: "Filter" }), openFilterColumn === field.name && ((0, jsx_runtime_1.jsx)(ColumnFilterPopover, { filter: activeFilter ?? { column: field.name, operator: 'contains', value: '' }, onApply: (filter) => {
+                                        return ((0, jsx_runtime_1.jsxs)("div", { className: `cell header-cell ${activeFilter ? 'filtered' : ''} ${selectedColumn === field.name ? 'selected-column' : ''}`, children: [(0, jsx_runtime_1.jsxs)("button", { className: "header-title", onClick: () => {
+                                                        const nextSort = sort?.column === field.name && sort.direction === 'asc' ? { column: field.name, direction: 'desc' } : { column: field.name, direction: 'asc' };
+                                                        setSort(nextSort);
+                                                        setOrderBy(`${nextSort.column} ${nextSort.direction}`);
+                                                        setSelection({ type: 'column', column: field.name });
+                                                        setPageOffset(0);
+                                                    }, children: [(0, jsx_runtime_1.jsx)("span", { className: "column-type-icon" }), (0, jsx_runtime_1.jsx)("span", { children: field.name }), field.dataTypeName && (0, jsx_runtime_1.jsx)("small", { children: field.dataTypeName }), sort?.column === field.name && (0, jsx_runtime_1.jsx)("span", { className: "sort-mark", children: sort.direction })] }), (0, jsx_runtime_1.jsx)("button", { className: "filter-button", title: "Filter column", onClick: () => {
+                                                        setColumnFiltersVisible(true);
+                                                        setOpenFilterColumn(openFilterColumn === field.name ? undefined : field.name);
+                                                    }, children: "Filter" }), columnFiltersVisible && openFilterColumn === field.name && ((0, jsx_runtime_1.jsx)(ColumnFilterPopover, { filter: activeFilter ?? { column: field.name, operator: 'contains', value: '' }, onApply: (filter) => {
                                                         setFilters((current) => [...current.filter((item) => item.column !== field.name), filter]);
                                                         setOpenFilterColumn(undefined);
                                                     }, onClear: () => {
                                                         setFilters((current) => current.filter((item) => item.column !== field.name));
                                                         setOpenFilterColumn(undefined);
                                                     } }))] }, field.name));
-                                    })] }), (0, jsx_runtime_1.jsx)("div", { className: "grid-body", style: { height: visibleRows.length * ROW_HEIGHT }, children: (0, jsx_runtime_1.jsx)("div", { style: { transform: `translateY(${start * ROW_HEIGHT}px)` }, children: slice.map((row, index) => ((0, jsx_runtime_1.jsxs)("div", { className: "grid-row", style: gridColumnStyle, children: [(0, jsx_runtime_1.jsx)("div", { className: "cell rownum", children: start + index + 1 }), fields.map((field) => {
-                                                const rowIndex = start + index;
+                                    })] }), columnFiltersVisible && ((0, jsx_runtime_1.jsxs)("div", { className: "grid-row column-filter-row", style: gridColumnStyle, children: [(0, jsx_runtime_1.jsx)("div", { className: "cell rownum" }), fields.map((field) => {
+                                        const activeFilter = filters.find((filter) => filter.column === field.name);
+                                        return ((0, jsx_runtime_1.jsx)("div", { className: "cell", children: (0, jsx_runtime_1.jsx)("input", { value: activeFilter?.value ?? '', onChange: (event) => {
+                                                    const value = event.target.value;
+                                                    setFilters((current) => [
+                                                        ...current.filter((item) => item.column !== field.name),
+                                                        ...(value ? [{ column: field.name, operator: 'contains', value }] : [])
+                                                    ]);
+                                                    setPageOffset(0);
+                                                } }) }, field.name));
+                                    })] })), (0, jsx_runtime_1.jsx)("div", { className: "grid-body", style: { height: pageRows.length * ROW_HEIGHT }, children: (0, jsx_runtime_1.jsx)("div", { style: { transform: `translateY(${start * ROW_HEIGHT}px)` }, children: slice.map((row, index) => ((0, jsx_runtime_1.jsxs)("div", { className: `grid-row ${selectedRow === pageStart + start + index ? 'selected-row' : ''}`, style: gridColumnStyle, children: [(0, jsx_runtime_1.jsx)("div", { className: "cell rownum", onClick: () => setSelection({ type: 'row', rowIndex: pageStart + start + index }), children: pageStart + start + index + 1 }), fields.map((field) => {
+                                                const rowIndex = pageStart + start + index;
                                                 const value = row[field.name];
-                                                const isSelected = selected?.rowIndex === rowIndex && selected.column === field.name;
-                                                return ((0, jsx_runtime_1.jsx)("div", { className: `cell data-cell ${value === null ? 'null' : ''} ${isSelected ? 'selected' : ''}`, title: (0, format_1.formatValue)(value) || 'NULL', onClick: () => setSelected({ rowIndex, column: field.name, value }), onDoubleClick: () => {
-                                                        setSelected({ rowIndex, column: field.name, value });
+                                                const isSelected = selectedCell?.rowIndex === rowIndex && selectedCell.column === field.name;
+                                                return ((0, jsx_runtime_1.jsx)("div", { className: `cell data-cell ${value === null ? 'null' : ''} ${selectedColumn === field.name ? 'selected-column' : ''} ${isSelected ? 'selected' : ''}`, title: (0, format_1.formatValue)(value) || 'NULL', onClick: () => setSelection({ type: 'cell', rowIndex, column: field.name, value }), onDoubleClick: () => {
+                                                        setSelection({ type: 'cell', rowIndex, column: field.name, value });
                                                         setInspectorOpen(true);
                                                     }, children: value === null ? 'NULL' : (0, format_1.formatValue)(value) }, field.name));
-                                            })] }, start + index))) }) })] }), inspectorOpen && ((0, jsx_runtime_1.jsxs)("aside", { className: "cell-inspector", children: [(0, jsx_runtime_1.jsxs)("div", { className: "inspector-title", children: [(0, jsx_runtime_1.jsx)("strong", { children: selected?.column ?? 'Cell' }), (0, jsx_runtime_1.jsx)("button", { className: "tool", onClick: () => setInspectorOpen(false), children: "Close" })] }), (0, jsx_runtime_1.jsx)("pre", { children: selected ? prettyValue(selected.value) : 'No cell selected' })] }))] })] }));
+                                            })] }, start + index))) }) })] }), inspectorOpen && ((0, jsx_runtime_1.jsxs)("aside", { className: "cell-inspector", children: [(0, jsx_runtime_1.jsxs)("div", { className: "inspector-title", children: [(0, jsx_runtime_1.jsx)("strong", { children: selectedCell?.column ?? 'Cell' }), (0, jsx_runtime_1.jsx)("button", { className: "tool", onClick: () => setInspectorOpen(false), children: "Close" })] }), (0, jsx_runtime_1.jsx)("pre", { children: selectedCell ? prettyValue(selectedCell.value) : 'No cell selected' })] }))] }), (0, jsx_runtime_1.jsx)("div", { className: "result-pager", children: (0, jsx_runtime_1.jsxs)("span", { className: "pager-group", children: [(0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: pageStart === 0, onClick: () => setPageOffset(0), children: "|\u2039" }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: pageStart === 0, onClick: () => setPageOffset(Math.max(0, pageStart - pageLimit)), children: "\u2039" }), (0, jsx_runtime_1.jsx)("select", { value: String(pageLimit), onChange: (event) => setPageOffset(0), children: (0, jsx_runtime_1.jsx)("option", { value: String(pageLimit), children: pageRows.length ? `${(pageStart + 1).toLocaleString()}-${pageEnd.toLocaleString()}` : '0' }) }), (0, jsx_runtime_1.jsxs)("span", { children: ["of ", hasNextPage ? `${(pageEnd + 1).toLocaleString()}+` : pageEnd.toLocaleString()] }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: !hasNextPage, onClick: () => setPageOffset(pageStart + pageLimit), children: "\u203A" }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: true, children: "\u203A|" }), (0, jsx_runtime_1.jsx)("span", { className: "pager-separator" }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", onClick: () => setColumnFiltersVisible((visible) => !visible), children: "\u22EE" })] }) })] }));
 }
 function ColumnFilterPopover({ filter, onApply, onClear }) {
     const [draft, setDraft] = (0, react_1.useState)(filter);
@@ -85,6 +121,17 @@ function matchesFilter(value, filter) {
         return text.endsWith(expected);
     }
     return text.includes(expected);
+}
+function parseOrderBy(value, columns) {
+    const [first] = value.split(',');
+    const parts = first.trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) {
+        return undefined;
+    }
+    const direction = parts[1]?.toLowerCase() === 'desc' ? 'desc' : 'asc';
+    const normalized = parts[0].replace(/^"|"$/g, '');
+    const column = columns.find((item) => item === normalized);
+    return column ? { column, direction } : undefined;
 }
 function prettyValue(value) {
     if (value === null || value === undefined) {

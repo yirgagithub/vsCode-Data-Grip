@@ -64,6 +64,20 @@ class PostgresDriver {
             client.release();
         }
     }
+    async validateQuery(params) {
+        const pool = this.requirePool(params.connectionId);
+        const sql = params.sql.trim().replace(/;+\s*$/, '');
+        if (!sql || !this.canExplain(sql)) {
+            return { ok: true };
+        }
+        try {
+            await pool.query(`explain ${sql}`);
+            return { ok: true };
+        }
+        catch (error) {
+            return { ok: false, error: this.toQueryError(error) };
+        }
+    }
     async cancelQuery(executionId) {
         const active = this.activeExecutions.get(executionId);
         if (!active?.processId) {
@@ -143,8 +157,25 @@ class PostgresDriver {
        group by tc.constraint_name, ccu.table_schema, ccu.table_name`, [schema, table]);
         return result.rows;
     }
-    async getTablePreview(connectionId, schema, table, limit) {
-        return this.executeQuery({ connectionId, sql: `select * from ${(0, identifiers_1.qualifiedName)(schema, table)}`, maxRows: limit });
+    async getTablePreview(connectionId, schema, table, limit, options) {
+        const where = options?.where?.trim();
+        if (where && /;|--|\/\*/.test(where)) {
+            throw new Error('WHERE must be a single SQL expression without comments or semicolons.');
+        }
+        const orderBySql = options?.orderBySql?.trim();
+        if (orderBySql && /;|--|\/\*/.test(orderBySql)) {
+            throw new Error('ORDER BY must be a single SQL expression without comments or semicolons.');
+        }
+        const orderBy = orderBySql
+            ? `\norder by ${orderBySql}`
+            : options?.orderBy?.length
+                ? `\norder by ${options.orderBy.map((item) => `${(0, identifiers_1.quoteIdentifier)(item.column)} ${item.direction === 'desc' ? 'desc' : 'asc'}`).join(', ')}`
+                : '';
+        const offset = Number.isFinite(options?.offset) && options?.offset && options.offset > 0 ? Math.floor(options.offset) : 0;
+        const pageLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) + 1 : 0;
+        const paging = pageLimit ? `\nlimit ${pageLimit}${offset ? ` offset ${offset}` : ''}` : '';
+        const sql = `select * from ${(0, identifiers_1.qualifiedName)(schema, table)}${where ? `\nwhere ${where}` : ''}${orderBy}${paging}`;
+        return this.executeQuery({ connectionId, sql, maxRows: 0 });
     }
     async getTableDDL(connectionId, schema, table) {
         const columns = await this.getColumns(connectionId, schema, table);
@@ -182,6 +213,21 @@ class PostgresDriver {
     canApplyClientLimit(sql) {
         const normalized = sql.trim().replace(/^--.*$/gm, '').trim().toLowerCase();
         return normalized.startsWith('select') || normalized.startsWith('with');
+    }
+    canExplain(sql) {
+        const normalized = sql.trim().replace(/^--.*$/gm, '').trim().toLowerCase();
+        return /^(select|with|insert|update|delete|merge)\b/.test(normalized);
+    }
+    toQueryError(error) {
+        const pgError = error;
+        return {
+            message: pgError.message ?? String(error),
+            code: pgError.code,
+            detail: pgError.detail,
+            hint: pgError.hint,
+            position: pgError.position,
+            where: pgError.where
+        };
     }
 }
 exports.PostgresDriver = PostgresDriver;

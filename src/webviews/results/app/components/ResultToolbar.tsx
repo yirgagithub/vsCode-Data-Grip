@@ -37,8 +37,8 @@ export function ResultToolbar({ tab, resultSet }: { tab: QueryResultTab; resultS
   };
 
   return (
-    <div className="toolbar">
-      <button className="tool primary" title="Rerun query" onClick={rerun}>Run</button>
+    <div className="toolbar result-toolbar">
+      <button className="tool icon-tool tone-green" title="Rerun query" onClick={rerun}>▶</button>
       <label className="limit-control" title="Rows fetched by the next run">
         <span>Rows</span>
         <select value={limitValue} onChange={(event) => changeLimit(event.target.value)}>
@@ -49,9 +49,9 @@ export function ResultToolbar({ tab, resultSet }: { tab: QueryResultTab; resultS
           <option value="custom">{maxRows && !['500', '1000', '5000'].includes(String(maxRows)) ? maxRows.toLocaleString() : 'Custom...'}</option>
         </select>
       </label>
-      <button className="tool" title={tab.pinned ? 'Unpin tab' : 'Pin tab'} onClick={() => pinTab(tab.id, !tab.pinned)}>{tab.pinned ? 'Unpin' : 'Pin'}</button>
+      <button className={`tool icon-tool ${tab.pinned ? 'tone-orange' : ''}`} title={tab.pinned ? 'Unpin tab' : 'Pin tab'} onClick={() => pinTab(tab.id, !tab.pinned)}>⌖</button>
       <span className="separator" />
-      <button className="tool" title="Copy fetched rows as TSV" onClick={() => vscode.postMessage({ type: 'copy', text: rowsToTsv(rows) })}>Copy</button>
+      <button className="tool icon-tool tone-purple" title="Copy fetched rows as TSV" onClick={() => vscode.postMessage({ type: 'copy', text: rowsToTsv(rows) })}>⧉</button>
       <button className="tool" title="Copy fetched rows as CSV" onClick={() => vscode.postMessage({ type: 'copy', text: rowsToCsv(rows) })}>CSV</button>
       <button className="tool" title="Copy fetched rows as JSON" onClick={() => vscode.postMessage({ type: 'copy', text: JSON.stringify(rows, null, 2) })}>JSON</button>
       <span className="toolbar-spacer" />

@@ -36,48 +36,90 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.TableDataPanel = void 0;
 const vscode = __importStar(require("vscode"));
 const identifiers_1 = require("../../utils/identifiers");
-const formatCellValue_1 = require("./formatCellValue");
 class TableDataPanel {
     static async open(context, connectionManager, node) {
         if (!connectionManager.isConnected(node.connection.id)) {
             await connectionManager.connect(node.connection.id);
         }
         const configuredMaxRows = vscode.workspace.getConfiguration('database').get('defaultMaxRows', 500);
-        const maxRows = Number.isFinite(configuredMaxRows) && configuredMaxRows && configuredMaxRows > 0 ? Math.floor(configuredMaxRows) : 0;
+        const maxRows = Number.isFinite(configuredMaxRows) && configuredMaxRows && configuredMaxRows > 0 ? Math.floor(configuredMaxRows) : 500;
         const result = await connectionManager
             .getDriver(node.connection.type)
             .getTablePreview(node.connection.id, node.table.schema, node.table.name, maxRows);
+        const initialHasMore = maxRows > 0 && result.rows.length > maxRows;
+        const initialRows = initialHasMore ? result.rows.slice(0, maxRows) : result.rows;
         const panel = vscode.window.createWebviewPanel('databaseTableData', node.table.name, vscode.ViewColumn.Active, {
             enableScripts: true,
             retainContextWhenHidden: true
         });
         panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'database.svg');
-        panel.webview.html = this.html(panel.webview, node, result.rows, result.fields.map((field) => field.name), result.durationMs);
-        panel.webview.onDidReceiveMessage((message) => {
+        panel.webview.html = this.html(panel.webview, node, initialRows, result.fields.map((field) => field.name), result.durationMs, maxRows, initialHasMore);
+        panel.webview.onDidReceiveMessage(async (message) => {
             if (message.type === 'copy' && typeof message.text === 'string') {
-                void vscode.env.clipboard.writeText(message.text);
+                await vscode.env.clipboard.writeText(message.text);
+                return;
+            }
+            if (message.type === 'export' && typeof message.text === 'string' && message.format) {
+                const target = await vscode.window.showSaveDialog({
+                    defaultUri: vscode.Uri.file(`${node.table.name}.${message.format}`),
+                    filters: { 'Data files': [message.format] }
+                });
+                if (target) {
+                    await vscode.workspace.fs.writeFile(target, Buffer.from(message.text, 'utf8'));
+                }
+                return;
+            }
+            if (message.type === 'command') {
+                if (message.command === 'ddl') {
+                    await vscode.commands.executeCommand('database.showObjectDdl', node);
+                }
+                if (message.command === 'select') {
+                    await vscode.commands.executeCommand('database.generateSelect', node);
+                }
+                return;
+            }
+            if (message.type === 'fetch') {
+                const limit = Number.isFinite(message.limit) && message.limit && message.limit > 0 ? Math.floor(message.limit) : 0;
+                const offset = Number.isFinite(message.offset) && message.offset && message.offset > 0 ? Math.floor(message.offset) : 0;
+                try {
+                    const nextResult = await connectionManager
+                        .getDriver(node.connection.type)
+                        .getTablePreview(node.connection.id, node.table.schema, node.table.name, limit, {
+                        where: message.where,
+                        offset,
+                        orderBySql: message.orderBySql,
+                        orderBy: message.orderBy
+                    });
+                    const hasMore = limit > 0 && nextResult.rows.length > limit;
+                    await panel.webview.postMessage({
+                        type: 'state',
+                        rows: hasMore ? nextResult.rows.slice(0, limit) : nextResult.rows,
+                        columns: nextResult.fields.map((field) => field.name),
+                        durationMs: nextResult.durationMs,
+                        limit,
+                        offset,
+                        hasMore
+                    });
+                }
+                catch (error) {
+                    await panel.webview.postMessage({
+                        type: 'error',
+                        message: error instanceof Error ? error.message : String(error)
+                    });
+                }
             }
         });
     }
-    static html(webview, node, rows, columns, durationMs) {
+    static html(webview, node, rows, columns, durationMs, maxRows, hasMore) {
         const nonce = Date.now().toString();
-        const safeTitle = escapeHtml((0, identifiers_1.qualifiedName)(node.table.schema, node.table.name));
-        const rowHtml = rows.map((row, rowIndex) => `
-      <tr>
-        <th>${rowIndex + 1}</th>
-        ${columns.map((column) => {
-            const value = row[column];
-            return `<td class="${value === null ? 'null' : ''}" title="${escapeHtml((0, formatCellValue_1.formatCellValue)(value))}">${value === null ? 'NULL' : escapeHtml((0, formatCellValue_1.formatCellValue)(value))}</td>`;
-        }).join('')}
-      </tr>
-    `).join('');
+        const safeTable = escapeHtml((0, identifiers_1.qualifiedName)(node.table.schema, node.table.name));
         return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${safeTitle}</title>
+  <title>${safeTable}</title>
   <style>
     body {
       margin: 0;
@@ -90,52 +132,138 @@ class TableDataPanel {
     .shell {
       height: 100vh;
       display: grid;
-      grid-template-rows: 34px 34px 1fr 26px;
+      grid-template-rows: 48px 40px 1fr;
     }
-    .titlebar,
-    .toolbar,
-    .statusbar {
+    .toolbar {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 4px 10px;
+      gap: 6px;
+      padding: 0 12px;
       border-bottom: 1px solid var(--vscode-panel-border);
       background: var(--vscode-sideBar-background);
       box-sizing: border-box;
     }
-    .titlebar strong {
-      font-weight: 600;
+    .toolbar-separator {
+      width: 1px;
+      height: 28px;
+      margin: 0 8px;
+      background: var(--vscode-panel-border);
+    }
+    .toolbar-spacer {
+      flex: 1;
+    }
+    .criteria-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      background: var(--vscode-editorWidget-background);
+    }
+    .criteria {
+      display: flex;
+      align-items: center;
+      gap: 8px;
       min-width: 0;
-      max-width: min(520px, 50vw);
-      overflow: hidden;
+      height: 40px;
+      padding: 0 12px;
+      color: var(--vscode-descriptionForeground);
+      background: var(--vscode-editorWidget-background);
+      border-right: 1px solid var(--vscode-panel-border);
+      box-sizing: border-box;
+    }
+    .criteria strong {
+      color: var(--vscode-editor-foreground);
+      font-weight: 500;
+      letter-spacing: .04em;
       white-space: nowrap;
-      text-overflow: ellipsis;
     }
-    .toolbar input {
-      width: min(520px, 50vw);
-      height: 26px;
-      padding: 0 8px;
+    .criteria-icon {
+      color: var(--vscode-descriptionForeground);
+      font-size: 19px;
+      line-height: 1;
+    }
+    .criteria:first-child .criteria-icon {
+      color: var(--vscode-charts-blue);
+    }
+    .criteria:nth-child(2) .criteria-icon {
+      color: var(--vscode-charts-purple);
+    }
+    .criteria input {
+      flex: 1;
+      min-width: 120px;
+      height: 28px;
+      padding: 0 6px;
       color: var(--vscode-input-foreground);
-      background: var(--vscode-input-background);
-      border: 1px solid var(--vscode-input-border);
-      border-radius: 3px;
+      background: transparent;
+      border: 0;
       font: inherit;
+      outline: 0;
     }
-    .toolbar button {
-      height: 26px;
+    .criteria input:focus {
+      background: var(--vscode-input-background);
+      box-shadow: inset 0 -1px 0 var(--vscode-focusBorder);
+    }
+    button,
+    select {
+      height: 28px;
+      align-self: center;
       color: var(--vscode-editor-foreground);
       background: transparent;
       border: 1px solid transparent;
-      border-radius: 3px;
+      border-radius: 4px;
       font: inherit;
       padding: 0 8px;
     }
-    .toolbar button:hover {
+    .icon-button {
+      width: 30px;
+      padding: 0;
+      color: var(--vscode-descriptionForeground);
+      font-size: 20px;
+      line-height: 1;
+    }
+    .icon-button[data-tone="blue"] {
+      color: var(--vscode-charts-blue);
+    }
+    .icon-button[data-tone="green"] {
+      color: var(--vscode-charts-green);
+    }
+    .icon-button[data-tone="orange"] {
+      color: var(--vscode-charts-orange);
+    }
+    .icon-button[data-tone="purple"] {
+      color: var(--vscode-charts-purple);
+    }
+    .icon-button[data-tone="red"] {
+      color: var(--vscode-charts-red);
+    }
+    .icon-button.active {
+      color: var(--vscode-focusBorder);
+      background: var(--vscode-list-activeSelectionBackground);
+      border-color: var(--vscode-focusBorder);
+    }
+    .tool-select {
+      width: auto;
+      min-width: 78px;
+    }
+    select {
+      color: var(--vscode-dropdown-foreground);
+      background: var(--vscode-dropdown-background);
+      border-color: var(--vscode-dropdown-border);
+    }
+    button:hover {
       background: var(--vscode-toolbar-hoverBackground);
       border-color: var(--vscode-panel-border);
     }
+    .grid-wrap {
+      position: relative;
+      min-height: 0;
+      overflow: hidden;
+      background: var(--vscode-editor-background);
+    }
     .grid {
+      height: 100%;
       overflow: auto;
+      padding-bottom: 44px;
+      box-sizing: border-box;
     }
     table {
       border-collapse: collapse;
@@ -144,10 +272,10 @@ class TableDataPanel {
       table-layout: fixed;
     }
     col.rownum-col {
-      width: 52px;
+      width: 56px;
     }
     col.data-col {
-      width: 220px;
+      width: 244px;
     }
     thead th {
       position: sticky;
@@ -155,27 +283,121 @@ class TableDataPanel {
       z-index: 2;
       background: var(--vscode-editorWidget-background);
       color: var(--vscode-editor-foreground);
-      font-weight: 500;
+      font-weight: 600;
       text-align: left;
+      vertical-align: top;
     }
     th,
     td {
-      height: 24px;
+      height: 31px;
       box-sizing: border-box;
-      max-width: 220px;
-      padding: 3px 8px;
+      max-width: 244px;
+      padding: 3px 10px;
       border-right: 1px solid var(--vscode-panel-border);
       border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 60%, transparent);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .header-button {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      min-width: 0;
+      margin: 0;
+      padding: 0;
+      text-align: left;
+      border: 0;
+    }
+    .header-button span:nth-child(2) {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .column-type-icon {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 auto;
+      border: 2px solid var(--vscode-descriptionForeground);
+      border-radius: 3px;
+      box-sizing: border-box;
+      opacity: .85;
+      position: relative;
+    }
+    thead th:nth-child(4n + 2) .column-type-icon {
+      border-color: var(--vscode-charts-blue);
+    }
+    thead th:nth-child(4n + 3) .column-type-icon {
+      border-color: var(--vscode-charts-purple);
+    }
+    thead th:nth-child(4n + 4) .column-type-icon {
+      border-color: var(--vscode-charts-green);
+    }
+    thead th:nth-child(4n + 5) .column-type-icon {
+      border-color: var(--vscode-charts-orange);
+    }
+    .column-type-icon::before {
+      content: "";
+      position: absolute;
+      left: -4px;
+      top: 4px;
+      width: 6px;
+      height: 6px;
+      border: 2px solid var(--vscode-descriptionForeground);
+      border-radius: 50%;
+      background: var(--vscode-editorWidget-background);
+    }
+    thead th:nth-child(4n + 2) .column-type-icon::before {
+      border-color: var(--vscode-charts-blue);
+    }
+    thead th:nth-child(4n + 3) .column-type-icon::before {
+      border-color: var(--vscode-charts-purple);
+    }
+    thead th:nth-child(4n + 4) .column-type-icon::before {
+      border-color: var(--vscode-charts-green);
+    }
+    thead th:nth-child(4n + 5) .column-type-icon::before {
+      border-color: var(--vscode-charts-orange);
+    }
+    .sort-mark {
+      margin-left: auto;
+      padding-left: 8px;
+      color: var(--vscode-descriptionForeground);
+      font-size: 14px;
+    }
+    .column-filter-row {
+      display: none;
+    }
+    .column-filter-row.visible {
+      display: table-row;
+    }
+    .column-filter-row th {
+      top: 31px;
+    }
+    .column-filter-row input {
+      width: 100%;
+      height: 24px;
+      box-sizing: border-box;
+      color: var(--vscode-input-foreground);
+      background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border);
+      border-radius: 3px;
+      font: inherit;
+      padding: 0 6px;
+    }
+    .column-filter-row input:focus {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: -1px;
+    }
     th:first-child {
       position: sticky;
       left: 0;
       z-index: 3;
       min-width: 52px;
-      width: 52px;
+      width: 56px;
       color: var(--vscode-descriptionForeground);
       text-align: right;
       background: var(--vscode-editorWidget-background);
@@ -183,80 +405,394 @@ class TableDataPanel {
     tbody tr:nth-child(even) {
       background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-editor-foreground));
     }
+    tbody tr.selected-row td,
+    tbody tr.selected-row th {
+      background: var(--vscode-list-inactiveSelectionBackground);
+    }
+    th.selected-column,
+    td.selected-column {
+      background: color-mix(in srgb, var(--vscode-list-activeSelectionBackground) 55%, transparent);
+    }
+    td.selected-cell {
+      background: var(--vscode-list-activeSelectionBackground);
+      color: var(--vscode-list-activeSelectionForeground);
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: -1px;
+    }
     td.null {
       color: var(--vscode-descriptionForeground);
       font-style: italic;
     }
-    .spacer {
-      flex: 1;
-    }
-    .statusbar {
-      border-top: 1px solid var(--vscode-panel-border);
-      border-bottom: 0;
-      color: var(--vscode-statusBar-foreground);
-      background: var(--vscode-statusBar-background);
+    .pager {
+      position: absolute;
+      left: 50%;
+      bottom: 10px;
+      z-index: 5;
+      transform: translateX(-50%);
       font-size: 12px;
+    }
+    .pager-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 36px;
+      padding: 0 12px;
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 9px;
+      background: var(--vscode-editorWidget-background);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, .28);
+    }
+    .page-size {
+      min-width: 86px;
+      border: 0;
+      background: transparent;
+    }
+    .pager-button {
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      color: var(--vscode-descriptionForeground);
+      font-size: 19px;
+    }
+    .pager-button:disabled {
+      opacity: .38;
+    }
+    .pager-separator {
+      width: 1px;
+      height: 24px;
+      background: var(--vscode-panel-border);
+    }
+    #fetchInfo {
+      display: none;
+    }
+    .muted {
+      color: var(--vscode-descriptionForeground);
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
     }
   </style>
 </head>
 <body>
   <div class="shell">
-    <div class="titlebar">
-      <strong>${safeTitle}</strong>
-      <span>${rows.length} fetched rows</span>
-      <span class="spacer"></span>
-      <span>${node.connection.name}</span>
-    </div>
     <div class="toolbar">
-      <button id="copy">Copy</button>
-      <button id="csv">CSV</button>
-      <input id="filter" placeholder="Filter fetched rows">
+      <button class="icon-button" id="refresh" data-tone="blue" title="Refresh data">↻</button>
+      <button class="icon-button" id="copyRows" data-tone="purple" title="Copy visible rows as TSV">⧉</button>
+      <button class="icon-button" id="focusWhere" data-tone="blue" title="Focus WHERE">⌕</button>
+      <span class="toolbar-separator"></span>
+      <button class="icon-button" id="generateSelect" data-tone="green" title="Generate SELECT">＋</button>
+      <button class="icon-button" id="clearCriteria" data-tone="red" title="Clear WHERE, ORDER BY, and column filters">−</button>
+      <button class="icon-button" id="resetRows" data-tone="orange" title="Reset to 500 rows">↶</button>
+      <span class="toolbar-separator"></span>
+      <select class="tool-select" title="Transaction mode">
+        <option>Tx: Auto</option>
+      </select>
+      <button id="showDdl" title="Show DDL">DDL</button>
+      <button class="icon-button" id="applyWhere" data-tone="green" title="Apply WHERE">▶</button>
+      <button class="icon-button" id="toggleFilters" data-tone="blue" title="Show or hide per-column filters">▾</button>
+      <button class="icon-button" id="clearFilters" data-tone="orange" title="Clear column filters">◇</button>
+      <span class="toolbar-spacer"></span>
+      <select id="exportFormat" class="tool-select" title="Export visible rows">
+        <option value="csv">CSV</option>
+        <option value="json">JSON</option>
+        <option value="tsv">TSV</option>
+      </select>
+      <button class="icon-button" id="export" data-tone="green" title="Export">⇩</button>
     </div>
-    <div class="grid">
-      <table id="table">
-        <colgroup>
-          <col class="rownum-col">
-          ${columns.map(() => '<col class="data-col">').join('')}
-        </colgroup>
-        <thead>
-          <tr>
-            <th>#</th>
-            ${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join('')}
-          </tr>
-        </thead>
-        <tbody>${rowHtml}</tbody>
-      </table>
+    <div class="criteria-row">
+      <div class="criteria">
+        <span class="criteria-icon">▽</span>
+        <strong>WHERE</strong>
+        <input id="where" aria-label="Filter rows">
+      </div>
+      <div class="criteria">
+        <span class="criteria-icon">≡</span>
+        <strong>ORDER BY</strong>
+        <input id="orderBy" aria-label="Order rows">
+      </div>
     </div>
-    <div class="statusbar">${node.connection.database} ${node.table.schema} ${rows.length} rows ${durationMs}ms</div>
+    <div class="grid-wrap">
+      <div class="grid">
+        <table id="table">
+          <colgroup id="colgroup"></colgroup>
+          <thead id="thead"></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <span class="pager-group">
+          <button id="firstPage" class="pager-button" title="First page">|‹</button>
+          <button id="prevPage" class="pager-button" title="Previous page">‹</button>
+          <select id="pageSize" class="page-size" title="Rows requested from the database">
+            <option value="500">1-500</option>
+            <option value="1000">1-1,000</option>
+            <option value="5000">1-5,000</option>
+            <option value="0">All</option>
+          </select>
+          <span id="rowCount">of 0</span>
+          <button id="nextPage" class="pager-button" title="Next page">›</button>
+          <button id="lastPage" class="pager-button" title="Last loaded page">›|</button>
+          <span class="pager-separator"></span>
+          <button class="pager-button" id="pagerMenu" title="More">⋮</button>
+          <span id="fetchInfo" class="muted"></span>
+        </span>
+      </div>
+    </div>
   </div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
-    const rows = ${JSON.stringify(rows).replace(/</g, '\\u003c')};
-    const columns = ${JSON.stringify(columns)};
-    const filter = document.getElementById('filter');
-    const tbody = document.querySelector('tbody');
+    let rows = ${JSON.stringify(rows).replace(/</g, '\\u003c')};
+    let columns = ${JSON.stringify(columns)};
+    let durationMs = ${JSON.stringify(durationMs)};
+    let currentLimit = ${JSON.stringify(maxRows)};
+    let currentOffset = 0;
+    let hasMore = ${JSON.stringify(hasMore)};
+    let sort = null;
+    let loading = false;
+    let selectedCell = null;
+    let selectedRow = null;
+    let selectedColumn = null;
+    let columnFiltersVisible = false;
+    const columnFilters = new Map();
+    const where = document.getElementById('where');
+    const tbody = document.getElementById('tbody');
+    const thead = document.getElementById('thead');
+    const colgroup = document.getElementById('colgroup');
+    const rowCount = document.getElementById('rowCount');
+    const fetchInfo = document.getElementById('fetchInfo');
+    const orderBy = document.getElementById('orderBy');
+    const pageSize = document.getElementById('pageSize');
+    const toggleFilters = document.getElementById('toggleFilters');
+    const firstPage = document.getElementById('firstPage');
+    const prevPage = document.getElementById('prevPage');
+    const nextPage = document.getElementById('nextPage');
+    const lastPage = document.getElementById('lastPage');
+    pageSize.value = String(currentLimit || 0);
+
     function cell(value) {
       if (value === null || value === undefined) return '';
       if (typeof value === 'object') return JSON.stringify(value);
       return String(value);
     }
-    function render(nextRows) {
-      tbody.innerHTML = nextRows.map((row, index) => '<tr><th>' + (index + 1) + '</th>' + columns.map((column) => {
-        const value = row[column];
-        const text = cell(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
-        return '<td class="' + (value === null ? 'null' : '') + '" title="' + text + '">' + (value === null ? 'NULL' : text) + '</td>';
-      }).join('') + '</tr>').join('');
+    function html(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;');
     }
-    filter.addEventListener('input', () => {
-      const needle = filter.value.toLowerCase();
-      render(needle ? rows.filter((row) => Object.values(row).some((value) => cell(value).toLowerCase().includes(needle))) : rows);
+    function csvValue(value) {
+      return '"' + cell(value).replaceAll('"', '""') + '"';
+    }
+    function filteredRows() {
+      let nextRows = rows.filter((row) => {
+        return columns.every((column) => {
+          const filter = (columnFilters.get(column) || '').trim().toLowerCase();
+          return !filter || cell(row[column]).toLowerCase().includes(filter);
+        });
+      });
+      return nextRows;
+    }
+    function exportRows(format) {
+      const visibleRows = filteredRows();
+      if (format === 'json') {
+        return JSON.stringify(visibleRows, null, 2);
+      }
+      const separator = format === 'tsv' ? '\\t' : ',';
+      const encode = format === 'tsv' ? cell : csvValue;
+      return [columns.join(separator), ...visibleRows.map((row) => columns.map((column) => encode(row[column])).join(separator))].join('\\n');
+    }
+    function pageSizeValue() {
+      return Number(pageSize.value) || 0;
+    }
+    function pageEnd() {
+      return currentOffset + filteredRows().length;
+    }
+    function updatePager() {
+      const visibleCount = filteredRows().length;
+      const start = visibleCount ? currentOffset + 1 : currentOffset;
+      const end = currentOffset + visibleCount;
+      const totalHint = hasMore ? end + 1 + '+' : String(end);
+      rowCount.textContent = loading ? 'Loading...' : 'of ' + totalHint;
+      const label = currentLimit ? start.toLocaleString() + '-' + end.toLocaleString() : 'All';
+      const option = pageSize.querySelector('option[value="' + String(currentLimit || 0) + '"]');
+      if (option) {
+        option.textContent = label;
+      }
+      firstPage.disabled = loading || currentOffset === 0;
+      prevPage.disabled = loading || currentOffset === 0 || !currentLimit;
+      nextPage.disabled = loading || !hasMore || !currentLimit;
+      lastPage.disabled = true;
+    }
+    function renderHeader() {
+      colgroup.innerHTML = '<col class="rownum-col">' + columns.map(() => '<col class="data-col">').join('');
+      thead.innerHTML = '<tr><th>#</th>' + columns.map((column) => {
+        const mark = sort?.column === column ? (sort.direction === 'asc' ? '▲' : '▼') : '↕';
+        return '<th class="' + (selectedColumn === column ? 'selected-column' : '') + '"><button class="header-button" data-sort="' + html(column) + '" data-column="' + html(column) + '" title="Order by ' + html(column) + '"><span class="column-type-icon"></span><span>' + html(column) + '</span><span class="sort-mark">' + mark + '</span></button></th>';
+      }).join('') + '</tr><tr class="column-filter-row ' + (columnFiltersVisible ? 'visible' : '') + '"><th></th>' + columns.map((column) => {
+        return '<th><input data-filter="' + html(column) + '" value="' + html(columnFilters.get(column) || '') + '" placeholder="Filter"></th>';
+      }).join('') + '</tr>';
+      toggleFilters.classList.toggle('active', columnFiltersVisible);
+      document.querySelectorAll('[data-sort]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const column = button.getAttribute('data-sort');
+          selectedColumn = column;
+          selectedCell = null;
+          selectedRow = null;
+          sort = sort?.column === column && sort.direction === 'asc' ? { column, direction: 'desc' } : { column, direction: 'asc' };
+          orderBy.value = sort.column + ' ' + sort.direction;
+          fetchRows();
+        });
+      });
+      document.querySelectorAll('[data-filter]').forEach((input) => {
+        input.addEventListener('input', () => {
+          columnFilters.set(input.getAttribute('data-filter'), input.value);
+          renderBody();
+        });
+      });
+    }
+    function renderBody() {
+      const nextRows = filteredRows();
+      tbody.innerHTML = nextRows.map((row, index) => '<tr class="' + (selectedRow === index ? 'selected-row' : '') + '"><th data-row="' + index + '">' + (currentOffset + index + 1) + '</th>' + columns.map((column) => {
+        const value = row[column];
+        const text = html(cell(value));
+        const classes = [
+          value === null ? 'null' : '',
+          selectedColumn === column ? 'selected-column' : '',
+          selectedCell?.row === index && selectedCell?.column === column ? 'selected-cell' : ''
+        ].filter(Boolean).join(' ');
+        return '<td class="' + classes + '" data-row="' + index + '" data-column="' + html(column) + '" title="' + text + '">' + (value === null ? 'NULL' : text) + '</td>';
+      }).join('') + '</tr>').join('');
+      fetchInfo.textContent = loading ? 'Loading...' : durationMs + 'ms';
+      updatePager();
+    }
+    function render() {
+      renderHeader();
+      renderBody();
+    }
+    function fetchRows(nextOffset = currentOffset) {
+      currentOffset = Math.max(0, nextOffset);
+      loading = true;
+      renderBody();
+      vscode.postMessage({
+        type: 'fetch',
+        limit: pageSizeValue(),
+        offset: currentOffset,
+        where: where.value.trim(),
+        orderBySql: orderBy.value.trim(),
+        orderBy: orderBy.value.trim() ? [] : sort ? [sort] : []
+      });
+    }
+    where.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        fetchRows(0);
+      }
+      if (event.key === 'Escape') {
+        where.value = '';
+        fetchRows(0);
+      }
     });
-    document.getElementById('copy').addEventListener('click', () => {
-      vscode.postMessage({ type: 'copy', text: [columns.join('\\t'), ...rows.map((row) => columns.map((column) => cell(row[column])).join('\\t'))].join('\\n') });
+    orderBy.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        sort = null;
+        selectedColumn = null;
+        fetchRows(0);
+      }
+      if (event.key === 'Escape') {
+        orderBy.value = '';
+        sort = null;
+        selectedColumn = null;
+        fetchRows(0);
+      }
     });
-    document.getElementById('csv').addEventListener('click', () => {
-      vscode.postMessage({ type: 'copy', text: [columns.join(','), ...rows.map((row) => columns.map((column) => '"' + cell(row[column]).replaceAll('"', '""') + '"').join(','))].join('\\n') });
+    toggleFilters.addEventListener('click', () => {
+      columnFiltersVisible = !columnFiltersVisible;
+      renderHeader();
     });
+    document.getElementById('export').addEventListener('click', () => {
+      const format = document.getElementById('exportFormat').value;
+      vscode.postMessage({ type: 'export', format, text: exportRows(format) });
+    });
+    document.getElementById('copyRows').addEventListener('click', () => {
+      vscode.postMessage({ type: 'copy', text: exportRows('tsv') });
+    });
+    document.getElementById('focusWhere').addEventListener('click', () => {
+      where.focus();
+    });
+    document.getElementById('applyWhere').addEventListener('click', fetchRows);
+    document.getElementById('showDdl').addEventListener('click', () => {
+      vscode.postMessage({ type: 'command', command: 'ddl' });
+    });
+    document.getElementById('generateSelect').addEventListener('click', () => {
+      vscode.postMessage({ type: 'command', command: 'select' });
+    });
+    document.getElementById('clearCriteria').addEventListener('click', () => {
+      where.value = '';
+      orderBy.value = '';
+      sort = null;
+      selectedColumn = null;
+      columnFilters.clear();
+      fetchRows(0);
+    });
+    document.getElementById('clearFilters').addEventListener('click', () => {
+      columnFilters.clear();
+      render();
+    });
+    document.getElementById('resetRows').addEventListener('click', () => {
+      pageSize.value = '500';
+      where.value = '';
+      orderBy.value = '';
+      sort = null;
+      selectedColumn = null;
+      columnFilters.clear();
+      fetchRows(0);
+    });
+    pageSize.addEventListener('change', () => {
+      fetchRows(0);
+    });
+    document.getElementById('refresh').addEventListener('click', () => {
+      fetchRows();
+    });
+    firstPage.addEventListener('click', () => fetchRows(0));
+    prevPage.addEventListener('click', () => fetchRows(Math.max(0, currentOffset - pageSizeValue())));
+    nextPage.addEventListener('click', () => fetchRows(currentOffset + pageSizeValue()));
+    tbody.addEventListener('click', (event) => {
+      const target = event.target;
+      const cellElement = target.closest('td');
+      const rowHeader = target.closest('th[data-row]');
+      if (cellElement) {
+        selectedCell = { row: Number(cellElement.dataset.row), column: cellElement.dataset.column };
+        selectedRow = null;
+        selectedColumn = null;
+        render();
+      } else if (rowHeader) {
+        selectedRow = Number(rowHeader.dataset.row);
+        selectedCell = null;
+        selectedColumn = null;
+        render();
+      }
+    });
+    window.addEventListener('message', (event) => {
+      if (event.data?.type === 'error') {
+        loading = false;
+        fetchInfo.textContent = event.data.message || 'Query failed';
+        return;
+      }
+      if (event.data?.type !== 'state') return;
+      rows = event.data.rows || [];
+      columns = event.data.columns || [];
+      durationMs = event.data.durationMs || 0;
+      currentLimit = event.data.limit || 0;
+      currentOffset = event.data.offset || 0;
+      hasMore = !!event.data.hasMore;
+      pageSize.value = String(currentLimit);
+      loading = false;
+      selectedCell = null;
+      selectedRow = null;
+      columnFilters.clear();
+      render();
+    });
+    render();
   </script>
 </body>
 </html>`;

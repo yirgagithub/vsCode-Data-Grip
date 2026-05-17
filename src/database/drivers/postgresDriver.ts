@@ -10,12 +10,15 @@ import {
   IndexInfo,
   KeyInfo,
   QueryExecutionResult,
+  QueryError,
+  QueryValidationResult,
   SchemaInfo,
+  TablePreviewOptions,
   TableInfo,
   TestConnectionResult,
   ViewInfo
 } from '../../types';
-import { qualifiedName } from '../../utils/identifiers';
+import { qualifiedName, quoteIdentifier } from '../../utils/identifiers';
 
 interface ActiveExecution {
   connectionId: string;
@@ -82,6 +85,20 @@ export class PostgresDriver implements DatabaseDriver {
     } finally {
       this.activeExecutions.delete(executionId);
       client.release();
+    }
+  }
+
+  async validateQuery(params: ExecuteQueryParams): Promise<QueryValidationResult> {
+    const pool = this.requirePool(params.connectionId);
+    const sql = params.sql.trim().replace(/;+\s*$/, '');
+    if (!sql || !this.canExplain(sql)) {
+      return { ok: true };
+    }
+    try {
+      await pool.query(`explain ${sql}`);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: this.toQueryError(error) };
     }
   }
 
@@ -192,8 +209,25 @@ export class PostgresDriver implements DatabaseDriver {
     return result.rows;
   }
 
-  async getTablePreview(connectionId: string, schema: string, table: string, limit: number): Promise<QueryExecutionResult> {
-    return this.executeQuery({ connectionId, sql: `select * from ${qualifiedName(schema, table)}`, maxRows: limit });
+  async getTablePreview(connectionId: string, schema: string, table: string, limit: number, options?: TablePreviewOptions): Promise<QueryExecutionResult> {
+    const where = options?.where?.trim();
+    if (where && /;|--|\/\*/.test(where)) {
+      throw new Error('WHERE must be a single SQL expression without comments or semicolons.');
+    }
+    const orderBySql = options?.orderBySql?.trim();
+    if (orderBySql && /;|--|\/\*/.test(orderBySql)) {
+      throw new Error('ORDER BY must be a single SQL expression without comments or semicolons.');
+    }
+    const orderBy = orderBySql
+      ? `\norder by ${orderBySql}`
+      : options?.orderBy?.length
+      ? `\norder by ${options.orderBy.map((item) => `${quoteIdentifier(item.column)} ${item.direction === 'desc' ? 'desc' : 'asc'}`).join(', ')}`
+      : '';
+    const offset = Number.isFinite(options?.offset) && options?.offset && options.offset > 0 ? Math.floor(options.offset) : 0;
+    const pageLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) + 1 : 0;
+    const paging = pageLimit ? `\nlimit ${pageLimit}${offset ? ` offset ${offset}` : ''}` : '';
+    const sql = `select * from ${qualifiedName(schema, table)}${where ? `\nwhere ${where}` : ''}${orderBy}${paging}`;
+    return this.executeQuery({ connectionId, sql, maxRows: 0 });
   }
 
   async getTableDDL(connectionId: string, schema: string, table: string): Promise<string> {
@@ -236,5 +270,22 @@ export class PostgresDriver implements DatabaseDriver {
   private canApplyClientLimit(sql: string): boolean {
     const normalized = sql.trim().replace(/^--.*$/gm, '').trim().toLowerCase();
     return normalized.startsWith('select') || normalized.startsWith('with');
+  }
+
+  private canExplain(sql: string): boolean {
+    const normalized = sql.trim().replace(/^--.*$/gm, '').trim().toLowerCase();
+    return /^(select|with|insert|update|delete|merge)\b/.test(normalized);
+  }
+
+  private toQueryError(error: unknown): QueryError {
+    const pgError = error as Partial<QueryError> & { message?: string };
+    return {
+      message: pgError.message ?? String(error),
+      code: pgError.code,
+      detail: pgError.detail,
+      hint: pgError.hint,
+      position: pgError.position,
+      where: pgError.where
+    };
   }
 }

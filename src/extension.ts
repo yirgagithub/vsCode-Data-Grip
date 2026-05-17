@@ -8,6 +8,7 @@ import { QueryConsoleStore } from './persistence/queryConsoleStore';
 import { QueryHistoryStore } from './persistence/queryHistoryStore';
 import { ResultSessionStore } from './persistence/resultSessionStore';
 import { SchemaContextService } from './services/schemaContextService';
+import { SqlDiagnosticsService } from './services/sqlDiagnosticsService';
 import { rangeFromPlain as rangeFromSource, SqlSectionHighlighter } from './services/sqlSectionHighlighter';
 import { SqlSectionService } from './services/sqlSectionService';
 import { VsCodeLanguageModelSqlAdapter } from './ai/vsCodeLanguageModelSqlAdapter';
@@ -30,7 +31,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const sectionService = new SqlSectionService();
   const highlighter = new SqlSectionHighlighter();
   const sqlDiagnostics = vscode.languages.createDiagnosticCollection('database-sql');
+  const diagnosticsService = new SqlDiagnosticsService(connectionManager, schemaContext, sectionService);
   const aiAdapter = new VsCodeLanguageModelSqlAdapter();
+  const diagnosticTimers = new Map<string, NodeJS.Timeout>();
+  const diagnosticVersions = new Map<string, number>();
   let queryMap: QueryMapProvider;
   const results = new ResultsPanelProvider(
     context,
@@ -74,10 +78,11 @@ export function activate(context: vscode.ExtensionContext): void {
     queryMap.updateFromEditor(editor);
     highlightActiveSqlSection(editor);
     highlighter.refreshVisibleEditors();
-    updateSqlDiagnostics(editor?.document);
+    updateSqlDiagnostics(editor?.document, editor?.selection);
   }));
   context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection((event) => {
     highlightActiveSqlSection(event.textEditor);
+    updateSqlDiagnostics(event.textEditor.document, event.selections[0]);
   }));
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((event) => {
     const editor = vscode.window.activeTextEditor;
@@ -85,7 +90,7 @@ export function activate(context: vscode.ExtensionContext): void {
       queryMap.updateFromEditor(editor);
       highlightActiveSqlSection(editor);
     }
-    updateSqlDiagnostics(event.document);
+    updateSqlDiagnostics(event.document, editor?.selection);
   }));
   context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => {
     sqlDiagnostics.delete(document.uri);
@@ -448,11 +453,27 @@ export function activate(context: vscode.ExtensionContext): void {
     };
   }
 
-  function updateSqlDiagnostics(document: vscode.TextDocument | undefined): void {
+  function updateSqlDiagnostics(document: vscode.TextDocument | undefined, selection?: vscode.Selection): void {
     if (!document || document.languageId !== 'sql') {
       return;
     }
+    const documentUri = document.uri.toString();
+    const version = (diagnosticVersions.get(documentUri) ?? 0) + 1;
+    diagnosticVersions.set(documentUri, version);
+    const existingTimer = diagnosticTimers.get(documentUri);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
     sqlDiagnostics.set(document.uri, sectionService.getSyntaxIssues(document));
+    const timer = setTimeout(() => {
+      diagnosticTimers.delete(documentUri);
+      void diagnosticsService.getDiagnostics(document, selection).then((diagnostics) => {
+        if (diagnosticVersions.get(documentUri) === version) {
+          sqlDiagnostics.set(document.uri, diagnostics);
+        }
+      });
+    }, 450);
+    diagnosticTimers.set(documentUri, timer);
   }
 
   async function executeDetected(editor: vscode.TextEditor, detected: { sql: string; range: vscode.Range; index?: number; id?: string }): Promise<void> {

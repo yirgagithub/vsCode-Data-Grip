@@ -10,12 +10,17 @@ function ResultsTabs({ tabs, activeTabId }) {
                 if (title) {
                     renameTab(tab.id, title);
                 }
-            }, role: "tab", children: [(0, jsx_runtime_1.jsx)("span", { className: `connection-dot ${tab.databaseType}` }), (0, jsx_runtime_1.jsx)("span", { className: "tab-title", children: tab.customTitle ?? tab.title }), tab.executionTimeMs !== undefined && (0, jsx_runtime_1.jsxs)("span", { className: "muted", children: [tab.executionTimeMs, "ms"] }), tab.rowCount !== undefined && (0, jsx_runtime_1.jsxs)("span", { className: "muted", children: [tab.rowCount, " rows"] }), (0, jsx_runtime_1.jsx)("span", { className: `icon ${tab.pinned ? 'on' : ''}`, title: tab.pinned ? 'Unpin' : 'Pin', onClick: (event) => {
+            }, role: "tab", title: [
+                tab.customTitle ?? tab.title,
+                tab.executionTimeMs !== undefined ? `${tab.executionTimeMs}ms` : undefined,
+                tab.rowCount !== undefined ? `${tab.rowCount} rows` : undefined,
+                tab.executionStatus
+            ].filter(Boolean).join(' - '), children: [(0, jsx_runtime_1.jsx)("span", { className: `connection-dot ${tab.databaseType}` }), (0, jsx_runtime_1.jsx)("span", { className: "tab-title", children: tab.customTitle ?? tab.title }), (0, jsx_runtime_1.jsx)("span", { className: `icon ${tab.pinned ? 'on' : ''}`, title: tab.pinned ? 'Unpin' : 'Pin', onClick: (event) => {
                         event.stopPropagation();
                         pinTab(tab.id, !tab.pinned);
-                    }, children: tab.pinned ? 'Pinned' : 'Pin' }), (0, jsx_runtime_1.jsx)("span", { className: "icon", title: "Close", onClick: (event) => {
+                    }, children: "\u2316" }), (0, jsx_runtime_1.jsx)("span", { className: "icon", title: "Close", onClick: (event) => {
                         event.stopPropagation();
                         closeTab(tab.id);
-                    }, children: "x" })] }, tab.id))) }));
+                    }, children: "\u00D7" })] }, tab.id))) }));
 }
 //# sourceMappingURL=ResultsTabs.js.map

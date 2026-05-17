@@ -70,6 +70,16 @@ export interface QueryExecutionResult {
   messages?: string[];
 }
 
+export interface TablePreviewOptions {
+  where?: string;
+  offset?: number;
+  orderBySql?: string;
+  orderBy?: Array<{
+    column: string;
+    direction: 'asc' | 'desc';
+  }>;
+}
+
 export interface QueryError {
   message: string;
   code?: string;
@@ -77,6 +87,11 @@ export interface QueryError {
   hint?: string;
   position?: string;
   where?: string;
+}
+
+export interface QueryValidationResult {
+  ok: boolean;
+  error?: QueryError;
 }
 
 export interface SchemaInfo {

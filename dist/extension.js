@@ -45,6 +45,7 @@ const queryConsoleStore_1 = require("./persistence/queryConsoleStore");
 const queryHistoryStore_1 = require("./persistence/queryHistoryStore");
 const resultSessionStore_1 = require("./persistence/resultSessionStore");
 const schemaContextService_1 = require("./services/schemaContextService");
+const sqlDiagnosticsService_1 = require("./services/sqlDiagnosticsService");
 const sqlSectionHighlighter_1 = require("./services/sqlSectionHighlighter");
 const sqlSectionService_1 = require("./services/sqlSectionService");
 const vsCodeLanguageModelSqlAdapter_1 = require("./ai/vsCodeLanguageModelSqlAdapter");
@@ -66,7 +67,10 @@ function activate(context) {
     const sectionService = new sqlSectionService_1.SqlSectionService();
     const highlighter = new sqlSectionHighlighter_1.SqlSectionHighlighter();
     const sqlDiagnostics = vscode.languages.createDiagnosticCollection('database-sql');
+    const diagnosticsService = new sqlDiagnosticsService_1.SqlDiagnosticsService(connectionManager, schemaContext, sectionService);
     const aiAdapter = new vsCodeLanguageModelSqlAdapter_1.VsCodeLanguageModelSqlAdapter();
+    const diagnosticTimers = new Map();
+    const diagnosticVersions = new Map();
     let queryMap;
     const results = new ResultsPanelProvider_1.ResultsPanelProvider(context, resultStore, executor, async (tab) => revealSourceForTab(tab), (tabs) => queryMap?.updateResults(tabs));
     queryMap = new QueryMapProvider_1.QueryMapProvider(sectionService, async (documentUri, section) => {
@@ -92,10 +96,11 @@ function activate(context) {
         queryMap.updateFromEditor(editor);
         highlightActiveSqlSection(editor);
         highlighter.refreshVisibleEditors();
-        updateSqlDiagnostics(editor?.document);
+        updateSqlDiagnostics(editor?.document, editor?.selection);
     }));
     context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection((event) => {
         highlightActiveSqlSection(event.textEditor);
+        updateSqlDiagnostics(event.textEditor.document, event.selections[0]);
     }));
     context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((event) => {
         const editor = vscode.window.activeTextEditor;
@@ -103,7 +108,7 @@ function activate(context) {
             queryMap.updateFromEditor(editor);
             highlightActiveSqlSection(editor);
         }
-        updateSqlDiagnostics(event.document);
+        updateSqlDiagnostics(event.document, editor?.selection);
     }));
     context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => {
         sqlDiagnostics.delete(document.uri);
@@ -431,11 +436,27 @@ function activate(context) {
             range
         };
     }
-    function updateSqlDiagnostics(document) {
+    function updateSqlDiagnostics(document, selection) {
         if (!document || document.languageId !== 'sql') {
             return;
         }
+        const documentUri = document.uri.toString();
+        const version = (diagnosticVersions.get(documentUri) ?? 0) + 1;
+        diagnosticVersions.set(documentUri, version);
+        const existingTimer = diagnosticTimers.get(documentUri);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
         sqlDiagnostics.set(document.uri, sectionService.getSyntaxIssues(document));
+        const timer = setTimeout(() => {
+            diagnosticTimers.delete(documentUri);
+            void diagnosticsService.getDiagnostics(document, selection).then((diagnostics) => {
+                if (diagnosticVersions.get(documentUri) === version) {
+                    sqlDiagnostics.set(document.uri, diagnostics);
+                }
+            });
+        }, 450);
+        diagnosticTimers.set(documentUri, timer);
     }
     async function executeDetected(editor, detected) {
         const connection = connectionManager.getPreferredConnection() ?? await connectionManager.pickConnection();

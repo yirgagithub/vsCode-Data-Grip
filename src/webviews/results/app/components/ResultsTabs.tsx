@@ -18,11 +18,15 @@ export function ResultsTabs({ tabs, activeTabId }: { tabs: QueryResultTab[]; act
             }
           }}
           role="tab"
+          title={[
+            tab.customTitle ?? tab.title,
+            tab.executionTimeMs !== undefined ? `${tab.executionTimeMs}ms` : undefined,
+            tab.rowCount !== undefined ? `${tab.rowCount} rows` : undefined,
+            tab.executionStatus
+          ].filter(Boolean).join(' - ')}
         >
           <span className={`connection-dot ${tab.databaseType}`} />
           <span className="tab-title">{tab.customTitle ?? tab.title}</span>
-          {tab.executionTimeMs !== undefined && <span className="muted">{tab.executionTimeMs}ms</span>}
-          {tab.rowCount !== undefined && <span className="muted">{tab.rowCount} rows</span>}
           <span
             className={`icon ${tab.pinned ? 'on' : ''}`}
             title={tab.pinned ? 'Unpin' : 'Pin'}
@@ -31,7 +35,7 @@ export function ResultsTabs({ tabs, activeTabId }: { tabs: QueryResultTab[]; act
               pinTab(tab.id, !tab.pinned);
             }}
           >
-            {tab.pinned ? 'Pinned' : 'Pin'}
+            ⌖
           </span>
           <span
             className="icon"
@@ -41,7 +45,7 @@ export function ResultsTabs({ tabs, activeTabId }: { tabs: QueryResultTab[]; act
               closeTab(tab.id);
             }}
           >
-            x
+            ×
           </span>
         </button>
       ))}
