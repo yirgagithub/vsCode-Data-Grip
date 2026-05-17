@@ -261,11 +261,8 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); font-family: var(--vscode-font-family); font-size: 13px; }
-    .summary { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 10px; border-bottom: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); background: var(--vscode-editorWidget-background); box-sizing: border-box; }
-    .summary strong { color: var(--vscode-foreground); font-weight: 600; }
-    .summary-icon { color: var(--vscode-charts-blue); }
     .empty { min-height: 140px; display: grid; place-items: center; padding: 18px; color: var(--vscode-descriptionForeground); text-align: center; line-height: 1.35; }
-    .list { display: grid; gap: 1px; padding: 4px 0 8px; }
+    .list { display: grid; gap: 1px; padding: 6px 0 8px; }
     .tree-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; min-height: 32px; padding-right: 8px; border-left: 2px solid transparent; }
     .tree-row:hover { background: var(--vscode-list-hoverBackground); }
     .tree-row:focus-within { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
@@ -286,7 +283,7 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
     .subquery-row .node-icon { color: var(--vscode-charts-orange); }
     .document-row { color: var(--vscode-foreground); }
     .document-row .node-label { font-weight: 400; }
-    .actions { display: inline-flex; align-items: center; gap: 2px; opacity: .72; }
+    .actions { display: inline-flex; align-items: center; gap: 2px; opacity: 0; }
     .tree-row:hover .actions, .tree-row:focus-within .actions { opacity: 1; }
     .action { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--vscode-descriptionForeground); }
     .action.run { color: var(--vscode-charts-green); }
@@ -444,12 +441,6 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
       }
       const list = document.createElement('div');
       list.className = 'list';
-      const summary = document.createElement('div');
-      summary.className = 'summary';
-      const documentCount = groups.reduce((total, group) => total + group.documents.length, 0);
-      const queryCount = groups.reduce((total, group) => total + group.documents.reduce((sum, documentGroup) => sum + documentGroup.items.length, 0), 0);
-      summary.innerHTML = '<span class="summary-icon">⌁</span><strong>Query Map</strong><span>' + documentCount + ' docs · ' + queryCount + ' queries</span>';
-      root.appendChild(summary);
       for (const group of groups) {
         const groupId = 'group:' + group.id;
         const groupRow = document.createElement('div');
