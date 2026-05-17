@@ -79,11 +79,10 @@ class QueryMapProvider {
                 databaseName,
                 documents: []
             };
-            const document = vscode.workspace.textDocuments.find((item) => item.uri.toString() === record.documentUri);
             group.documents.push({
                 id: record.documentUri,
                 documentTitle: this.documentTitle(record.documentUri),
-                items: document ? this.sectionService.getTree(document).map((section) => this.toItem(record.documentUri, section)) : []
+                items: []
             });
             groupsByConnection.set(connectionId, group);
         }
@@ -193,15 +192,13 @@ class QueryMapProvider {
             .slice(0, maxLength);
     }
     itemTitle(section) {
-        const keyword = section.sql.replace(/^\s*(?:--.*\r?\n\s*)*/g, '').match(/^\w+/)?.[0]?.toUpperCase();
-        const table = section.sql.replace(/\s+/g, ' ').match(/\bfrom\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)/i)?.[1]?.replace(/"/g, '');
         if (section.kind === 'cte') {
             return section.name ? `CTE ${section.name}` : `CTE ${section.index + 1}`;
         }
         if (section.kind === 'subquery') {
             return `Subquery ${section.index + 1}`;
         }
-        return keyword && table ? `${keyword} ${table}` : `Query ${section.index + 1}`;
+        return `Query ${section.index + 1}`;
     }
     postState() {
         void this.view?.webview.postMessage({
@@ -238,39 +235,20 @@ class QueryMapProvider {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); font-family: var(--vscode-font-family); font-size: 13px; }
-    .empty { min-height: 140px; display: grid; place-items: center; padding: 18px; color: var(--vscode-descriptionForeground); text-align: center; line-height: 1.35; }
+    .empty { min-height: 140px; display: grid; place-items: center; padding: 18px; color: var(--vscode-descriptionForeground); text-align: center; }
     .list { display: grid; gap: 1px; padding: 6px 0 8px; }
-    .tree-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; min-height: 32px; padding-right: 8px; border-left: 2px solid transparent; }
+    .tree-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; min-height: 32px; padding-right: 8px; }
     .tree-row:hover { background: var(--vscode-list-hoverBackground); }
     .tree-row:focus-within { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
-    .tree-row.active { background: var(--vscode-list-activeSelectionBackground); border-left-color: var(--vscode-focusBorder); }
     .twisty, .spacer { width: 22px; height: 28px; display: grid; place-items: center; flex: 0 0 auto; }
     .twisty { border: 0; background: transparent; color: var(--vscode-icon-foreground); padding: 0; }
     .spacer { color: transparent; }
     .node-main { min-width: 0; background: transparent; color: var(--vscode-foreground); border: 0; padding: 2px 0; text-align: left; height: auto; }
-    .node-label { display: flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; line-height: 1.25; }
-    .node-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .node-label { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; line-height: 1.25; }
     .node-meta { display: block; margin-top: 1px; color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .node-icon { width: 15px; height: 15px; display: inline-grid; place-items: center; flex: 0 0 auto; color: var(--vscode-descriptionForeground); }
     .group-row .node-label { font-weight: 600; }
-    .group-row .node-icon { color: var(--vscode-charts-pink); }
-    .document-row .node-icon { color: var(--vscode-charts-blue); }
-    .query-row .node-icon { color: var(--vscode-charts-green); }
-    .cte-row .node-icon { color: var(--vscode-charts-purple); }
-    .subquery-row .node-icon { color: var(--vscode-charts-orange); }
     .document-row { color: var(--vscode-foreground); }
     .document-row .node-label { font-weight: 400; }
-    .actions { display: inline-flex; align-items: center; gap: 2px; opacity: 0; }
-    .tree-row:hover .actions, .tree-row:focus-within .actions { opacity: 1; }
-    .action { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--vscode-descriptionForeground); }
-    .action.run { color: var(--vscode-charts-green); }
-    .action:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
-    .status { display: inline-flex; align-items: center; gap: 5px; color: var(--vscode-descriptionForeground); }
-    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-descriptionForeground); }
-    .status-dot.completed { background: var(--vscode-testing-iconPassed); }
-    .status-dot.failed { background: var(--vscode-errorForeground); }
-    .status-dot.running { background: var(--vscode-charts-yellow); }
-    .unparsed { color: var(--vscode-descriptionForeground); font-style: italic; }
     button { font: inherit; cursor: pointer; }
     button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
   </style>
@@ -315,29 +293,14 @@ class QueryMapProvider {
       row.appendChild(twisty);
     }
 
-    function iconFor(kind) {
-      if (kind === 'connection') return '●';
-      if (kind === 'document') return '▣';
-      if (kind === 'cte') return '◇';
-      if (kind === 'subquery') return '◌';
-      return '▶';
-    }
-
-    function appendNodeMain(row, labelText, metaText, titleText, onclick, kind) {
+    function appendNodeMain(row, labelText, metaText, titleText, onclick) {
       const main = document.createElement('button');
       main.className = 'node-main';
       main.title = titleText || labelText;
       main.onclick = onclick;
       const label = document.createElement('span');
       label.className = 'node-label';
-      const icon = document.createElement('span');
-      icon.className = 'node-icon';
-      icon.textContent = iconFor(kind);
-      const title = document.createElement('span');
-      title.className = 'node-title';
-      title.textContent = labelText;
-      label.appendChild(icon);
-      label.appendChild(title);
+      label.textContent = labelText;
       main.appendChild(label);
       if (metaText) {
         const meta = document.createElement('span');
@@ -346,63 +309,6 @@ class QueryMapProvider {
         main.appendChild(meta);
       }
       row.appendChild(main);
-    }
-
-    function appendActions(row, item) {
-      const actions = document.createElement('span');
-      actions.className = 'actions';
-      if (item.status) {
-        const status = document.createElement('span');
-        status.className = 'status';
-        status.title = item.status + (item.durationMs !== undefined ? ' · ' + item.durationMs + 'ms' : '') + (item.rowCount !== undefined ? ' · ' + item.rowCount + ' rows' : '');
-        const dot = document.createElement('span');
-        dot.className = 'status-dot ' + item.status;
-        status.appendChild(dot);
-        actions.appendChild(status);
-      }
-      const reveal = document.createElement('button');
-      reveal.className = 'action';
-      reveal.title = 'Reveal in editor';
-      reveal.textContent = '⌖';
-      reveal.onclick = (event) => {
-        event.stopPropagation();
-        vscode.postMessage({ type: 'reveal', documentUri: item.documentUri, nodeId: item.id });
-      };
-      const run = document.createElement('button');
-      run.className = 'action run';
-      run.title = 'Run query';
-      run.textContent = '▶';
-      run.disabled = item.disabled;
-      run.onclick = (event) => {
-        event.stopPropagation();
-        vscode.postMessage({ type: 'run', documentUri: item.documentUri, nodeId: item.id });
-      };
-      actions.appendChild(reveal);
-      actions.appendChild(run);
-      row.appendChild(actions);
-    }
-
-    function renderItem(list, item, depth) {
-      const itemId = 'item:' + item.documentUri + ':' + item.id;
-      const row = document.createElement('div');
-      row.className = 'tree-row ' + (item.kind === 'cte' ? 'cte-row' : item.kind === 'subquery' ? 'subquery-row' : 'query-row');
-      row.style.paddingLeft = (28 + depth * 16) + 'px';
-      appendTwisty(row, itemId, item.children && item.children.length > 0);
-      appendNodeMain(
-        row,
-        item.title,
-        'Line ' + item.line + (item.preview ? ' · ' + item.preview : ''),
-        item.preview || item.title,
-        () => vscode.postMessage({ type: 'reveal', documentUri: item.documentUri, nodeId: item.id }),
-        item.kind
-      );
-      appendActions(row, item);
-      list.appendChild(row);
-      if (!isCollapsed(itemId)) {
-        for (const child of item.children || []) {
-          renderItem(list, child, depth + 1);
-        }
-      }
     }
 
     function render(state) {
@@ -428,8 +334,7 @@ class QueryMapProvider {
           group.connectionName + (group.databaseName ? ' / ' + group.databaseName : ''),
           group.documents.length + ' document' + (group.documents.length === 1 ? '' : 's'),
           'Toggle connection',
-          () => toggle(groupId),
-          'connection'
+          () => toggle(groupId)
         );
         groupRow.appendChild(document.createElement('span'));
         list.appendChild(groupRow);
@@ -444,26 +349,12 @@ class QueryMapProvider {
           appendNodeMain(
             docRow,
             documentGroup.documentTitle,
-            documentGroup.items.length ? documentGroup.items.length + ' quer' + (documentGroup.items.length === 1 ? 'y' : 'ies') : 'Open to parse queries',
+            '',
             'Open console',
-            () => vscode.postMessage({ type: 'open', documentUri: documentGroup.id }),
-            'document'
+            () => vscode.postMessage({ type: 'open', documentUri: documentGroup.id })
           );
           docRow.appendChild(document.createElement('span'));
           list.appendChild(docRow);
-          if (documentGroup.items.length) {
-            for (const item of documentGroup.items) {
-              renderItem(list, item, 0);
-            }
-          } else {
-            const emptyRow = document.createElement('div');
-            emptyRow.className = 'tree-row unparsed';
-            emptyRow.style.paddingLeft = '72px';
-            appendTwisty(emptyRow, '', false);
-            appendNodeMain(emptyRow, 'No parsed queries', 'Open the console document to populate this map.', 'Open console', () => vscode.postMessage({ type: 'open', documentUri: documentGroup.id }), 'subquery');
-            emptyRow.appendChild(document.createElement('span'));
-            list.appendChild(emptyRow);
-          }
         }
       }
       root.appendChild(list);
