@@ -8,6 +8,7 @@ export function ResultToolbar({ tab, resultSet }: { tab: QueryResultTab; resultS
   const { pinTab } = useResultsStore();
   const rows = resultSet?.rows ?? [];
   const [maxRows, setMaxRows] = useState<number | undefined>(tab.maxRows);
+  const [exportFormat, setExportFormat] = useState<'csv' | 'json' | 'tsv'>('csv');
   const limitValue = useMemo(() => {
     if (!maxRows) {
       return 'all';
@@ -35,6 +36,12 @@ export function ResultToolbar({ tab, resultSet }: { tab: QueryResultTab; resultS
     }
     setMaxRows(Number(value));
   };
+  const exportText = () => {
+    if (exportFormat === 'json') {
+      return JSON.stringify(rows, null, 2);
+    }
+    return exportFormat === 'tsv' ? rowsToTsv(rows) : rowsToCsv(rows);
+  };
 
   return (
     <div className="toolbar result-toolbar">
@@ -52,11 +59,15 @@ export function ResultToolbar({ tab, resultSet }: { tab: QueryResultTab; resultS
       <button className={`tool icon-tool ${tab.pinned ? 'tone-orange' : ''}`} title={tab.pinned ? 'Unpin tab' : 'Pin tab'} onClick={() => pinTab(tab.id, !tab.pinned)}>⌖</button>
       <span className="separator" />
       <button className="tool icon-tool tone-purple" title="Copy fetched rows as TSV" onClick={() => vscode.postMessage({ type: 'copy', text: rowsToTsv(rows) })}>⧉</button>
-      <button className="tool" title="Copy fetched rows as CSV" onClick={() => vscode.postMessage({ type: 'copy', text: rowsToCsv(rows) })}>CSV</button>
-      <button className="tool" title="Copy fetched rows as JSON" onClick={() => vscode.postMessage({ type: 'copy', text: JSON.stringify(rows, null, 2) })}>JSON</button>
+      <select className="toolbar-select" value={exportFormat} onChange={(event) => setExportFormat(event.target.value as 'csv' | 'json' | 'tsv')} title="Export format">
+        <option value="csv">CSV</option>
+        <option value="json">JSON</option>
+        <option value="tsv">TSV</option>
+      </select>
+      <button className="tool icon-tool tone-green" title={`Copy fetched rows as ${exportFormat.toUpperCase()}`} onClick={() => vscode.postMessage({ type: 'copy', text: exportText() })}>⇩</button>
       <span className="toolbar-spacer" />
-      <span className={`execution-badge ${tab.executionStatus}`}>{tab.executionStatus}</span>
-      <span className="muted">{resultSet?.command ?? ''}</span>
+      <span className={`status-dot ${tab.executionStatus}`} title={`${tab.executionStatus}${tab.executionTimeMs !== undefined ? ` - ${tab.executionTimeMs}ms` : ''}`} />
+      <span className="muted command-label">{resultSet?.command ?? ''}</span>
     </div>
   );
 }

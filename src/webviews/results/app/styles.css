@@ -222,6 +222,16 @@ button:disabled {
   padding: 0 22px 0 8px;
 }
 
+.toolbar-select {
+  height: 26px;
+  min-width: 72px;
+  color: var(--vscode-dropdown-foreground);
+  background: var(--vscode-dropdown-background);
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
+  border-radius: 3px;
+  padding: 0 22px 0 8px;
+}
+
 .execution-badge {
   padding: 2px 7px;
   border-radius: 3px;
@@ -239,6 +249,32 @@ button:disabled {
   color: var(--vscode-errorForeground);
 }
 
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--vscode-descriptionForeground);
+  flex: 0 0 auto;
+}
+
+.status-dot.completed {
+  background: var(--vscode-testing-iconPassed);
+}
+
+.status-dot.failed {
+  background: var(--vscode-errorForeground);
+}
+
+.status-dot.running {
+  background: var(--vscode-charts-yellow);
+}
+
+.command-label {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .resultset-tabs {
   display: flex;
   align-items: center;
@@ -251,6 +287,9 @@ button:disabled {
 }
 
 .resultset-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   padding: 0 10px;
   color: var(--vscode-descriptionForeground);
   border-color: var(--vscode-panel-border);

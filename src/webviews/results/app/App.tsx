@@ -44,8 +44,10 @@ export function App() {
             key={set.id}
             className={index === activeResultSetIndex ? 'active' : ''}
             onClick={() => setActiveResultSetIndex(index)}
+            title={`${set.command ?? 'Result'} - ${set.rowCount} rows`}
           >
-            {index + 1} {set.command ?? 'Result'} {set.rowCount} rows
+            <span>{index + 1}</span>
+            <span>{set.command ?? 'Result'}</span>
           </button>
         )) : <span className="muted">Messages</span>}
       </div>
