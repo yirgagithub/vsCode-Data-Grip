@@ -169,13 +169,16 @@ class QueryExecutor {
         await driver.cancelQuery(executionId);
     }
     resultTitle(sql, fileName) {
-        if (fileName) {
-            return fileName.split(/[\\/]/).pop() ?? fileName;
-        }
         const normalized = sql.replace(/\s+/g, ' ').trim();
         const from = normalized.match(/\bfrom\s+("?[\w.]+"?)/i)?.[1];
         const keyword = normalized.match(/^\w+/)?.[0]?.toUpperCase() ?? 'SQL';
-        return from ? `${keyword} ${from.replace(/"/g, '')}` : keyword;
+        if (from) {
+            return `${keyword} ${from.replace(/"/g, '')}`;
+        }
+        if (normalized) {
+            return keyword;
+        }
+        return fileName?.split(/[\\/]/).pop() ?? 'SQL';
     }
     async confirmDestructiveIfNeeded(isProduction, sql) {
         const confirm = vscode.workspace.getConfiguration('database').get('safety.confirmDestructiveQueries', true);
