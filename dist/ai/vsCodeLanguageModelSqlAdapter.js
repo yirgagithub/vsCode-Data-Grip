@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.VsCodeLanguageModelSqlAdapter = void 0;
 const vscode = __importStar(require("vscode"));
+const queryMemorySummaryParser_1 = require("./queryMemorySummaryParser");
 class VsCodeLanguageModelSqlAdapter {
     async send(request) {
         const lm = vscode.lm;
@@ -61,6 +62,10 @@ class VsCodeLanguageModelSqlAdapter {
         }
         return sql;
     }
+    async summarizeQueryMemory(request) {
+        const text = await this.sendRaw(this.summaryPrompt(request));
+        return this.parseSummary(text);
+    }
     prompt(request) {
         const schema = request.relevantSchema.tables.map((table) => {
             const columns = table.columns?.map((column) => `${column.name} ${column.dataType}${column.nullable ? '' : ' not null'}`).join(', ');
@@ -76,9 +81,53 @@ class VsCodeLanguageModelSqlAdapter {
             `Schema:\n${schema || '(no schema metadata available)'}`
         ].filter(Boolean).join('\n\n');
     }
+    async sendRaw(prompt) {
+        const lm = vscode.lm;
+        if (!lm?.selectChatModels) {
+            throw new Error('VS Code Language Model API is not available.');
+        }
+        const models = await lm.selectChatModels({ vendor: 'copilot' });
+        const model = models[0];
+        if (!model) {
+            throw new Error('No VS Code language model is available.');
+        }
+        const messages = [
+            vscode.LanguageModelChatMessage?.User(prompt) ?? { role: 'user', content: prompt }
+        ];
+        const response = await model.sendRequest(messages, {}, new vscode.CancellationTokenSource().token);
+        let text = '';
+        for await (const chunk of response.text) {
+            text += chunk;
+        }
+        return text;
+    }
+    summaryPrompt(request) {
+        return [
+            'Summarize this SQL query for local query-memory search inside VS Code.',
+            'Return only JSON with this shape: {"title":"short title","summary":"one sentence","tables":["schema.table"],"columns":["table.column"]}.',
+            'Do not include result row values. Do not include secrets.',
+            `Connection: ${request.connectionName ?? 'connection'} ${request.databaseName ?? ''} ${request.databaseType ?? ''}`,
+            request.outputColumns?.length ? `Output columns: ${request.outputColumns.join(', ')}` : '',
+            request.errorMessage ? `Execution error: ${request.errorMessage}` : '',
+            `SQL:\n${request.sql}`
+        ].filter(Boolean).join('\n\n');
+    }
+    parseSummary(text) {
+        return (0, queryMemorySummaryParser_1.parseQueryMemorySummaryText)(text);
+    }
     extractSql(text) {
         const fenced = text.match(/```(?:sql)?\s*([\s\S]*?)```/i);
         return (fenced?.[1] ?? text).trim();
+    }
+    extractJson(text) {
+        const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+        const candidate = (fenced?.[1] ?? text).trim();
+        const start = candidate.indexOf('{');
+        const end = candidate.lastIndexOf('}');
+        if (start === -1 || end === -1 || end < start) {
+            throw new Error('The language model did not return summary JSON.');
+        }
+        return candidate.slice(start, end + 1);
     }
 }
 exports.VsCodeLanguageModelSqlAdapter = VsCodeLanguageModelSqlAdapter;

@@ -6,12 +6,15 @@ import { CatalogNode, ColumnNode, ConnectionNode, FolderNode, SchemaNode, TableN
 import { ConnectionStore } from './persistence/connectionStore';
 import { QueryConsoleStore } from './persistence/queryConsoleStore';
 import { QueryHistoryStore } from './persistence/queryHistoryStore';
+import { QueryMemoryStore } from './persistence/queryMemoryStore';
 import { ResultSessionStore } from './persistence/resultSessionStore';
+import { QueryMemoryService } from './services/queryMemoryService';
 import { SchemaContextService } from './services/schemaContextService';
 import { SqlDiagnosticsService } from './services/sqlDiagnosticsService';
 import { rangeFromPlain as rangeFromSource, SqlSectionHighlighter } from './services/sqlSectionHighlighter';
 import { SqlSectionService } from './services/sqlSectionService';
 import { VsCodeLanguageModelSqlAdapter } from './ai/vsCodeLanguageModelSqlAdapter';
+import { QueryMemoryController } from './controllers/queryMemoryController';
 import { ConnectionEditorPanel } from './webviews/connection/ConnectionEditorPanel';
 import { QueryMapProvider } from './webviews/queryMap/QueryMapProvider';
 import { ResultsPanelProvider } from './webviews/results/ResultsPanelProvider';
@@ -25,7 +28,6 @@ export function activate(context: vscode.ExtensionContext): void {
   const connectionManager = new ConnectionManager(connectionStore);
   const historyStore = new QueryHistoryStore(context);
   const consoleStore = new QueryConsoleStore(context);
-  const executor = new QueryExecutor(connectionManager, historyStore);
   const resultStore = new ResultSessionStore(context);
   const schemaContext = new SchemaContextService(connectionManager);
   const sectionService = new SqlSectionService();
@@ -33,6 +35,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const sqlDiagnostics = vscode.languages.createDiagnosticCollection('database-sql');
   const diagnosticsService = new SqlDiagnosticsService(connectionManager, schemaContext, sectionService);
   const aiAdapter = new VsCodeLanguageModelSqlAdapter();
+  const memoryStore = new QueryMemoryStore(context);
+  const memoryService = new QueryMemoryService(historyStore, memoryStore, consoleStore, connectionManager, aiAdapter);
+  const executor = new QueryExecutor(connectionManager, historyStore, memoryService);
   const diagnosticTimers = new Map<string, NodeJS.Timeout>();
   const diagnosticVersions = new Map<string, number>();
   let queryMap: QueryMapProvider;
@@ -54,6 +59,32 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       await executeDetected(editor, section);
+    },
+    () => historyStore.getAll(),
+    async (item) => openHistoryItem(item),
+    async (id, pinned) => {
+      await consoleStore.setPinned(id, pinned);
+      refreshQueryMap();
+    },
+    async (id) => {
+      await consoleStore.delete(id);
+      refreshQueryMap();
+    },
+    async (id, direction) => {
+      await consoleStore.move(id, direction);
+      refreshQueryMap();
+    },
+    async (documentUri) => {
+      await consoleStore.touchDocument(documentUri, { opened: true });
+      refreshQueryMap();
+    },
+    async (item) => {
+      await historyStore.update(item);
+      refreshQueryMap();
+    },
+    async (id) => {
+      await historyStore.delete(id);
+      refreshQueryMap();
     }
   );
   const tree = new DatabaseTreeProvider(connectionManager);
@@ -95,7 +126,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => {
     sqlDiagnostics.delete(document.uri);
   }));
-  queryMap.updateConsoles(consoleStore.getAll(), connectionManager.getConnections());
+  refreshQueryMap();
   queryMap.updateFromEditor(vscode.window.activeTextEditor);
   queryMap.updateResults(results.getTabs());
   highlightActiveSqlSection(vscode.window.activeTextEditor);
@@ -115,13 +146,48 @@ export function activate(context: vscode.ExtensionContext): void {
     }));
   };
 
+  function refreshQueryMap(): void {
+    queryMap.updateConsoles(
+      consoleStore.getAll(),
+      connectionManager.getConnections(),
+      connectionManager.getActiveConnections().map((connection) => connection.config.id)
+    );
+  }
+
+  new QueryMemoryController(context, memoryService, connectionManager, executor, aiAdapter, async (tab) => {
+    await results.addTab(tab);
+    queryMap.updateResults(results.getTabs());
+  }).register(register);
+
+  register('database.testQueryMemorySummary', async () => {
+    const sql = await vscode.window.showInputBox({
+      prompt: 'SQL to summarize with VS Code Language Model',
+      value: 'select sum(install) from public.adjust_offer'
+    });
+    if (!sql) {
+      return;
+    }
+    const summary = await aiAdapter.summarizeQueryMemory({
+      sql,
+      connectionName: 'Test connection',
+      databaseType: 'postgres',
+      databaseName: 'test',
+      outputColumns: ['sum']
+    });
+    const doc = await vscode.workspace.openTextDocument({
+      language: 'json',
+      content: `${JSON.stringify(summary, null, 2)}\n`
+    });
+    await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
+  });
+
   register('database.addConnection', async () => {
     const config = await ConnectionEditorPanel.open(context, connectionManager);
     if (!config) {
       return;
     }
     await connectionManager.save(config);
-    queryMap.updateConsoles(consoleStore.getAll(), connectionManager.getConnections());
+    refreshQueryMap();
     tree.refresh();
   });
 
@@ -135,7 +201,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (next) {
       await connectionManager.save(next);
       schemaContext.invalidate(id);
-      queryMap.updateConsoles(consoleStore.getAll(), connectionManager.getConnections());
+      refreshQueryMap();
       tree.refresh();
     }
   });
@@ -148,7 +214,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const answer = await vscode.window.showWarningMessage('Delete this connection?', { modal: true }, 'Delete');
     if (answer === 'Delete') {
       await connectionManager.delete(id);
-      queryMap.updateConsoles(consoleStore.getAll(), connectionManager.getConnections());
+      refreshQueryMap();
       tree.refresh();
     }
   });
@@ -169,6 +235,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     const connection = await connectionManager.connect(id);
     status.text = `$(database) ${connection.config.name}`;
+    refreshQueryMap();
     tree.refresh();
   });
 
@@ -180,6 +247,7 @@ export function activate(context: vscode.ExtensionContext): void {
     await connectionManager.disconnect(id);
     schemaContext.invalidate(id);
     status.text = '$(database) Database';
+    refreshQueryMap();
     tree.refresh();
   });
 
@@ -202,7 +270,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const connection = connectionManager.getPreferredConnection() ?? await connectionManager.pickConnection();
     const doc = await consoleStore.openOrCreate(connection, '', { reuse: false });
     await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Active, preview: false });
-    queryMap.updateConsoles(consoleStore.getAll(), connectionManager.getConnections());
+    refreshQueryMap();
     queryMap.updateFromEditor(vscode.window.activeTextEditor);
   });
 
@@ -210,7 +278,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const connection = connectionManager.getPreferredConnection();
     const doc = await consoleStore.openOrCreate(connection, '', { reuse: false });
     await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Active, preview: false });
-    queryMap.updateConsoles(consoleStore.getAll(), connectionManager.getConnections());
+    refreshQueryMap();
     queryMap.updateFromEditor(vscode.window.activeTextEditor);
   });
 
@@ -512,6 +580,7 @@ export function activate(context: vscode.ExtensionContext): void {
         endLine: detected.range.end.line,
         endColumn: detected.range.end.character
       });
+      refreshQueryMap();
       status.text = `$(database) ${connection.name} ${tab.executionTimeMs ?? 0}ms`;
     } finally {
       decoration.dispose();
@@ -556,6 +625,7 @@ export function activate(context: vscode.ExtensionContext): void {
           editor.selection = new vscode.Selection(range.start, range.end);
           editor.revealRange(range);
         }
+        refreshQueryMap();
         return;
       } catch {
         // Fall back to opening the SQL in a durable console below.
@@ -566,6 +636,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (doc.getText().trim().length === 0) {
       await editor.edit((edit) => edit.insert(new vscode.Position(0, 0), `${item.sql}\n`));
     }
+    refreshQueryMap();
   }
 
   async function revealSourceForTab(tab: import('./types').QueryResultTab): Promise<void> {

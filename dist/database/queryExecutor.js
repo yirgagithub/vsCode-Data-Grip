@@ -37,12 +37,18 @@ exports.QueryExecutor = void 0;
 const vscode = __importStar(require("vscode"));
 const sqlSplitter_1 = require("./sqlSplitter");
 const id_1 = require("../utils/id");
+const queryMemoryMetadata_1 = require("../services/queryMemoryMetadata");
+const sqlSafetyClassifier_1 = require("../services/sqlSafetyClassifier");
 class QueryExecutor {
     connectionManager;
     historyStore;
-    constructor(connectionManager, historyStore) {
+    recorder;
+    safety;
+    constructor(connectionManager, historyStore, recorder, safety = new sqlSafetyClassifier_1.SqlSafetyClassifier()) {
         this.connectionManager = connectionManager;
         this.historyStore = historyStore;
+        this.recorder = recorder;
+        this.safety = safety;
     }
     async execute(params) {
         const config = this.connectionManager.getConnection(params.connectionId);
@@ -73,7 +79,7 @@ class QueryExecutor {
                 });
             }
             const durationMs = Date.now() - started;
-            await this.historyStore.add({
+            const historyItem = {
                 id: (0, id_1.createId)('history'),
                 connectionId: config.id,
                 databaseType: config.type,
@@ -86,8 +92,13 @@ class QueryExecutor {
                 executedAt: started,
                 durationMs,
                 rowCount: resultSets.reduce((total, set) => total + set.rowCount, 0),
-                status: 'completed'
-            });
+                status: 'completed',
+                outputColumns: (0, queryMemoryMetadata_1.outputColumnNames)(resultSets[0]?.fields),
+                tables: (0, queryMemoryMetadata_1.extractQueryTables)(params.sql),
+                columns: (0, queryMemoryMetadata_1.extractQualifiedColumns)(params.sql)
+            };
+            await this.historyStore.add(historyItem);
+            await this.recorder?.recordHistoryItem(historyItem);
             return {
                 id: tabId,
                 title: this.resultTitle(params.sql, params.source?.fileName),
@@ -119,7 +130,7 @@ class QueryExecutor {
         }
         catch (error) {
             const queryError = this.toQueryError(error);
-            await this.historyStore.add({
+            const historyItem = {
                 id: (0, id_1.createId)('history'),
                 connectionId: config.id,
                 databaseType: config.type,
@@ -132,8 +143,12 @@ class QueryExecutor {
                 executedAt: started,
                 durationMs: Date.now() - started,
                 status: 'failed',
-                errorMessage: queryError.message
-            });
+                errorMessage: queryError.message,
+                tables: (0, queryMemoryMetadata_1.extractQueryTables)(params.sql),
+                columns: (0, queryMemoryMetadata_1.extractQualifiedColumns)(params.sql)
+            };
+            await this.historyStore.add(historyItem);
+            await this.recorder?.recordHistoryItem(historyItem);
             return {
                 id: tabId,
                 title: this.resultTitle(params.sql, params.source?.fileName),
@@ -186,14 +201,13 @@ class QueryExecutor {
         if (!confirm || (!isProduction && !warnAll)) {
             return;
         }
-        const dangerous = /\b(drop|truncate|alter)\b/i.test(sql)
-            || /\bdelete\s+from\b(?![\s\S]*\bwhere\b)/i.test(sql)
-            || /\bupdate\b(?![\s\S]*\bwhere\b)/i.test(sql);
-        if (!dangerous) {
+        const assessment = this.safety.classify(sql, { production: isProduction });
+        if (!assessment.requiresConfirmation) {
             return;
         }
         const target = isProduction ? 'production connection' : 'connection';
-        const answer = await vscode.window.showWarningMessage(`This looks destructive on a ${target}.`, { modal: true }, 'Run Anyway');
+        const detail = assessment.reasons.length ? ` ${assessment.reasons.join(' ')}` : '';
+        const answer = await vscode.window.showWarningMessage(`This looks risky on a ${target}.${detail}`, { modal: true }, 'Run Anyway');
         if (answer !== 'Run Anyway') {
             throw new Error('Query cancelled by safety confirmation.');
         }

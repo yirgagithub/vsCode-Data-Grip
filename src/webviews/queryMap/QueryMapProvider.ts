@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ConnectionConfig, QueryConsoleRecord, QueryResultTab } from '../../types';
+import { ConnectionConfig, QueryConsoleRecord, QueryHistoryItem, QueryResultTab } from '../../types';
 import { SqlQueryNode } from '../../services/sqlQueryTreeService';
 import { SqlSection, SqlSectionService } from '../../services/sqlSectionService';
 
@@ -27,7 +27,16 @@ interface QueryMapItem {
 
 interface QueryMapDocumentGroup {
   id: string;
+  documentUri: string;
   documentTitle: string;
+  pinned: boolean;
+  sortOrder: number;
+  lastTouchedAt: number;
+  isActiveConnection: boolean;
+  isToday: boolean;
+  status?: QueryResultTab['executionStatus'];
+  durationMs?: number;
+  rowCount?: number;
   items: QueryMapItem[];
 }
 
@@ -38,9 +47,30 @@ interface QueryMapGroup {
   documents: QueryMapDocumentGroup[];
 }
 
+interface QueryMapHistoryItem {
+  id: string;
+  connectionId: string;
+  connectionName: string;
+  databaseName?: string;
+  sql: string;
+  preview: string;
+  status: QueryHistoryItem['status'];
+  favorite: boolean;
+  rowCount?: number;
+  executedAt: number;
+  sourceFile?: string;
+}
+
 type QueryMapMessage =
   | { type: 'ready' }
-  | { type: 'open'; documentUri: string }
+  | { type: 'openConsole'; documentUri: string }
+  | { type: 'togglePin'; consoleId: string; pinned: boolean }
+  | { type: 'untrackConsole'; consoleId: string }
+  | { type: 'moveConsole'; consoleId: string; direction: 'up' | 'down' }
+  | { type: 'openHistory'; historyId: string }
+  | { type: 'toggleFavoriteHistory'; historyId: string; favorite: boolean }
+  | { type: 'copyHistory'; historyId: string }
+  | { type: 'deleteHistory'; historyId: string }
   | { type: 'reveal'; documentUri: string; nodeId: string }
   | { type: 'run'; documentUri: string; nodeId: string };
 
@@ -48,14 +78,24 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
   static readonly viewType = 'databaseQueryMap';
   private view?: vscode.WebviewView;
   private groups: QueryMapGroup[] = [];
+  private historyItems: QueryMapHistoryItem[] = [];
   private consoleRecords: QueryConsoleRecord[] = [];
   private connections: ConnectionConfig[] = [];
+  private activeConnectionIds = new Set<string>();
   private resultTabs: QueryResultTab[] = [];
 
   constructor(
     private readonly sectionService: SqlSectionService,
     private readonly revealSection: (documentUri: string, section: SqlSection) => Promise<void>,
-    private readonly runSection: (documentUri: string, section: SqlSection) => Promise<void>
+    private readonly runSection: (documentUri: string, section: SqlSection) => Promise<void>,
+    private readonly getHistoryItems: () => QueryHistoryItem[],
+    private readonly openHistoryItem: (item: QueryHistoryItem) => Promise<void>,
+    private readonly setConsolePinned: (id: string, pinned: boolean) => Promise<void>,
+    private readonly untrackConsole: (id: string) => Promise<void>,
+    private readonly moveConsole: (id: string, direction: 'up' | 'down') => Promise<void>,
+    private readonly touchConsoleDocument: (documentUri: string) => Promise<void>,
+    private readonly updateHistoryItem: (item: QueryHistoryItem) => Promise<void>,
+    private readonly deleteHistoryItem: (id: string) => Promise<void>
   ) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -66,9 +106,10 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
     this.postState();
   }
 
-  updateConsoles(records: QueryConsoleRecord[], connections: ConnectionConfig[]): void {
+  updateConsoles(records: QueryConsoleRecord[], connections: ConnectionConfig[], activeConnectionIds: string[] = []): void {
     this.consoleRecords = records;
     this.connections = connections;
+    this.activeConnectionIds = new Set(activeConnectionIds);
     this.refreshGroups();
   }
 
@@ -79,9 +120,16 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
   refreshGroups(): void {
     const connectionById = new Map(this.connections.map((connection) => [connection.id, connection]));
     const groupsByConnection = new Map<string, QueryMapGroup>();
+    const todayStart = this.todayStart();
 
     for (const record of this.consoleRecords) {
       const connection = connectionById.get(record.connectionId);
+      const touchedAt = record.lastTouchedAt ?? record.updatedAt;
+      const isActiveConnection = this.activeConnectionIds.has(record.connectionId);
+      const isToday = touchedAt >= todayStart;
+      if (!record.pinned && !isActiveConnection && !isToday) {
+        continue;
+      }
       const connectionId = record.connectionId;
       const connectionName = connection?.name ?? 'Unknown connection';
       const databaseName = connection?.database;
@@ -91,9 +139,19 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
         databaseName,
         documents: []
       };
+      const latestResult = this.latestResultForDocument(record.documentUri);
       group.documents.push({
-        id: record.documentUri,
+        id: record.id,
+        documentUri: record.documentUri,
         documentTitle: this.documentTitle(record.documentUri),
+        pinned: record.pinned === true,
+        sortOrder: this.consoleSortValue(record),
+        lastTouchedAt: touchedAt,
+        isActiveConnection,
+        isToday,
+        status: latestResult?.executionStatus,
+        durationMs: latestResult?.executionTimeMs,
+        rowCount: latestResult?.rowCount,
         items: []
       });
       groupsByConnection.set(connectionId, group);
@@ -102,9 +160,10 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
     this.groups = [...groupsByConnection.values()]
       .map((group) => ({
         ...group,
-        documents: group.documents.sort((a, b) => a.documentTitle.localeCompare(b.documentTitle))
+        documents: group.documents.sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.sortOrder - b.sortOrder || a.documentTitle.localeCompare(b.documentTitle))
       }))
       .sort((a, b) => `${a.connectionName}:${a.databaseName ?? ''}`.localeCompare(`${b.connectionName}:${b.databaseName ?? ''}`));
+    this.historyItems = this.toHistoryItems(this.getHistoryItems());
     this.postState();
   }
 
@@ -127,13 +186,52 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
       this.postState();
       return;
     }
+    if (message.type === 'togglePin') {
+      await this.setConsolePinned(message.consoleId, message.pinned);
+      return;
+    }
+    if (message.type === 'untrackConsole') {
+      await this.untrackConsole(message.consoleId);
+      return;
+    }
+    if (message.type === 'moveConsole') {
+      await this.moveConsole(message.consoleId, message.direction);
+      return;
+    }
+    if (message.type === 'openHistory') {
+      const item = this.getHistoryItems().find((history) => history.id === message.historyId);
+      if (item) {
+        await this.openHistoryItem(item);
+      }
+      return;
+    }
+    if (message.type === 'toggleFavoriteHistory') {
+      const item = this.getHistoryItems().find((history) => history.id === message.historyId);
+      if (item) {
+        await this.updateHistoryItem({ ...item, favorite: message.favorite });
+      }
+      return;
+    }
+    if (message.type === 'copyHistory') {
+      const item = this.getHistoryItems().find((history) => history.id === message.historyId);
+      if (item) {
+        await vscode.env.clipboard.writeText(item.sql);
+      }
+      return;
+    }
+    if (message.type === 'deleteHistory') {
+      await this.deleteHistoryItem(message.historyId);
+      return;
+    }
+    if (message.type === 'openConsole') {
+      await this.touchConsoleDocument(message.documentUri);
+      await this.openDocument(message.documentUri);
+      return;
+    }
     if (!message.documentUri) {
       return;
     }
     const editor = await this.openDocument(message.documentUri);
-    if (message.type === 'open') {
-      return;
-    }
     if (!editor) {
       return;
     }
@@ -223,8 +321,47 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
   private postState(): void {
     void this.view?.webview.postMessage({
       type: 'state',
-      groups: this.groups
+      groups: this.groups,
+      history: this.historyItems
     });
+  }
+
+  private latestResultForDocument(documentUri: string): QueryResultTab | undefined {
+    return [...this.resultTabs]
+      .filter((item) => item.sourceDocumentUri === documentUri)
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  }
+
+  private toHistoryItems(items: QueryHistoryItem[]): QueryMapHistoryItem[] {
+    const connectionById = new Map(this.connections.map((connection) => [connection.id, connection]));
+    return [...items]
+      .sort((a, b) => Number(b.favorite) - Number(a.favorite) || b.executedAt - a.executedAt)
+      .slice(0, 100)
+      .map((item) => {
+        const connection = connectionById.get(item.connectionId);
+        return {
+          id: item.id,
+          connectionId: item.connectionId,
+          connectionName: connection?.name ?? 'Unknown connection',
+          databaseName: connection?.database,
+          sql: item.sql,
+          preview: this.previewSql(item.sql, 180),
+          status: item.status,
+          favorite: item.favorite === true,
+          rowCount: item.rowCount,
+          executedAt: item.executedAt,
+          sourceFile: item.sourceFile
+        };
+      });
+  }
+
+  private todayStart(): number {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  }
+
+  private consoleSortValue(record: QueryConsoleRecord): number {
+    return record.sortOrder ?? -(record.lastTouchedAt ?? record.updatedAt);
   }
 
   private findNodeById(nodes: SqlQueryNode[], nodeId: string): SqlQueryNode | undefined {
@@ -258,22 +395,30 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); font-family: var(--vscode-font-family); font-size: 13px; }
-    .empty { min-height: 140px; display: grid; place-items: center; padding: 18px; color: var(--vscode-descriptionForeground); text-align: center; }
-    .list { display: grid; gap: 1px; padding: 6px 0 8px; }
-    .tree-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; min-height: 32px; padding-right: 8px; }
-    .tree-row:hover { background: var(--vscode-list-hoverBackground); }
-    .tree-row:focus-within { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
-    .twisty, .spacer { width: 22px; height: 28px; display: grid; place-items: center; flex: 0 0 auto; }
-    .twisty { border: 0; background: transparent; color: var(--vscode-icon-foreground); padding: 0; }
-    .spacer { color: transparent; }
-    .node-main { min-width: 0; background: transparent; color: var(--vscode-foreground); border: 0; padding: 2px 0; text-align: left; height: auto; }
-    .node-label { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; line-height: 1.25; }
-    .node-meta { display: block; margin-top: 1px; color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .group-row .node-label { font-weight: 600; }
-    .document-row { color: var(--vscode-foreground); }
-    .document-row .node-label { font-weight: 400; }
     button { font: inherit; cursor: pointer; }
     button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+    .tabs { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border); }
+    .tab { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--vscode-descriptionForeground); min-height: 32px; }
+    .tab.active { color: var(--vscode-foreground); border-bottom-color: var(--vscode-focusBorder); }
+    .empty { min-height: 140px; display: grid; place-items: center; padding: 18px; color: var(--vscode-descriptionForeground); text-align: center; }
+    .list { display: grid; gap: 1px; padding: 6px 0 8px; }
+    .group { padding: 7px 10px 4px; color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0; }
+    .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; min-height: 42px; padding: 4px 6px 4px 10px; }
+    .row:hover { background: var(--vscode-list-hoverBackground); }
+    .main { min-width: 0; border: 0; padding: 0; background: transparent; color: var(--vscode-foreground); text-align: left; }
+    .label { display: flex; align-items: center; gap: 5px; min-width: 0; line-height: 1.25; }
+    .title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .meta { display: block; margin-top: 2px; color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .actions { display: flex; gap: 1px; opacity: .72; }
+    .row:hover .actions, .actions:focus-within { opacity: 1; }
+    .icon { width: 22px; height: 22px; display: grid; place-items: center; border: 0; background: transparent; color: var(--vscode-icon-foreground); padding: 0; border-radius: 3px; }
+    .icon:hover { background: var(--vscode-toolbar-hoverBackground); }
+    .pin { color: var(--vscode-charts-yellow); }
+    .status { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--vscode-descriptionForeground); }
+    .status-completed { background: var(--vscode-testing-iconPassed); }
+    .status-failed { background: var(--vscode-testing-iconFailed); }
+    .status-running, .status-queued { background: var(--vscode-progressBar-background); }
+    .status-cancelled { background: var(--vscode-testing-iconSkipped); }
   </style>
 </head>
 <body>
@@ -281,107 +426,175 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const root = document.getElementById('root');
-    let currentState = { groups: [] };
-    let collapsed = (vscode.getState() && vscode.getState().collapsed) || {};
+    let saved = vscode.getState() || {};
+    let currentState = { groups: [], history: [] };
+    let activeTab = saved.activeTab || 'active';
 
-    function saveCollapsed() {
-      vscode.setState({ collapsed });
-    }
-
-    function isCollapsed(id) {
-      return collapsed[id] === true;
-    }
-
-    function toggle(id) {
-      collapsed[id] = !isCollapsed(id);
-      saveCollapsed();
-      render(currentState);
-    }
-
-    function appendTwisty(row, id, hasChildren) {
-      if (!hasChildren) {
-        const spacer = document.createElement('span');
-        spacer.className = 'spacer';
-        row.appendChild(spacer);
-        return;
-      }
-      const twisty = document.createElement('button');
-      twisty.className = 'twisty';
-      twisty.title = isCollapsed(id) ? 'Expand' : 'Collapse';
-      twisty.textContent = isCollapsed(id) ? '▸' : '▾';
-      twisty.onclick = (event) => {
-        event.stopPropagation();
-        toggle(id);
-      };
-      row.appendChild(twisty);
-    }
-
-    function appendNodeMain(row, labelText, metaText, titleText, onclick) {
-      const main = document.createElement('button');
-      main.className = 'node-main';
-      main.title = titleText || labelText;
-      main.onclick = onclick;
-      const label = document.createElement('span');
-      label.className = 'node-label';
-      label.textContent = labelText;
-      main.appendChild(label);
-      if (metaText) {
-        const meta = document.createElement('span');
-        meta.className = 'node-meta';
-        meta.textContent = metaText;
-        main.appendChild(meta);
-      }
-      row.appendChild(main);
+    function saveState() {
+      vscode.setState({ activeTab });
     }
 
     function render(state) {
-      currentState = state || { groups: [] };
-      const groups = currentState.groups || [];
+      currentState = state || { groups: [], history: [] };
       root.innerHTML = '';
-      if (!groups.length) {
-        const empty = document.createElement('div');
-        empty.className = 'empty';
-        empty.textContent = 'Open a SQL query console to see its queries.';
-        root.appendChild(empty);
-        return;
-      }
+      root.appendChild(renderTabs());
+      root.appendChild(activeTab === 'history' ? renderHistory() : renderActive());
+    }
+
+    function renderTabs() {
+      const tabs = document.createElement('div');
+      tabs.className = 'tabs';
+      tabs.appendChild(tabButton('active', 'Active Session'));
+      tabs.appendChild(tabButton('history', 'History'));
+      return tabs;
+    }
+
+    function tabButton(id, label) {
+      const button = document.createElement('button');
+      button.className = 'tab' + (activeTab === id ? ' active' : '');
+      button.textContent = label;
+      button.onclick = () => {
+        activeTab = id;
+        saveState();
+        render(currentState);
+      };
+      return button;
+    }
+
+    function renderActive() {
+      const groups = currentState.groups || [];
+      if (!groups.length) return empty('No active or recent query consoles.');
       const list = document.createElement('div');
       list.className = 'list';
       for (const group of groups) {
-        const groupId = 'group:' + group.id;
-        const groupRow = document.createElement('div');
-        groupRow.className = 'tree-row group-row';
-        appendTwisty(groupRow, groupId, group.documents.length > 0);
-        appendNodeMain(
-          groupRow,
-          group.connectionName + (group.databaseName ? ' / ' + group.databaseName : ''),
-          group.documents.length + ' document' + (group.documents.length === 1 ? '' : 's'),
-          'Toggle connection',
-          () => toggle(groupId)
-        );
-        groupRow.appendChild(document.createElement('span'));
-        list.appendChild(groupRow);
-        if (isCollapsed(groupId)) {
-          continue;
-        }
+        const header = document.createElement('div');
+        header.className = 'group';
+        header.textContent = group.connectionName + (group.databaseName ? ' / ' + group.databaseName : '');
+        list.appendChild(header);
         for (const documentGroup of group.documents) {
-          const docRow = document.createElement('div');
-          docRow.className = 'tree-row document-row';
-          docRow.style.paddingLeft = '28px';
-          appendTwisty(docRow, '', false);
-          appendNodeMain(
-            docRow,
-            documentGroup.documentTitle,
-            '',
-            'Open console',
-            () => vscode.postMessage({ type: 'open', documentUri: documentGroup.id })
-          );
-          docRow.appendChild(document.createElement('span'));
-          list.appendChild(docRow);
+          list.appendChild(consoleRow(documentGroup));
         }
       }
-      root.appendChild(list);
+      return list;
     }
+
+    function renderHistory() {
+      const history = currentState.history || [];
+      if (!history.length) return empty('Executed queries will appear here.');
+      const list = document.createElement('div');
+      list.className = 'list';
+      for (const item of history) {
+        list.appendChild(historyRow(item));
+      }
+      return list;
+    }
+
+    function consoleRow(item) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const main = mainButton(item.documentTitle, consoleMeta(item), 'Open console', () => vscode.postMessage({ type: 'openConsole', documentUri: item.documentUri }));
+      if (item.status) main.querySelector('.label').prepend(statusDot(item.status));
+      row.appendChild(main);
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      actions.appendChild(icon(item.pinned ? '*' : '+', item.pinned ? 'Unpin' : 'Pin', () => vscode.postMessage({ type: 'togglePin', consoleId: item.id, pinned: !item.pinned }), item.pinned ? 'pin' : ''));
+      actions.appendChild(icon('^', 'Move up', () => vscode.postMessage({ type: 'moveConsole', consoleId: item.id, direction: 'up' })));
+      actions.appendChild(icon('v', 'Move down', () => vscode.postMessage({ type: 'moveConsole', consoleId: item.id, direction: 'down' })));
+      actions.appendChild(icon('x', 'Untrack console', () => vscode.postMessage({ type: 'untrackConsole', consoleId: item.id })));
+      row.appendChild(actions);
+      return row;
+    }
+
+    function historyRow(item) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const main = mainButton(item.preview || item.sql, historyMeta(item), 'Open history query', () => vscode.postMessage({ type: 'openHistory', historyId: item.id }));
+      main.querySelector('.label').prepend(statusDot(item.status));
+      row.appendChild(main);
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      actions.appendChild(icon(item.favorite ? '*' : '+', item.favorite ? 'Remove favorite' : 'Favorite', () => vscode.postMessage({ type: 'toggleFavoriteHistory', historyId: item.id, favorite: !item.favorite }), item.favorite ? 'pin' : ''));
+      actions.appendChild(icon('c', 'Copy SQL', () => vscode.postMessage({ type: 'copyHistory', historyId: item.id })));
+      actions.appendChild(icon('x', 'Delete history item', () => vscode.postMessage({ type: 'deleteHistory', historyId: item.id })));
+      row.appendChild(actions);
+      return row;
+    }
+
+    function mainButton(title, meta, tooltip, onclick) {
+      const main = document.createElement('button');
+      main.className = 'main';
+      main.title = tooltip;
+      main.onclick = onclick;
+      const label = document.createElement('span');
+      label.className = 'label';
+      const text = document.createElement('span');
+      text.className = 'title';
+      text.textContent = title;
+      label.appendChild(text);
+      main.appendChild(label);
+      const metaNode = document.createElement('span');
+      metaNode.className = 'meta';
+      metaNode.textContent = meta;
+      main.appendChild(metaNode);
+      return main;
+    }
+
+    function icon(text, title, onclick, extraClass) {
+      const button = document.createElement('button');
+      button.className = 'icon' + (extraClass ? ' ' + extraClass : '');
+      button.type = 'button';
+      button.title = title;
+      button.textContent = text;
+      button.onclick = (event) => {
+        event.stopPropagation();
+        onclick();
+      };
+      return button;
+    }
+
+    function statusDot(status) {
+      const dot = document.createElement('span');
+      dot.className = 'status status-' + status;
+      dot.title = status;
+      return dot;
+    }
+
+    function consoleMeta(item) {
+      const tags = [];
+      if (item.pinned) tags.push('pinned');
+      if (item.isActiveConnection) tags.push('connected');
+      if (item.isToday) tags.push('today');
+      if (item.rowCount !== undefined) tags.push(item.rowCount + ' rows');
+      if (item.durationMs !== undefined) tags.push(item.durationMs + 'ms');
+      tags.push(relativeTime(item.lastTouchedAt));
+      return tags.filter(Boolean).join(' | ');
+    }
+
+    function historyMeta(item) {
+      const tags = [item.connectionName + (item.databaseName ? ' / ' + item.databaseName : ''), item.status];
+      if (item.rowCount !== undefined) tags.push(item.rowCount + ' rows');
+      tags.push(relativeTime(item.executedAt));
+      return tags.filter(Boolean).join(' | ');
+    }
+
+    function relativeTime(value) {
+      if (!value) return '';
+      const seconds = Math.max(1, Math.round((Date.now() - value) / 1000));
+      if (seconds < 60) return 'just now';
+      const minutes = Math.round(seconds / 60);
+      if (minutes < 60) return minutes + 'm ago';
+      const hours = Math.round(minutes / 60);
+      if (hours < 24) return hours + 'h ago';
+      return new Date(value).toLocaleDateString();
+    }
+
+    function empty(text) {
+      const node = document.createElement('div');
+      node.className = 'empty';
+      node.textContent = text;
+      return node;
+    }
+
     window.addEventListener('message', (event) => {
       if (event.data.type === 'state') render(event.data);
     });

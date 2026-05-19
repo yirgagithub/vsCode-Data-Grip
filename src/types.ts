@@ -239,6 +239,96 @@ export interface QueryHistoryItem {
   rowCount?: number;
   status: 'completed' | 'failed' | 'cancelled';
   errorMessage?: string;
+  outputColumns?: string[];
+  tables?: string[];
+  columns?: string[];
+  memoryTitle?: string;
+  memorySummary?: string;
+  memorySummaryStatus?: QueryMemorySummaryStatus;
+  memorySummaryError?: string;
+}
+
+export type QueryMemorySourceKind = 'history' | 'document';
+
+export type QueryMemorySummaryStatus = 'pending' | 'ready' | 'failed' | 'skipped';
+
+export interface QueryMemoryItem {
+  id: string;
+  sourceKind: QueryMemorySourceKind;
+  sourceId: string;
+  connectionId?: string;
+  databaseType?: DatabaseType;
+  databaseName?: string;
+  connectionName?: string;
+  sql: string;
+  title?: string;
+  summary?: string;
+  summaryStatus: QueryMemorySummaryStatus;
+  summaryError?: string;
+  tables: string[];
+  columns: string[];
+  outputColumns: string[];
+  sourceFile?: string;
+  documentUri?: string;
+  sourceRange?: {
+    startLine: number;
+    startColumn: number;
+    endLine: number;
+    endColumn: number;
+  };
+  favorite?: boolean;
+  status?: 'completed' | 'failed' | 'cancelled';
+  errorMessage?: string;
+  rowCount?: number;
+  durationMs?: number;
+  executedAt?: number;
+  firstExecutedAt?: number;
+  lastExecutedAt?: number;
+  runCount?: number;
+  historyIds?: string[];
+  latestHistoryId?: string;
+  indexedAt: number;
+  updatedAt: number;
+}
+
+export interface QueryMemorySearchRequest {
+  query: string;
+  connectionId?: string;
+  limit?: number;
+  includeFailed?: boolean;
+}
+
+export interface QueryMemorySearchResult {
+  item: QueryMemoryItem;
+  score: number;
+  reasons: string[];
+  safety: SqlSafetyAssessment;
+}
+
+export interface QueryMemorySummary {
+  title: string;
+  summary: string;
+  tables: string[];
+  columns: string[];
+}
+
+export interface QueryMemorySummaryRequest {
+  sql: string;
+  connectionName?: string;
+  databaseType?: DatabaseType;
+  databaseName?: string;
+  outputColumns?: string[];
+  errorMessage?: string;
+}
+
+export type SqlSafetyRisk = 'safe' | 'write' | 'destructive' | 'production';
+
+export interface SqlSafetyAssessment {
+  risk: SqlSafetyRisk;
+  reasons: string[];
+  statements: string[];
+  requiresConfirmation: boolean;
+  previewAvailable: boolean;
 }
 
 export interface QueryConsoleRecord {
@@ -246,6 +336,10 @@ export interface QueryConsoleRecord {
   connectionId: string;
   documentUri: string;
   schemaName?: string;
+  pinned?: boolean;
+  sortOrder?: number;
+  lastOpenedAt?: number;
+  lastTouchedAt?: number;
   lastExecutedRange?: {
     startLine: number;
     startColumn: number;

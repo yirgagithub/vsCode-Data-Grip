@@ -1,14 +1,22 @@
 import * as vscode from 'vscode';
 import { ConnectionManager } from './connectionManager';
 import { splitSqlStatements } from './sqlSplitter';
-import { ExecuteQueryParams, QueryError, QueryResultTab, ResultSet } from '../types';
+import { ExecuteQueryParams, QueryError, QueryHistoryItem, QueryResultTab, ResultSet } from '../types';
 import { QueryHistoryStore } from '../persistence/queryHistoryStore';
 import { createId } from '../utils/id';
+import { outputColumnNames, extractQualifiedColumns, extractQueryTables } from '../services/queryMemoryMetadata';
+import { SqlSafetyClassifier } from '../services/sqlSafetyClassifier';
+
+export interface QueryExecutionRecorder {
+  recordHistoryItem(item: QueryHistoryItem): Promise<void>;
+}
 
 export class QueryExecutor {
   constructor(
     private readonly connectionManager: ConnectionManager,
-    private readonly historyStore: QueryHistoryStore
+    private readonly historyStore: QueryHistoryStore,
+    private readonly recorder?: QueryExecutionRecorder,
+    private readonly safety = new SqlSafetyClassifier()
   ) {}
 
   async execute(params: ExecuteQueryParams): Promise<QueryResultTab> {
@@ -45,7 +53,7 @@ export class QueryExecutor {
       }
 
       const durationMs = Date.now() - started;
-      await this.historyStore.add({
+      const historyItem: QueryHistoryItem = {
         id: createId('history'),
         connectionId: config.id,
         databaseType: config.type,
@@ -58,8 +66,13 @@ export class QueryExecutor {
         executedAt: started,
         durationMs,
         rowCount: resultSets.reduce((total, set) => total + set.rowCount, 0),
-        status: 'completed'
-      });
+        status: 'completed',
+        outputColumns: outputColumnNames(resultSets[0]?.fields),
+        tables: extractQueryTables(params.sql),
+        columns: extractQualifiedColumns(params.sql)
+      };
+      await this.historyStore.add(historyItem);
+      await this.recorder?.recordHistoryItem(historyItem);
 
       return {
         id: tabId,
@@ -91,7 +104,7 @@ export class QueryExecutor {
       };
     } catch (error) {
       const queryError = this.toQueryError(error);
-      await this.historyStore.add({
+      const historyItem: QueryHistoryItem = {
         id: createId('history'),
         connectionId: config.id,
         databaseType: config.type,
@@ -104,8 +117,12 @@ export class QueryExecutor {
         executedAt: started,
         durationMs: Date.now() - started,
         status: 'failed',
-        errorMessage: queryError.message
-      });
+        errorMessage: queryError.message,
+        tables: extractQueryTables(params.sql),
+        columns: extractQualifiedColumns(params.sql)
+      };
+      await this.historyStore.add(historyItem);
+      await this.recorder?.recordHistoryItem(historyItem);
 
       return {
         id: tabId,
@@ -162,14 +179,13 @@ export class QueryExecutor {
     if (!confirm || (!isProduction && !warnAll)) {
       return;
     }
-    const dangerous = /\b(drop|truncate|alter)\b/i.test(sql)
-      || /\bdelete\s+from\b(?![\s\S]*\bwhere\b)/i.test(sql)
-      || /\bupdate\b(?![\s\S]*\bwhere\b)/i.test(sql);
-    if (!dangerous) {
+    const assessment = this.safety.classify(sql, { production: isProduction });
+    if (!assessment.requiresConfirmation) {
       return;
     }
     const target = isProduction ? 'production connection' : 'connection';
-    const answer = await vscode.window.showWarningMessage(`This looks destructive on a ${target}.`, { modal: true }, 'Run Anyway');
+    const detail = assessment.reasons.length ? ` ${assessment.reasons.join(' ')}` : '';
+    const answer = await vscode.window.showWarningMessage(`This looks risky on a ${target}.${detail}`, { modal: true }, 'Run Anyway');
     if (answer !== 'Run Anyway') {
       throw new Error('Query cancelled by safety confirmation.');
     }

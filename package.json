@@ -28,6 +28,9 @@
     "onCommand:database.executeFile",
     "onCommand:database.executeStatementRange",
     "onCommand:database.showResults",
+    "onCommand:database.findPastQuery",
+    "onCommand:database.backfillQueryMemorySummaries",
+    "onCommand:database.testQueryMemorySummary",
     "onCommand:database.aiFixSql",
     "onCommand:database.aiExplainSql"
   ],
@@ -123,6 +126,22 @@
       {
         "command": "database.showQueryHistory",
         "title": "Show Query History",
+        "category": "Database"
+      },
+      {
+        "command": "database.findPastQuery",
+        "title": "Find Past Query...",
+        "category": "Database",
+        "icon": "$(search)"
+      },
+      {
+        "command": "database.backfillQueryMemorySummaries",
+        "title": "Backfill Query Memory Summaries",
+        "category": "Database"
+      },
+      {
+        "command": "database.testQueryMemorySummary",
+        "title": "Developer: Test Query Memory Summary",
         "category": "Database"
       },
       {
@@ -311,7 +330,7 @@
         },
         {
           "id": "databaseQueryMap",
-          "name": "Query Map",
+          "name": "Query Sessions",
           "type": "webview"
         }
       ],
@@ -326,19 +345,29 @@
     "menus": {
       "view/title": [
         {
+          "command": "database.findPastQuery",
+          "when": "view == databaseExplorer",
+          "group": "navigation@0"
+        },
+        {
           "command": "database.openSqlConsole",
           "when": "view == databaseExplorer",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "database.addConnection",
           "when": "view == databaseExplorer",
-          "group": "navigation"
+          "group": "navigation@2"
         },
         {
           "command": "database.refreshExplorer",
           "when": "view == databaseExplorer",
-          "group": "navigation"
+          "group": "navigation@3"
+        },
+        {
+          "command": "database.findPastQuery",
+          "when": "view == databaseQueryMap",
+          "group": "navigation@0"
         }
       ],
       "view/item/context": [
@@ -561,6 +590,14 @@
           "group": "history@1"
         },
         {
+          "command": "database.findPastQuery",
+          "group": "history@2"
+        },
+        {
+          "command": "database.backfillQueryMemorySummaries",
+          "group": "history@3"
+        },
+        {
           "command": "database.aiFixSql",
           "group": "ai@1"
         },
@@ -585,6 +622,11 @@
           "command": "database.executeFile",
           "when": "editorLangId == sql",
           "group": "navigation"
+        },
+        {
+          "command": "database.findPastQuery",
+          "when": "editorLangId == sql",
+          "group": "history@1"
         },
         {
           "command": "database.aiFixSql",
@@ -613,6 +655,11 @@
           "command": "database.executeFile",
           "when": "editorLangId == sql",
           "group": "navigation@3"
+        },
+        {
+          "command": "database.findPastQuery",
+          "when": "editorLangId == sql",
+          "group": "history@1"
         }
       ]
     },
@@ -654,6 +701,11 @@
         "command": "database.openQueryFile",
         "key": "ctrl+alt+shift+q",
         "mac": "cmd+alt+shift+q"
+      },
+      {
+        "command": "database.findPastQuery",
+        "key": "ctrl+alt+h",
+        "mac": "cmd+alt+h"
       }
     ],
     "configuration": {
@@ -702,6 +754,12 @@
         "database.history.maxItems": {
           "type": "number",
           "default": 1000
+        },
+        "database.queryMemory.maxItems": {
+          "type": "number",
+          "default": 2000,
+          "minimum": 100,
+          "description": "Maximum local query memory records retained for semantic-style search."
         }
       }
     }
@@ -711,7 +769,8 @@
     "watch": "tsc -watch -p ./",
     "bundle:webview": "vite build --config vite.config.ts",
     "build": "npm run compile && npm run bundle:webview",
-    "lint": "tsc -p ./ --noEmit"
+    "lint": "tsc -p ./ --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",
@@ -727,6 +786,7 @@
     "@types/react-dom": "^19.1.7",
     "@types/vscode": "^1.90.0",
     "typescript": "^5.9.2",
+    "vitest": "^1.6.1",
     "vite": "^5.4.14"
   }
 }

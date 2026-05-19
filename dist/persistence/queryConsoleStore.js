@@ -48,14 +48,16 @@ class QueryConsoleStore {
     getByConnection(connectionId) {
         return this.getAll()
             .filter((record) => record.connectionId === connectionId)
-            .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+            .sort((a, b) => (b.lastTouchedAt ?? b.updatedAt) - (a.lastTouchedAt ?? a.updatedAt))[0];
     }
     async openOrCreate(connection, initialSql = '', options = {}) {
         const reuse = options.reuse ?? true;
         const existing = reuse && connection ? this.getByConnection(connection.id) : undefined;
         if (existing) {
             try {
-                return await vscode.workspace.openTextDocument(vscode.Uri.parse(existing.documentUri));
+                const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(existing.documentUri));
+                await this.touch(existing.id, { opened: true });
+                return document;
             }
             catch {
                 await this.delete(existing.id);
@@ -70,6 +72,9 @@ class QueryConsoleStore {
                 connectionId: connection.id,
                 documentUri: uri.toString(),
                 schemaName: connection.defaultSchema,
+                sortOrder: -now,
+                lastOpenedAt: now,
+                lastTouchedAt: now,
                 createdAt: now,
                 updatedAt: now
             });
@@ -82,8 +87,53 @@ class QueryConsoleStore {
         if (index === -1) {
             return;
         }
-        records[index] = { ...records[index], lastExecutedRange: range, updatedAt: Date.now() };
+        const now = Date.now();
+        records[index] = { ...records[index], lastExecutedRange: range, lastTouchedAt: now, updatedAt: now };
         await this.context.workspaceState.update(CONSOLES_KEY, records);
+    }
+    async touch(id, options = {}) {
+        const now = Date.now();
+        await this.context.workspaceState.update(CONSOLES_KEY, this.getAll().map((record) => (record.id === id
+            ? { ...record, lastOpenedAt: options.opened ? now : record.lastOpenedAt, lastTouchedAt: now, updatedAt: now }
+            : record)));
+    }
+    async touchDocument(documentUri, options = {}) {
+        const record = this.getAll().find((item) => item.documentUri === documentUri);
+        if (record) {
+            await this.touch(record.id, options);
+        }
+    }
+    async setPinned(id, pinned) {
+        const now = Date.now();
+        await this.context.workspaceState.update(CONSOLES_KEY, this.getAll().map((record) => (record.id === id ? { ...record, pinned, updatedAt: now } : record)));
+    }
+    async move(id, direction) {
+        const records = this.getAll();
+        const record = records.find((item) => item.id === id);
+        if (!record) {
+            return;
+        }
+        const siblings = records
+            .filter((item) => item.connectionId === record.connectionId)
+            .sort((a, b) => this.sortValue(a) - this.sortValue(b));
+        const index = siblings.findIndex((item) => item.id === id);
+        const swapIndex = direction === 'up' ? index - 1 : index + 1;
+        const swap = siblings[swapIndex];
+        if (index === -1 || !swap) {
+            return;
+        }
+        const firstOrder = this.sortValue(record);
+        const secondOrder = this.sortValue(swap);
+        const now = Date.now();
+        await this.context.workspaceState.update(CONSOLES_KEY, records.map((item) => {
+            if (item.id === record.id) {
+                return { ...item, sortOrder: secondOrder, updatedAt: now };
+            }
+            if (item.id === swap.id) {
+                return { ...item, sortOrder: firstOrder, updatedAt: now };
+            }
+            return item;
+        }));
     }
     async delete(id) {
         await this.context.workspaceState.update(CONSOLES_KEY, this.getAll().filter((record) => record.id !== id));
@@ -92,6 +142,9 @@ class QueryConsoleStore {
         const records = this.getAll().filter((existing) => existing.id !== record.id);
         records.push(record);
         await this.context.workspaceState.update(CONSOLES_KEY, records);
+    }
+    sortValue(record) {
+        return record.sortOrder ?? -(record.lastTouchedAt ?? record.updatedAt);
     }
     async createConsoleUri(connection) {
         const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
