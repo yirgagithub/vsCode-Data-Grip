@@ -401,19 +401,22 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
     .tab { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--vscode-descriptionForeground); min-height: 32px; }
     .tab.active { color: var(--vscode-foreground); border-bottom-color: var(--vscode-focusBorder); }
     .empty { min-height: 140px; display: grid; place-items: center; padding: 18px; color: var(--vscode-descriptionForeground); text-align: center; }
-    .list { display: grid; gap: 1px; padding: 6px 0 8px; }
-    .group { padding: 7px 10px 4px; color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0; }
-    .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; min-height: 42px; padding: 4px 6px 4px 10px; }
+    .list { display: grid; gap: 1px; padding: 8px 0 8px; }
+    .group { padding: 12px 12px 5px; color: var(--vscode-foreground); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0; }
+    .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; min-height: 34px; padding: 3px 7px 3px 22px; }
     .row:hover { background: var(--vscode-list-hoverBackground); }
     .main { min-width: 0; border: 0; padding: 0; background: transparent; color: var(--vscode-foreground); text-align: left; }
     .label { display: flex; align-items: center; gap: 5px; min-width: 0; line-height: 1.25; }
-    .title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .meta { display: block; margin-top: 2px; color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .actions { display: flex; gap: 1px; opacity: .72; }
+    .title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; }
+    .meta { display: block; margin-top: 1px; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .actions { display: flex; gap: 1px; opacity: .56; }
     .row:hover .actions, .actions:focus-within { opacity: 1; }
-    .icon { width: 22px; height: 22px; display: grid; place-items: center; border: 0; background: transparent; color: var(--vscode-icon-foreground); padding: 0; border-radius: 3px; }
+    .icon { width: 24px; height: 24px; display: grid; place-items: center; border: 0; background: transparent; color: var(--vscode-icon-foreground); padding: 0; border-radius: 3px; font-weight: 600; }
     .icon:hover { background: var(--vscode-toolbar-hoverBackground); }
     .pin { color: var(--vscode-charts-yellow); }
+    .menu { position: fixed; z-index: 10; min-width: 150px; padding: 4px 0; background: var(--vscode-menu-background); color: var(--vscode-menu-foreground); border: 1px solid var(--vscode-menu-border, var(--vscode-sideBarSectionHeader-border)); box-shadow: 0 4px 12px rgba(0,0,0,.28); }
+    .menu button { display: block; width: 100%; min-height: 26px; padding: 4px 12px; border: 0; background: transparent; color: inherit; text-align: left; }
+    .menu button:hover, .menu button:focus-visible { background: var(--vscode-menu-selectionBackground); color: var(--vscode-menu-selectionForeground); }
     .status { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--vscode-descriptionForeground); }
     .status-completed { background: var(--vscode-testing-iconPassed); }
     .status-failed { background: var(--vscode-testing-iconFailed); }
@@ -429,6 +432,7 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
     let saved = vscode.getState() || {};
     let currentState = { groups: [], history: [] };
     let activeTab = saved.activeTab || 'active';
+    let openMenuNode;
 
     function saveState() {
       vscode.setState({ activeTab });
@@ -437,6 +441,7 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
     function render(state) {
       currentState = state || { groups: [], history: [] };
       root.innerHTML = '';
+      closeMenu();
       root.appendChild(renderTabs());
       root.appendChild(activeTab === 'history' ? renderHistory() : renderActive());
     }
@@ -495,12 +500,10 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
       const main = mainButton(item.documentTitle, consoleMeta(item), 'Open console', () => vscode.postMessage({ type: 'openConsole', documentUri: item.documentUri }));
       if (item.status) main.querySelector('.label').prepend(statusDot(item.status));
       row.appendChild(main);
+      row.oncontextmenu = (event) => openMenu(event, consoleActions(item));
       const actions = document.createElement('div');
       actions.className = 'actions';
-      actions.appendChild(icon(item.pinned ? '*' : '+', item.pinned ? 'Unpin' : 'Pin', () => vscode.postMessage({ type: 'togglePin', consoleId: item.id, pinned: !item.pinned }), item.pinned ? 'pin' : ''));
-      actions.appendChild(icon('^', 'Move up', () => vscode.postMessage({ type: 'moveConsole', consoleId: item.id, direction: 'up' })));
-      actions.appendChild(icon('v', 'Move down', () => vscode.postMessage({ type: 'moveConsole', consoleId: item.id, direction: 'down' })));
-      actions.appendChild(icon('x', 'Untrack console', () => vscode.postMessage({ type: 'untrackConsole', consoleId: item.id })));
+      actions.appendChild(icon('...', 'Console actions', (event) => openMenu(event, consoleActions(item)), item.pinned ? 'pin' : ''));
       row.appendChild(actions);
       return row;
     }
@@ -511,13 +514,62 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
       const main = mainButton(item.preview || item.sql, historyMeta(item), 'Open history query', () => vscode.postMessage({ type: 'openHistory', historyId: item.id }));
       main.querySelector('.label').prepend(statusDot(item.status));
       row.appendChild(main);
+      row.oncontextmenu = (event) => openMenu(event, historyActions(item));
       const actions = document.createElement('div');
       actions.className = 'actions';
-      actions.appendChild(icon(item.favorite ? '*' : '+', item.favorite ? 'Remove favorite' : 'Favorite', () => vscode.postMessage({ type: 'toggleFavoriteHistory', historyId: item.id, favorite: !item.favorite }), item.favorite ? 'pin' : ''));
-      actions.appendChild(icon('c', 'Copy SQL', () => vscode.postMessage({ type: 'copyHistory', historyId: item.id })));
-      actions.appendChild(icon('x', 'Delete history item', () => vscode.postMessage({ type: 'deleteHistory', historyId: item.id })));
+      actions.appendChild(icon('...', 'History actions', (event) => openMenu(event, historyActions(item)), item.favorite ? 'pin' : ''));
       row.appendChild(actions);
       return row;
+    }
+
+    function consoleActions(item) {
+      return [
+        { label: item.pinned ? 'Unpin console' : 'Pin console', run: () => vscode.postMessage({ type: 'togglePin', consoleId: item.id, pinned: !item.pinned }) },
+        { label: 'Move up', run: () => vscode.postMessage({ type: 'moveConsole', consoleId: item.id, direction: 'up' }) },
+        { label: 'Move down', run: () => vscode.postMessage({ type: 'moveConsole', consoleId: item.id, direction: 'down' }) },
+        { label: 'Untrack console', run: () => vscode.postMessage({ type: 'untrackConsole', consoleId: item.id }) }
+      ];
+    }
+
+    function historyActions(item) {
+      return [
+        { label: item.favorite ? 'Remove favorite' : 'Favorite', run: () => vscode.postMessage({ type: 'toggleFavoriteHistory', historyId: item.id, favorite: !item.favorite }) },
+        { label: 'Copy SQL', run: () => vscode.postMessage({ type: 'copyHistory', historyId: item.id }) },
+        { label: 'Delete history item', run: () => vscode.postMessage({ type: 'deleteHistory', historyId: item.id }) }
+      ];
+    }
+
+    function openMenu(event, actions) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeMenu();
+      const menu = document.createElement('div');
+      menu.className = 'menu';
+      for (const action of actions) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.textContent = action.label;
+        item.onclick = () => {
+          closeMenu();
+          action.run();
+        };
+        menu.appendChild(item);
+      }
+      document.body.appendChild(menu);
+      const width = menu.offsetWidth;
+      const height = menu.offsetHeight;
+      menu.style.left = Math.max(4, Math.min(event.clientX, window.innerWidth - width - 4)) + 'px';
+      menu.style.top = Math.max(4, Math.min(event.clientY, window.innerHeight - height - 4)) + 'px';
+      openMenuNode = menu;
+      const first = menu.querySelector('button');
+      if (first) first.focus();
+    }
+
+    function closeMenu() {
+      if (openMenuNode) {
+        openMenuNode.remove();
+        openMenuNode = undefined;
+      }
     }
 
     function mainButton(title, meta, tooltip, onclick) {
@@ -547,7 +599,7 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
       button.textContent = text;
       button.onclick = (event) => {
         event.stopPropagation();
-        onclick();
+        onclick(event);
       };
       return button;
     }
@@ -597,6 +649,10 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
 
     window.addEventListener('message', (event) => {
       if (event.data.type === 'state') render(event.data);
+    });
+    document.addEventListener('click', closeMenu);
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') closeMenu();
     });
     vscode.postMessage({ type: 'ready' });
   </script>
