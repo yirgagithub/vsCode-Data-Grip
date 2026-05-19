@@ -604,7 +604,10 @@ class QueryMapProvider {
 
     function shortDate(value) {
       if (!value) return '';
-      return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+      const date = new Date(value);
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      return day + '/' + month + '/' + date.getFullYear();
     }
 
     function empty(text) {
