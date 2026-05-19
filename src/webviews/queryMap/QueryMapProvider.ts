@@ -50,8 +50,6 @@ interface QueryMapGroup {
 interface QueryMapHistoryItem {
   id: string;
   connectionId: string;
-  connectionName: string;
-  databaseName?: string;
   sql: string;
   preview: string;
   status: QueryHistoryItem['status'];
@@ -59,6 +57,13 @@ interface QueryMapHistoryItem {
   rowCount?: number;
   executedAt: number;
   sourceFile?: string;
+}
+
+interface QueryMapHistoryGroup {
+  id: string;
+  connectionName: string;
+  databaseName?: string;
+  items: QueryMapHistoryItem[];
 }
 
 type QueryMapMessage =
@@ -78,7 +83,7 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
   static readonly viewType = 'databaseQueryMap';
   private view?: vscode.WebviewView;
   private groups: QueryMapGroup[] = [];
-  private historyItems: QueryMapHistoryItem[] = [];
+  private historyGroups: QueryMapHistoryGroup[] = [];
   private consoleRecords: QueryConsoleRecord[] = [];
   private connections: ConnectionConfig[] = [];
   private activeConnectionIds = new Set<string>();
@@ -163,7 +168,7 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
         documents: group.documents.sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.sortOrder - b.sortOrder || a.documentTitle.localeCompare(b.documentTitle))
       }))
       .sort((a, b) => `${a.connectionName}:${a.databaseName ?? ''}`.localeCompare(`${b.connectionName}:${b.databaseName ?? ''}`));
-    this.historyItems = this.toHistoryItems(this.getHistoryItems());
+    this.historyGroups = this.toHistoryGroups(this.getHistoryItems(), todayStart);
     this.postState();
   }
 
@@ -322,7 +327,7 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
     void this.view?.webview.postMessage({
       type: 'state',
       groups: this.groups,
-      history: this.historyItems
+      historyGroups: this.historyGroups
     });
   }
 
@@ -332,18 +337,23 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
       .sort((a, b) => b.updatedAt - a.updatedAt)[0];
   }
 
-  private toHistoryItems(items: QueryHistoryItem[]): QueryMapHistoryItem[] {
+  private toHistoryGroups(items: QueryHistoryItem[], todayStart: number): QueryMapHistoryGroup[] {
     const connectionById = new Map(this.connections.map((connection) => [connection.id, connection]));
-    return [...items]
+    const groups = new Map<string, QueryMapHistoryGroup>();
+    for (const item of [...items]
+      .filter((history) => history.executedAt < todayStart)
       .sort((a, b) => Number(b.favorite) - Number(a.favorite) || b.executedAt - a.executedAt)
-      .slice(0, 100)
-      .map((item) => {
-        const connection = connectionById.get(item.connectionId);
-        return {
+      .slice(0, 100)) {
+      const connection = connectionById.get(item.connectionId);
+      const group = groups.get(item.connectionId) ?? {
+        id: item.connectionId,
+        connectionName: connection?.name ?? 'Unknown connection',
+        databaseName: connection?.database,
+        items: []
+      };
+      group.items.push({
           id: item.id,
           connectionId: item.connectionId,
-          connectionName: connection?.name ?? 'Unknown connection',
-          databaseName: connection?.database,
           sql: item.sql,
           preview: this.previewSql(item.sql, 180),
           status: item.status,
@@ -351,8 +361,11 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
           rowCount: item.rowCount,
           executedAt: item.executedAt,
           sourceFile: item.sourceFile
-        };
       });
+      groups.set(item.connectionId, group);
+    }
+    return [...groups.values()]
+      .sort((a, b) => `${a.connectionName}:${a.databaseName ?? ''}`.localeCompare(`${b.connectionName}:${b.databaseName ?? ''}`));
   }
 
   private todayStart(): number {
@@ -430,7 +443,7 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
     const vscode = acquireVsCodeApi();
     const root = document.getElementById('root');
     let saved = vscode.getState() || {};
-    let currentState = { groups: [], history: [] };
+    let currentState = { groups: [], historyGroups: [] };
     let activeTab = saved.activeTab || 'active';
     let openMenuNode;
 
@@ -439,7 +452,7 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
     }
 
     function render(state) {
-      currentState = state || { groups: [], history: [] };
+      currentState = state || { groups: [], historyGroups: [] };
       root.innerHTML = '';
       closeMenu();
       root.appendChild(renderTabs());
@@ -484,12 +497,18 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
     }
 
     function renderHistory() {
-      const history = currentState.history || [];
-      if (!history.length) return empty('Executed queries will appear here.');
+      const groups = currentState.historyGroups || [];
+      if (!groups.length) return empty('Older executed queries will appear here.');
       const list = document.createElement('div');
       list.className = 'list';
-      for (const item of history) {
-        list.appendChild(historyRow(item));
+      for (const group of groups) {
+        const header = document.createElement('div');
+        header.className = 'group';
+        header.textContent = group.connectionName + (group.databaseName ? ' / ' + group.databaseName : '');
+        list.appendChild(header);
+        for (const item of group.items) {
+          list.appendChild(historyRow(item));
+        }
       }
       return list;
     }
@@ -623,10 +642,7 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
     }
 
     function historyMeta(item) {
-      const tags = [item.connectionName + (item.databaseName ? ' / ' + item.databaseName : ''), item.status];
-      if (item.rowCount !== undefined) tags.push(item.rowCount + ' rows');
-      tags.push(relativeTime(item.executedAt));
-      return tags.filter(Boolean).join(' | ');
+      return shortDate(item.executedAt);
     }
 
     function relativeTime(value) {
@@ -638,6 +654,11 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
       const hours = Math.round(minutes / 60);
       if (hours < 24) return hours + 'h ago';
       return new Date(value).toLocaleDateString();
+    }
+
+    function shortDate(value) {
+      if (!value) return '';
+      return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
     }
 
     function empty(text) {
