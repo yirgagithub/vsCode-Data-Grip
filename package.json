@@ -23,6 +23,7 @@
     "onCommand:database.testConnection",
     "onCommand:database.openSqlConsole",
     "onCommand:database.openQueryFile",
+    "onCommand:database.setSqlFileConnection",
     "onCommand:database.executeCurrentQuery",
     "onCommand:database.executeSelection",
     "onCommand:database.executeFile",
@@ -112,6 +113,12 @@
         "command": "database.openQueryFile",
         "title": "Query File...",
         "category": "Database"
+      },
+      {
+        "command": "database.setSqlFileConnection",
+        "title": "Set SQL File Connection",
+        "category": "Database",
+        "icon": "$(database)"
       },
       {
         "command": "database.focusResults",
@@ -337,7 +344,7 @@
       "databasePanel": [
         {
           "id": "sqlResults",
-          "name": "SQL Results",
+          "name": "Database",
           "type": "webview"
         }
       ]
@@ -608,20 +615,25 @@
       ],
       "editor/context": [
         {
+          "command": "database.setSqlFileConnection",
+          "when": "editorLangId == sql",
+          "group": "navigation@0"
+        },
+        {
           "command": "database.executeCurrentQuery",
           "when": "editorLangId == sql",
-          "group": "navigation"
+          "group": "navigation@1"
         },
-      {
-        "command": "database.executeSelection",
-        "when": "editorLangId == sql && editorHasSelection",
-        "icon": "$(run)",
-        "group": "navigation"
-      },
+        {
+          "command": "database.executeSelection",
+          "when": "editorLangId == sql && editorHasSelection",
+          "icon": "$(run)",
+          "group": "navigation@2"
+        },
         {
           "command": "database.executeFile",
           "when": "editorLangId == sql",
-          "group": "navigation"
+          "group": "navigation@3"
         },
         {
           "command": "database.findPastQuery",
@@ -641,16 +653,21 @@
       ],
       "editor/title/context": [
         {
+          "command": "database.setSqlFileConnection",
+          "when": "editorLangId == sql",
+          "group": "navigation@0"
+        },
+        {
           "command": "database.executeCurrentQuery",
           "when": "editorLangId == sql",
           "group": "navigation@1"
         },
-      {
-        "command": "database.executeSelection",
-        "when": "editorLangId == sql",
-        "icon": "$(run)",
-        "group": "navigation@2"
-      },
+        {
+          "command": "database.executeSelection",
+          "when": "editorLangId == sql",
+          "icon": "$(run)",
+          "group": "navigation@2"
+        },
         {
           "command": "database.executeFile",
           "when": "editorLangId == sql",

@@ -9,6 +9,7 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private tabs: QueryResultTab[];
   private activeTabId?: string;
+  private activeConnectionId?: string;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -19,6 +20,7 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
   ) {
     this.tabs = this.sessionStore.getTabs();
     this.activeTabId = this.tabs[0]?.id;
+    this.activeConnectionId = this.tabs.find((tab) => tab.id === this.activeTabId)?.connectionId;
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -31,21 +33,28 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage((message: ResultsFromWebviewMessage) => this.onMessage(message));
   }
 
-  async show(): Promise<void> {
+  async show(connectionId?: string): Promise<void> {
+    if (connectionId) {
+      this.selectConnection(connectionId);
+    }
     await vscode.commands.executeCommand(`${ResultsPanelProvider.viewType}.focus`);
-    this.post({ type: 'hydrate', tabs: this.tabs, activeTabId: this.activeTabId });
+    this.postHydrate();
+  }
+
+  setActiveConnection(connectionId: string | undefined): void {
+    this.selectConnection(connectionId);
+    this.postHydrate();
   }
 
   async addTab(tab: QueryResultTab): Promise<void> {
-    const active = this.tabs.find((item) => item.id === this.activeTabId);
+    this.activeConnectionId = tab.connectionId;
+    const active = this.reusableTabFor(tab);
     if (active && !active.pinned) {
       this.tabs = this.tabs.map((item) => item.id === active.id ? { ...tab, id: active.id } : item);
       this.activeTabId = active.id;
-      this.post({ type: 'upsertTab', tab: { ...tab, id: active.id }, active: true });
     } else {
       this.tabs.push(tab);
       this.activeTabId = tab.id;
-      this.post({ type: 'upsertTab', tab, active: true });
     }
     await this.sessionStore.saveTabs(this.tabs);
     this.onTabsChanged?.(this.tabs);
@@ -62,13 +71,14 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
 
   private async onMessage(message: ResultsFromWebviewMessage): Promise<void> {
     if (message.type === 'ready') {
-      this.post({ type: 'hydrate', tabs: this.tabs, activeTabId: this.activeTabId });
+      this.postHydrate();
       return;
     }
     if (message.type === 'activateTab') {
       this.activeTabId = message.tabId;
       const tab = this.getTab(message.tabId);
       if (tab) {
+        this.activeConnectionId = tab.connectionId;
         await this.revealSource?.(tab);
       }
       return;
@@ -81,17 +91,17 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
     }
     if (message.type === 'closeTab') {
       this.tabs = this.tabs.filter((tab) => tab.id !== message.tabId);
-      this.activeTabId = this.tabs[0]?.id;
+      this.activeTabId = this.visibleTabs()[0]?.id;
       await this.sessionStore.saveTabs(this.tabs);
       this.onTabsChanged?.(this.tabs);
-      this.post({ type: 'hydrate', tabs: this.tabs, activeTabId: this.activeTabId });
+      this.postHydrate();
       return;
     }
     if (message.type === 'renameTab') {
       this.tabs = this.tabs.map((tab) => tab.id === message.tabId ? { ...tab, customTitle: message.title, updatedAt: Date.now() } : tab);
       await this.sessionStore.saveTabs(this.tabs);
       this.onTabsChanged?.(this.tabs);
-      this.post({ type: 'hydrate', tabs: this.tabs, activeTabId: this.activeTabId });
+      this.postHydrate();
       return;
     }
     if (message.type === 'rerunTab') {
@@ -120,6 +130,40 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
 
   private post(message: ResultsToWebviewMessage): void {
     void this.view?.webview.postMessage(message);
+  }
+
+  private postHydrate(): void {
+    const tabs = this.visibleTabs();
+    this.post({ type: 'hydrate', tabs, activeTabId: this.activeTabId && tabs.some((tab) => tab.id === this.activeTabId) ? this.activeTabId : tabs[0]?.id });
+  }
+
+  private selectConnection(connectionId: string | undefined): void {
+    this.activeConnectionId = connectionId;
+    const tabs = this.visibleTabs();
+    this.activeTabId = tabs.some((tab) => tab.id === this.activeTabId)
+      ? this.activeTabId
+      : [...tabs].sort((a, b) => b.updatedAt - a.updatedAt)[0]?.id;
+  }
+
+  private visibleTabs(): QueryResultTab[] {
+    if (!this.activeConnectionId) {
+      return this.tabs;
+    }
+    return this.tabs.filter((tab) => tab.connectionId === this.activeConnectionId);
+  }
+
+  private reusableTabFor(tab: QueryResultTab): QueryResultTab | undefined {
+    if (tab.pinned) {
+      return undefined;
+    }
+    const sameConnectionTabs = this.tabs.filter((item) => item.connectionId === tab.connectionId);
+    const active = sameConnectionTabs.find((item) => item.id === this.activeTabId);
+    if (active && !active.pinned) {
+      return active;
+    }
+    return sameConnectionTabs
+      .filter((item) => !item.pinned)
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
   }
 
   private html(webview: vscode.Webview): string {

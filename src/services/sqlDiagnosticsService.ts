@@ -11,9 +11,9 @@ export class SqlDiagnosticsService {
     private readonly sectionService: SqlSectionService
   ) {}
 
-  async getDiagnostics(document: vscode.TextDocument, selection?: vscode.Selection): Promise<vscode.Diagnostic[]> {
+  async getDiagnostics(document: vscode.TextDocument, selection?: vscode.Selection, connectionOverride?: ConnectionConfig | null): Promise<vscode.Diagnostic[]> {
     const diagnostics = [...this.sectionService.getSyntaxIssues(document)];
-    const connection = this.connectionManager.getPreferredConnection();
+    const connection = connectionOverride === undefined ? this.connectionManager.getPreferredConnection() : connectionOverride;
     if (!connection) {
       return diagnostics;
     }

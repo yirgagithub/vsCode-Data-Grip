@@ -25,19 +25,19 @@ export class QueryExecutor {
       throw new Error('Connection not found.');
     }
 
-    if (!this.connectionManager.isConnected(params.connectionId)) {
-      await this.connectionManager.connect(params.connectionId);
-    }
-
-    await this.confirmDestructiveIfNeeded(config.production === true, params.sql);
-
     const started = Date.now();
     const tabId = createId('tab');
-    const statements = splitSqlStatements(params.sql);
-    const sqlParts = statements.length ? statements.map((statement) => statement.sql) : [params.sql];
     const resultSets: ResultSet[] = [];
 
     try {
+      if (!this.connectionManager.isConnected(params.connectionId)) {
+        await this.connectionManager.connect(params.connectionId);
+      }
+
+      await this.confirmDestructiveIfNeeded(config.production === true, params.sql);
+
+      const statements = splitSqlStatements(params.sql);
+      const sqlParts = statements.length ? statements.map((statement) => statement.sql) : [params.sql];
       for (const [index, sql] of sqlParts.entries()) {
         const result = await this.connectionManager.getDriver(config.type).executeQuery({ ...params, sql });
         resultSets.push({

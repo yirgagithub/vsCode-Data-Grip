@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { parseQueryMemorySummaryText } from '../src/ai/queryMemorySummaryParser';
+import { resolveDocumentConnection } from '../src/services/documentConnectionResolver';
 import { extractQualifiedColumns, extractQueryTables, outputColumnNames } from '../src/services/queryMemoryMetadata';
 import { QueryMemorySearch } from '../src/services/queryMemorySearch';
 import { SqlSafetyClassifier } from '../src/services/sqlSafetyClassifier';
-import { QueryMemoryItem } from '../src/types';
+import { ConnectionConfig, QueryConsoleRecord, QueryMemoryItem } from '../src/types';
 
 describe('SqlSafetyClassifier', () => {
   const classifier = new SqlSafetyClassifier();
@@ -71,6 +72,33 @@ describe('parseQueryMemorySummaryText', () => {
   });
 });
 
+describe('resolveDocumentConnection', () => {
+  it('uses the console-bound connection instead of the preferred fallback', () => {
+    const local = connection({ id: 'local', name: 'APH-Local' });
+    const production = connection({ id: 'production', name: 'APH-Production', production: true });
+    const consoleRecord = consoleFor('file:///workspace/.vscode-data-grip/aph-local.sql', 'local');
+
+    const resolved = resolveDocumentConnection(consoleRecord.documentUri, [consoleRecord], [local, production], production);
+
+    expect(resolved).toMatchObject({
+      isBound: true,
+      boundConnectionId: 'local',
+      connection: { id: 'local' }
+    });
+  });
+
+  it('does not fall back when a console is bound to a missing connection', () => {
+    const production = connection({ id: 'production', name: 'APH-Production', production: true });
+    const consoleRecord = consoleFor('file:///workspace/.vscode-data-grip/aph-local.sql', 'local');
+
+    const resolved = resolveDocumentConnection(consoleRecord.documentUri, [consoleRecord], [production], production);
+
+    expect(resolved.isBound).toBe(true);
+    expect(resolved.boundConnectionId).toBe('local');
+    expect(resolved.connection).toBeUndefined();
+  });
+});
+
 function memory(overrides: Partial<QueryMemoryItem>): QueryMemoryItem {
   return {
     id: overrides.id ?? 'memory',
@@ -87,5 +115,31 @@ function memory(overrides: Partial<QueryMemoryItem>): QueryMemoryItem {
     indexedAt: overrides.indexedAt ?? Date.now(),
     updatedAt: overrides.updatedAt ?? Date.now(),
     executedAt: overrides.executedAt
+  };
+}
+
+function connection(overrides: Partial<ConnectionConfig>): ConnectionConfig {
+  return {
+    id: overrides.id ?? 'connection',
+    name: overrides.name ?? 'Connection',
+    type: overrides.type ?? 'postgres',
+    host: overrides.host ?? 'localhost',
+    port: overrides.port ?? 5432,
+    database: overrides.database ?? 'aph',
+    username: overrides.username ?? 'postgres',
+    sslMode: overrides.sslMode ?? 'prefer',
+    color: overrides.color ?? 'green',
+    defaultSchema: overrides.defaultSchema ?? 'public',
+    production: overrides.production
+  };
+}
+
+function consoleFor(documentUri: string, connectionId: string): QueryConsoleRecord {
+  return {
+    id: `console-${connectionId}`,
+    connectionId,
+    documentUri,
+    createdAt: 1,
+    updatedAt: 1
   };
 }

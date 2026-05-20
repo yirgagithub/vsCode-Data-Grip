@@ -44,9 +44,9 @@ class SqlDiagnosticsService {
         this.schemaContext = schemaContext;
         this.sectionService = sectionService;
     }
-    async getDiagnostics(document, selection) {
+    async getDiagnostics(document, selection, connectionOverride) {
         const diagnostics = [...this.sectionService.getSyntaxIssues(document)];
-        const connection = this.connectionManager.getPreferredConnection();
+        const connection = connectionOverride === undefined ? this.connectionManager.getPreferredConnection() : connectionOverride;
         if (!connection) {
             return diagnostics;
         }

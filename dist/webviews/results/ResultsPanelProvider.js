@@ -45,6 +45,7 @@ class ResultsPanelProvider {
     view;
     tabs;
     activeTabId;
+    activeConnectionId;
     constructor(context, sessionStore, executor, revealSource, onTabsChanged) {
         this.context = context;
         this.sessionStore = sessionStore;
@@ -53,6 +54,7 @@ class ResultsPanelProvider {
         this.onTabsChanged = onTabsChanged;
         this.tabs = this.sessionStore.getTabs();
         this.activeTabId = this.tabs[0]?.id;
+        this.activeConnectionId = this.tabs.find((tab) => tab.id === this.activeTabId)?.connectionId;
     }
     resolveWebviewView(webviewView) {
         this.view = webviewView;
@@ -63,21 +65,27 @@ class ResultsPanelProvider {
         webviewView.webview.html = this.html(webviewView.webview);
         webviewView.webview.onDidReceiveMessage((message) => this.onMessage(message));
     }
-    async show() {
+    async show(connectionId) {
+        if (connectionId) {
+            this.selectConnection(connectionId);
+        }
         await vscode.commands.executeCommand(`${ResultsPanelProvider.viewType}.focus`);
-        this.post({ type: 'hydrate', tabs: this.tabs, activeTabId: this.activeTabId });
+        this.postHydrate();
+    }
+    setActiveConnection(connectionId) {
+        this.selectConnection(connectionId);
+        this.postHydrate();
     }
     async addTab(tab) {
-        const active = this.tabs.find((item) => item.id === this.activeTabId);
+        this.activeConnectionId = tab.connectionId;
+        const active = this.reusableTabFor(tab);
         if (active && !active.pinned) {
             this.tabs = this.tabs.map((item) => item.id === active.id ? { ...tab, id: active.id } : item);
             this.activeTabId = active.id;
-            this.post({ type: 'upsertTab', tab: { ...tab, id: active.id }, active: true });
         }
         else {
             this.tabs.push(tab);
             this.activeTabId = tab.id;
-            this.post({ type: 'upsertTab', tab, active: true });
         }
         await this.sessionStore.saveTabs(this.tabs);
         this.onTabsChanged?.(this.tabs);
@@ -91,13 +99,14 @@ class ResultsPanelProvider {
     }
     async onMessage(message) {
         if (message.type === 'ready') {
-            this.post({ type: 'hydrate', tabs: this.tabs, activeTabId: this.activeTabId });
+            this.postHydrate();
             return;
         }
         if (message.type === 'activateTab') {
             this.activeTabId = message.tabId;
             const tab = this.getTab(message.tabId);
             if (tab) {
+                this.activeConnectionId = tab.connectionId;
                 await this.revealSource?.(tab);
             }
             return;
@@ -110,17 +119,17 @@ class ResultsPanelProvider {
         }
         if (message.type === 'closeTab') {
             this.tabs = this.tabs.filter((tab) => tab.id !== message.tabId);
-            this.activeTabId = this.tabs[0]?.id;
+            this.activeTabId = this.visibleTabs()[0]?.id;
             await this.sessionStore.saveTabs(this.tabs);
             this.onTabsChanged?.(this.tabs);
-            this.post({ type: 'hydrate', tabs: this.tabs, activeTabId: this.activeTabId });
+            this.postHydrate();
             return;
         }
         if (message.type === 'renameTab') {
             this.tabs = this.tabs.map((tab) => tab.id === message.tabId ? { ...tab, customTitle: message.title, updatedAt: Date.now() } : tab);
             await this.sessionStore.saveTabs(this.tabs);
             this.onTabsChanged?.(this.tabs);
-            this.post({ type: 'hydrate', tabs: this.tabs, activeTabId: this.activeTabId });
+            this.postHydrate();
             return;
         }
         if (message.type === 'rerunTab') {
@@ -148,6 +157,36 @@ class ResultsPanelProvider {
     }
     post(message) {
         void this.view?.webview.postMessage(message);
+    }
+    postHydrate() {
+        const tabs = this.visibleTabs();
+        this.post({ type: 'hydrate', tabs, activeTabId: this.activeTabId && tabs.some((tab) => tab.id === this.activeTabId) ? this.activeTabId : tabs[0]?.id });
+    }
+    selectConnection(connectionId) {
+        this.activeConnectionId = connectionId;
+        const tabs = this.visibleTabs();
+        this.activeTabId = tabs.some((tab) => tab.id === this.activeTabId)
+            ? this.activeTabId
+            : [...tabs].sort((a, b) => b.updatedAt - a.updatedAt)[0]?.id;
+    }
+    visibleTabs() {
+        if (!this.activeConnectionId) {
+            return this.tabs;
+        }
+        return this.tabs.filter((tab) => tab.connectionId === this.activeConnectionId);
+    }
+    reusableTabFor(tab) {
+        if (tab.pinned) {
+            return undefined;
+        }
+        const sameConnectionTabs = this.tabs.filter((item) => item.connectionId === tab.connectionId);
+        const active = sameConnectionTabs.find((item) => item.id === this.activeTabId);
+        if (active && !active.pinned) {
+            return active;
+        }
+        return sameConnectionTabs
+            .filter((item) => !item.pinned)
+            .sort((a, b) => b.updatedAt - a.updatedAt)[0];
     }
     html(webview) {
         const script = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'results', 'results.js'));

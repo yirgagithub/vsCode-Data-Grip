@@ -2,9 +2,10 @@ import * as vscode from 'vscode';
 import { ConnectionManager } from './database/connectionManager';
 import { QueryExecutor } from './database/queryExecutor';
 import { DatabaseTreeProvider } from './explorer/DatabaseTreeProvider';
-import { CatalogNode, ColumnNode, ConnectionNode, FolderNode, SchemaNode, TableNode, ViewNode } from './explorer/nodes';
+import { CatalogNode, ColumnNode, ConnectionNode, FolderNode, SchemaNode, SchemasNode, TableNode, ViewNode } from './explorer/nodes';
 import { ConnectionStore } from './persistence/connectionStore';
 import { QueryConsoleStore } from './persistence/queryConsoleStore';
+import { SqlDocumentConnectionStore } from './persistence/sqlDocumentConnectionStore';
 import { QueryHistoryStore } from './persistence/queryHistoryStore';
 import { QueryMemoryStore } from './persistence/queryMemoryStore';
 import { ResultSessionStore } from './persistence/resultSessionStore';
@@ -15,12 +16,15 @@ import { rangeFromPlain as rangeFromSource, SqlSectionHighlighter } from './serv
 import { SqlSectionService } from './services/sqlSectionService';
 import { VsCodeLanguageModelSqlAdapter } from './ai/vsCodeLanguageModelSqlAdapter';
 import { QueryMemoryController } from './controllers/queryMemoryController';
+import { DocumentConnectionBinding, DocumentConnectionResolution, resolveDocumentConnection } from './services/documentConnectionResolver';
+import { QueryOutputService } from './services/queryOutputService';
 import { ConnectionEditorPanel } from './webviews/connection/ConnectionEditorPanel';
 import { QueryMapProvider } from './webviews/queryMap/QueryMapProvider';
 import { ResultsPanelProvider } from './webviews/results/ResultsPanelProvider';
 import { TableDataPanel } from './webviews/table/TableDataPanel';
 import { Logger } from './utils/logger';
 import { qualifiedName, quoteIdentifier } from './utils/identifiers';
+import { ConnectionConfig } from './types';
 
 export function activate(context: vscode.ExtensionContext): void {
   const logger = new Logger();
@@ -28,6 +32,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const connectionManager = new ConnectionManager(connectionStore);
   const historyStore = new QueryHistoryStore(context);
   const consoleStore = new QueryConsoleStore(context);
+  const sqlDocumentConnections = new SqlDocumentConnectionStore(context);
   const resultStore = new ResultSessionStore(context);
   const schemaContext = new SchemaContextService(connectionManager);
   const sectionService = new SqlSectionService();
@@ -38,6 +43,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const memoryStore = new QueryMemoryStore(context);
   const memoryService = new QueryMemoryService(historyStore, memoryStore, consoleStore, connectionManager, aiAdapter);
   const executor = new QueryExecutor(connectionManager, historyStore, memoryService);
+  const queryOutput = new QueryOutputService();
   const diagnosticTimers = new Map<string, NodeJS.Timeout>();
   const diagnosticVersions = new Map<string, number>();
   let queryMap: QueryMapProvider;
@@ -76,6 +82,7 @@ export function activate(context: vscode.ExtensionContext): void {
     },
     async (documentUri) => {
       await consoleStore.touchDocument(documentUri, { opened: true });
+      await results.show(connectionIdForDocumentUri(documentUri));
       refreshQueryMap();
     },
     async (item) => {
@@ -93,6 +100,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     treeView,
     highlighter,
+    queryOutput,
     sqlDiagnostics,
     vscode.window.registerWebviewViewProvider(ResultsPanelProvider.viewType, results),
     vscode.window.registerWebviewViewProvider(QueryMapProvider.viewType, queryMap)
@@ -103,10 +111,14 @@ export function activate(context: vscode.ExtensionContext): void {
   status.text = '$(database) Database';
   status.show();
   context.subscriptions.push(status);
-  context.subscriptions.push(registerSqlCompletions(connectionManager, schemaContext, sectionService));
-  context.subscriptions.push(registerSqlStatementCodeLens(sectionService));
+  const sqlCodeLensRefresh = new vscode.EventEmitter<void>();
+  context.subscriptions.push(sqlCodeLensRefresh);
+  context.subscriptions.push(registerSqlCompletions(connectionManager, schemaContext, sectionService, connectionForDocument));
+  context.subscriptions.push(registerSqlStatementCodeLens(sectionService, sqlConnectionLensTitle, sqlCodeLensRefresh.event));
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
     queryMap.updateFromEditor(editor);
+    syncResultsToEditor(editor);
+    updateSqlConnectionStatus(editor);
     highlightActiveSqlSection(editor);
     highlighter.refreshVisibleEditors();
     updateSqlDiagnostics(editor?.document, editor?.selection);
@@ -130,6 +142,7 @@ export function activate(context: vscode.ExtensionContext): void {
   queryMap.updateFromEditor(vscode.window.activeTextEditor);
   queryMap.updateResults(results.getTabs());
   highlightActiveSqlSection(vscode.window.activeTextEditor);
+  updateSqlConnectionStatus(vscode.window.activeTextEditor);
   for (const document of vscode.workspace.textDocuments) {
     updateSqlDiagnostics(document);
   }
@@ -154,8 +167,91 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   }
 
+  function documentConnectionBindings(): DocumentConnectionBinding[] {
+    return [...consoleStore.getAll(), ...sqlDocumentConnections.getAll()];
+  }
+
+  function resolveConnectionForDocument(document: vscode.TextDocument): DocumentConnectionResolution {
+    return resolveDocumentConnection(
+      document.uri.toString(),
+      documentConnectionBindings(),
+      connectionManager.getConnections()
+    );
+  }
+
+  function connectionForDocument(document: vscode.TextDocument): ConnectionConfig | undefined {
+    return resolveConnectionForDocument(document).connection;
+  }
+
+  function connectionFromArg(node: unknown): ConnectionConfig | undefined {
+    const id = connectionIdFromArg(node);
+    return id ? connectionManager.getConnection(id) : undefined;
+  }
+
+  function connectionIdForDocumentUri(documentUri: string): string | undefined {
+    return resolveDocumentConnection(
+      documentUri,
+      documentConnectionBindings(),
+      connectionManager.getConnections()
+    ).connection?.id;
+  }
+
+  function activeConnectionId(): string | undefined {
+    const editor = vscode.window.activeTextEditor;
+    return editor?.document.languageId === 'sql' ? connectionForDocument(editor.document)?.id : undefined;
+  }
+
+  function syncResultsToEditor(editor: vscode.TextEditor | undefined): void {
+    if (!editor || editor.document.languageId !== 'sql') {
+      return;
+    }
+    const documentUri = editor.document.uri.toString();
+    const isTrackedConsole = consoleStore.getAll().some((record) => record.documentUri === documentUri);
+    const hasResults = results.getTabs().some((tab) => tab.sourceDocumentUri === documentUri);
+    const connection = connectionForDocument(editor.document);
+    if ((isTrackedConsole || hasResults) && connection) {
+      results.setActiveConnection(connection.id);
+    }
+  }
+
+  function updateSqlConnectionStatus(editor: vscode.TextEditor | undefined): void {
+    if (!editor || editor.document.languageId !== 'sql') {
+      status.command = 'database.pickConnection';
+      status.text = '$(database) Database';
+      return;
+    }
+    const resolved = resolveConnectionForDocument(editor.document);
+    status.command = 'database.setSqlFileConnection';
+    if (resolved.connection) {
+      status.text = `$(database) ${resolved.connection.name}`;
+    } else if (resolved.isBound) {
+      status.text = '$(warning) Missing database';
+    } else {
+      status.text = '$(database) Select Database';
+    }
+  }
+
+  function sqlConnectionLensTitle(document: vscode.TextDocument): string {
+    const resolved = resolveConnectionForDocument(document);
+    if (resolved.connection) {
+      return `$(database) Database: ${resolved.connection.name}`;
+    }
+    if (resolved.isBound) {
+      return '$(warning) Database: Missing connection';
+    }
+    return '$(database) Select Database Connection';
+  }
+
+  function recordQueryOutput(tab: import('./types').QueryResultTab): void {
+    const connection = connectionManager.getConnection(tab.connectionId);
+    if (connection) {
+      queryOutput.record(connection, tab);
+    }
+  }
+
   new QueryMemoryController(context, memoryService, connectionManager, executor, aiAdapter, async (tab) => {
     await results.addTab(tab);
+    recordQueryOutput(tab);
     queryMap.updateResults(results.getTabs());
   }).register(register);
 
@@ -251,13 +347,21 @@ export function activate(context: vscode.ExtensionContext): void {
     tree.refresh();
   });
 
-  register('database.refreshExplorer', () => {
+  register('database.refreshExplorer', (node?: unknown) => {
+    const target = databaseNodeFromArg(node) ?? treeView.selection[0];
+    const connectionId = connectionIdFromArg(target);
+    if (connectionId) {
+      schemaContext.invalidate(connectionId);
+      tree.refresh(target);
+      return;
+    }
     schemaContext.invalidate();
     tree.refresh();
   });
-  register('database.showResults', () => results.show());
-  register('database.focusResults', () => results.show());
+  register('database.showResults', () => results.show(activeConnectionId()));
+  register('database.focusResults', () => results.show(activeConnectionId()));
   register('database.focusExplorer', () => vscode.commands.executeCommand('databaseExplorer.focus'));
+  register('database.setSqlFileConnection', (resource?: unknown) => setSqlFileConnection(resource));
   register('database.pickConnection', async () => {
     const connection = await connectionManager.pickConnection();
     if (connection) {
@@ -266,18 +370,20 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
-  register('database.openSqlConsole', async () => {
-    const connection = connectionManager.getPreferredConnection() ?? await connectionManager.pickConnection();
+  register('database.openSqlConsole', async (node?: unknown) => {
+    const connection = connectionFromArg(node) ?? connectionManager.getPreferredConnection() ?? await connectionManager.pickConnection();
     const doc = await consoleStore.openOrCreate(connection, '', { reuse: false });
     await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Active, preview: false });
+    results.setActiveConnection(connection?.id);
     refreshQueryMap();
     queryMap.updateFromEditor(vscode.window.activeTextEditor);
   });
 
-  register('database.openQueryFile', async () => {
-    const connection = connectionManager.getPreferredConnection();
+  register('database.openQueryFile', async (node?: unknown) => {
+    const connection = connectionFromArg(node) ?? connectionManager.getPreferredConnection();
     const doc = await consoleStore.openOrCreate(connection, '', { reuse: false });
     await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Active, preview: false });
+    results.setActiveConnection(connection?.id);
     refreshQueryMap();
     queryMap.updateFromEditor(vscode.window.activeTextEditor);
   });
@@ -535,7 +641,8 @@ export function activate(context: vscode.ExtensionContext): void {
     sqlDiagnostics.set(document.uri, sectionService.getSyntaxIssues(document));
     const timer = setTimeout(() => {
       diagnosticTimers.delete(documentUri);
-      void diagnosticsService.getDiagnostics(document, selection).then((diagnostics) => {
+      const resolved = resolveConnectionForDocument(document);
+      void diagnosticsService.getDiagnostics(document, selection, resolved.connection ?? null).then((diagnostics) => {
         if (diagnosticVersions.get(documentUri) === version) {
           sqlDiagnostics.set(document.uri, diagnostics);
         }
@@ -544,10 +651,61 @@ export function activate(context: vscode.ExtensionContext): void {
     diagnosticTimers.set(documentUri, timer);
   }
 
-  async function executeDetected(editor: vscode.TextEditor, detected: { sql: string; range: vscode.Range; index?: number; id?: string }): Promise<void> {
-    const connection = connectionManager.getPreferredConnection() ?? await connectionManager.pickConnection();
+  async function setSqlFileConnection(resource?: unknown): Promise<void> {
+    const document = await sqlDocumentFromArg(resource);
+    if (!document) {
+      void vscode.window.showInformationMessage('Open a SQL file before selecting a database connection.');
+      return;
+    }
+    const connection = await connectionManager.pickConnection();
     if (!connection) {
       return;
+    }
+    await sqlDocumentConnections.set(document.uri.toString(), connection.id);
+    await connectionManager.setSelectedConnection(connection.id);
+    try {
+      if (!connectionManager.isConnected(connection.id)) {
+        await connectionManager.connect(connection.id);
+      }
+    } catch (error) {
+      void vscode.window.showWarningMessage(`SQL file is bound to ${connection.name}, but connection failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    schemaContext.invalidate(connection.id);
+    results.setActiveConnection(connection.id);
+    updateSqlConnectionStatus(vscode.window.activeTextEditor);
+    updateSqlDiagnostics(document, vscode.window.activeTextEditor?.document.uri.toString() === document.uri.toString()
+      ? vscode.window.activeTextEditor.selection
+      : undefined);
+    refreshQueryMap();
+    sqlCodeLensRefresh.fire();
+  }
+
+  async function sqlDocumentFromArg(resource?: unknown): Promise<vscode.TextDocument | undefined> {
+    const document = resource instanceof vscode.Uri
+      ? await vscode.workspace.openTextDocument(resource)
+      : vscode.window.activeTextEditor?.document;
+    if (!document) {
+      return undefined;
+    }
+    const isSqlFile = document.languageId === 'sql' || document.uri.fsPath.toLowerCase().endsWith('.sql');
+    return isSqlFile ? document : undefined;
+  }
+
+  async function executeDetected(editor: vscode.TextEditor, detected: { sql: string; range: vscode.Range; index?: number; id?: string }): Promise<void> {
+    const resolved = resolveConnectionForDocument(editor.document);
+    if (resolved.isBound && !resolved.connection) {
+      void vscode.window.showErrorMessage(`This SQL console is bound to a connection that no longer exists: ${resolved.boundConnectionId}`);
+      return;
+    }
+    const connection = resolved.connection ?? await connectionManager.pickConnection();
+    if (!connection) {
+      return;
+    }
+    if (!resolved.isBound) {
+      await sqlDocumentConnections.set(editor.document.uri.toString(), connection.id);
+      results.setActiveConnection(connection.id);
+      updateSqlConnectionStatus(editor);
+      sqlCodeLensRefresh.fire();
     }
 
     const decoration = vscode.window.createTextEditorDecorationType({ backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground') });
@@ -572,6 +730,7 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       });
       await results.addTab(tab);
+      recordQueryOutput(tab);
       await highlighter.reveal(editor.document.uri.toString(), rangeToPlain(detected.range), detected.sql);
       queryMap.updateResults(results.getTabs());
       await consoleStore.markExecuted(editor.document.uri.toString(), {
@@ -589,7 +748,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   async function runAi(action: 'fix' | 'explain'): Promise<void> {
     const editor = vscode.window.activeTextEditor;
-    const connection = connectionManager.getPreferredConnection();
+    const connection = editor ? connectionForDocument(editor.document) : undefined;
     if (!editor || !connection) {
       void vscode.window.showInformationMessage('Open a SQL editor and select a connection first.');
       return;
@@ -625,6 +784,7 @@ export function activate(context: vscode.ExtensionContext): void {
           editor.selection = new vscode.Selection(range.start, range.end);
           editor.revealRange(range);
         }
+        results.setActiveConnection(item.connectionId);
         refreshQueryMap();
         return;
       } catch {
@@ -636,6 +796,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (doc.getText().trim().length === 0) {
       await editor.edit((edit) => edit.insert(new vscode.Position(0, 0), `${item.sql}\n`));
     }
+    results.setActiveConnection(item.connectionId);
     refreshQueryMap();
   }
 
@@ -656,6 +817,22 @@ function connectionIdFromArg(value: unknown): string | undefined {
   return maybe?.connection?.id ?? maybe?.id;
 }
 
+function databaseNodeFromArg(value: unknown): CatalogNode | ColumnNode | ConnectionNode | FolderNode | SchemaNode | SchemasNode | TableNode | ViewNode | undefined {
+  if (
+    value instanceof CatalogNode
+    || value instanceof ColumnNode
+    || value instanceof ConnectionNode
+    || value instanceof FolderNode
+    || value instanceof SchemaNode
+    || value instanceof SchemasNode
+    || value instanceof TableNode
+    || value instanceof ViewNode
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
 function trimSelection(document: vscode.TextDocument, selection: vscode.Selection): vscode.Range {
   const text = document.getText(selection);
   const leading = text.match(/^\s*/)?.[0].length ?? 0;
@@ -668,7 +845,8 @@ function trimSelection(document: vscode.TextDocument, selection: vscode.Selectio
 function registerSqlCompletions(
   connectionManager: ConnectionManager,
   schemaContext: SchemaContextService,
-  sectionService: SqlSectionService
+  sectionService: SqlSectionService,
+  getConnectionForDocument: (document: vscode.TextDocument) => ConnectionConfig | undefined
 ): vscode.Disposable {
   const keywords = [
     'select', 'from', 'where', 'join', 'left join', 'inner join', 'group by', 'order by',
@@ -685,7 +863,7 @@ function registerSqlCompletions(
         return item;
       });
 
-      const connection = connectionManager.getPreferredConnection();
+      const connection = getConnectionForDocument(document);
       if (!connection || !connectionManager.isConnected(connection.id)) {
         return items;
       }
@@ -764,33 +942,49 @@ function filterMetadataItems(items: vscode.CompletionItem[], linePrefix: string)
   return items.filter((item) => item.kind === vscode.CompletionItemKind.Keyword);
 }
 
-function registerSqlStatementCodeLens(sectionService: SqlSectionService): vscode.Disposable {
+function registerSqlStatementCodeLens(
+  sectionService: SqlSectionService,
+  connectionLensTitle: (document: vscode.TextDocument) => string,
+  refreshEvent?: vscode.Event<void>
+): vscode.Disposable {
   const emitter = new vscode.EventEmitter<void>();
   const documentEvents = vscode.workspace.onDidChangeTextDocument((event) => {
     if (event.document.languageId === 'sql') {
       emitter.fire();
     }
   });
+  const refreshEvents = refreshEvent?.(() => emitter.fire());
 
   const provider = vscode.languages.registerCodeLensProvider('sql', {
     onDidChangeCodeLenses: emitter.event,
     provideCodeLenses(document) {
-      return sectionService.getSections(document).map((section) => new vscode.CodeLens(section.range, {
-        title: '$(play)',
-        tooltip: section.sql.replace(/\s+/g, ' ').slice(0, 120),
-        command: 'database.executeStatementRange',
-        arguments: [
-          document.uri.toString(),
-          section.range.start.line,
-          section.range.start.character,
-          section.range.end.line,
-          section.range.end.character
-        ]
-      }));
+      const top = new vscode.Range(0, 0, 0, 0);
+      return [
+        new vscode.CodeLens(top, {
+          title: connectionLensTitle(document),
+          tooltip: 'Select the database connection for this SQL file',
+          command: 'database.setSqlFileConnection',
+          arguments: [document.uri]
+        }),
+        ...sectionService.getSections(document).map((section) => new vscode.CodeLens(section.range, {
+          title: '$(play)',
+          tooltip: section.sql.replace(/\s+/g, ' ').slice(0, 120),
+          command: 'database.executeStatementRange',
+          arguments: [
+            document.uri.toString(),
+            section.range.start.line,
+            section.range.start.character,
+            section.range.end.line,
+            section.range.end.character
+          ]
+        }))
+      ];
     }
   });
 
-  return vscode.Disposable.from(documentEvents, provider, emitter);
+  return refreshEvents
+    ? vscode.Disposable.from(documentEvents, refreshEvents, provider, emitter)
+    : vscode.Disposable.from(documentEvents, provider, emitter);
 }
 
 function stripQuotes(value: string): string {
