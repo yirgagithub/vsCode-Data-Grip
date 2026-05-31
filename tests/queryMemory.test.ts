@@ -359,7 +359,7 @@ describe('connection defaults', () => {
     expect(connectionDefaultsForType('postgres')).toMatchObject({
       port: '5432',
       database: 'postgres',
-      sslMode: 'prefer'
+      sslMode: 'disable'
     });
   });
 });

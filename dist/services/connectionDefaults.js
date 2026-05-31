@@ -7,7 +7,7 @@ exports.DEFAULTS_BY_DATABASE_TYPE = {
         name: 'PostgreSQL',
         port: '5432',
         database: 'postgres',
-        sslMode: 'prefer',
+        sslMode: 'disable',
         color: 'green'
     },
     redshift: {
