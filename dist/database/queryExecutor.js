@@ -65,11 +65,11 @@ class QueryExecutor {
             await this.confirmDestructiveIfNeeded(config.production === true, params.sql);
             const statements = (0, sqlSplitter_1.splitSqlStatements)(params.sql);
             const sqlParts = statements.length ? statements.map((statement) => statement.sql) : [params.sql];
-            for (const [index, sql] of sqlParts.entries()) {
-                const result = await this.connectionManager.getDriver(config.type).executeQuery({ ...params, sql });
+            const results = await this.connectionManager.getDriver(config.type).executeStatements(params, sqlParts);
+            for (const [index, result] of results.entries()) {
                 resultSets.push({
                     id: result.executionId,
-                    title: sqlParts.length > 1 ? `Result ${index + 1}` : this.resultTitle(params.sql, params.source?.fileName),
+                    title: sqlParts.length > 1 ? `Result ${index + 1}` : this.resultTitle(sqlParts[index] ?? params.sql, params.source?.fileName),
                     fields: result.fields,
                     rows: result.rows,
                     rowCount: result.rowCount,
@@ -84,6 +84,7 @@ class QueryExecutor {
                 connectionId: config.id,
                 databaseType: config.type,
                 sql: params.sql,
+                sourceOrigin: params.source?.origin,
                 sourceFile: params.source?.fileName,
                 documentUri: params.source?.documentUri,
                 schemaName: config.defaultSchema,
@@ -97,8 +98,7 @@ class QueryExecutor {
                 tables: (0, queryMemoryMetadata_1.extractQueryTables)(params.sql),
                 columns: (0, queryMemoryMetadata_1.extractQualifiedColumns)(params.sql)
             };
-            await this.historyStore.add(historyItem);
-            await this.recorder?.recordHistoryItem(historyItem);
+            await this.recordHistory(params, historyItem);
             return {
                 id: tabId,
                 title: this.resultTitle(params.sql, params.source?.fileName),
@@ -108,6 +108,7 @@ class QueryExecutor {
                 databaseName: config.database,
                 schemaName: config.defaultSchema,
                 queryText: params.sql,
+                sourceOrigin: params.source?.origin,
                 sourceFile: params.source?.fileName,
                 sourceDocumentUri: params.source?.documentUri,
                 sourceQueryId: params.source?.queryId,
@@ -135,6 +136,7 @@ class QueryExecutor {
                 connectionId: config.id,
                 databaseType: config.type,
                 sql: params.sql,
+                sourceOrigin: params.source?.origin,
                 sourceFile: params.source?.fileName,
                 documentUri: params.source?.documentUri,
                 schemaName: config.defaultSchema,
@@ -147,8 +149,7 @@ class QueryExecutor {
                 tables: (0, queryMemoryMetadata_1.extractQueryTables)(params.sql),
                 columns: (0, queryMemoryMetadata_1.extractQualifiedColumns)(params.sql)
             };
-            await this.historyStore.add(historyItem);
-            await this.recorder?.recordHistoryItem(historyItem);
+            await this.recordHistory(params, historyItem);
             return {
                 id: tabId,
                 title: this.resultTitle(params.sql, params.source?.fileName),
@@ -158,6 +159,7 @@ class QueryExecutor {
                 databaseName: config.database,
                 schemaName: config.defaultSchema,
                 queryText: params.sql,
+                sourceOrigin: params.source?.origin,
                 sourceFile: params.source?.fileName,
                 sourceDocumentUri: params.source?.documentUri,
                 sourceQueryId: params.source?.queryId,
@@ -194,6 +196,13 @@ class QueryExecutor {
             return keyword;
         }
         return fileName?.split(/[\\/]/).pop() ?? 'SQL';
+    }
+    async recordHistory(params, item) {
+        if (params.source?.origin !== 'queryConsole') {
+            return;
+        }
+        await this.historyStore.add(item);
+        await this.recorder?.recordHistoryItem(item);
     }
     async confirmDestructiveIfNeeded(isProduction, sql) {
         const confirm = vscode.workspace.getConfiguration('database').get('safety.confirmDestructiveQueries', true);

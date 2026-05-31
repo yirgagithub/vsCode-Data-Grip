@@ -4,6 +4,10 @@ import { ResultSessionStore } from '../../persistence/resultSessionStore';
 import { QueryResultTab } from '../../types';
 import { ResultsFromWebviewMessage, ResultsToWebviewMessage } from './messages';
 
+export interface AddResultTabOptions {
+  forceNew?: boolean;
+}
+
 export class ResultsPanelProvider implements vscode.WebviewViewProvider {
   static readonly viewType = 'sqlResults';
   private view?: vscode.WebviewView;
@@ -16,7 +20,8 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
     private readonly sessionStore: ResultSessionStore,
     private readonly executor: QueryExecutor,
     private readonly revealSource?: (tab: QueryResultTab) => Promise<void>,
-    private readonly onTabsChanged?: (tabs: QueryResultTab[]) => void
+    private readonly onTabsChanged?: (tabs: QueryResultTab[]) => void,
+    private readonly runActiveEditorSelection?: (maxRows?: number) => Promise<boolean>
   ) {
     this.tabs = this.sessionStore.getTabs();
     this.activeTabId = this.tabs[0]?.id;
@@ -46,9 +51,9 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
     this.postHydrate();
   }
 
-  async addTab(tab: QueryResultTab): Promise<void> {
+  async addTab(tab: QueryResultTab, options: AddResultTabOptions = {}): Promise<void> {
     this.activeConnectionId = tab.connectionId;
-    const active = this.reusableTabFor(tab);
+    const active = options.forceNew ? undefined : this.reusableTabFor(tab);
     if (active && !active.pinned) {
       this.tabs = this.tabs.map((item) => item.id === active.id ? { ...tab, id: active.id } : item);
       this.activeTabId = active.id;
@@ -108,11 +113,15 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
       const tab = this.getTab(message.tabId);
       if (tab) {
         const maxRows = typeof message.maxRows === 'number' ? message.maxRows : message.maxRows === null ? undefined : tab.maxRows;
+        if (await this.runActiveEditorSelection?.(maxRows)) {
+          return;
+        }
         const next = await this.executor.execute({
           connectionId: tab.connectionId,
           sql: tab.queryText,
           maxRows,
           source: {
+            origin: tab.sourceOrigin,
             fileName: tab.sourceFile,
             documentUri: tab.sourceDocumentUri,
             sectionIndex: tab.sourceSectionIndex,

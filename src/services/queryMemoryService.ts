@@ -13,6 +13,7 @@ import {
 } from '../types';
 import { QueryMemorySearch } from './queryMemorySearch';
 import { extractQualifiedColumns, extractQueryTables } from './queryMemoryMetadata';
+import { isQueryConsoleHistoryItem, isQueryConsoleMemoryItem, queryConsoleDocumentUris } from './queryConsoleHistory';
 
 export interface QueryMemorySummarizer {
   summarizeQueryMemory(request: QueryMemorySummaryRequest): Promise<QueryMemorySummary>;
@@ -56,7 +57,7 @@ export class QueryMemoryService {
   async search(request: QueryMemorySearchRequest): Promise<QueryMemorySearchResult[]> {
     await this.syncFromHistory();
     await this.syncKnownDocuments();
-    return this.searcher.search(this.memoryStore.getAll(), request);
+    return this.searcher.search(this.queryConsoleMemoryItems(), request);
   }
 
   async backfillSummaries(options: { limit?: number; token?: vscode.CancellationToken } = {}): Promise<QueryMemoryBackfillResult> {
@@ -112,18 +113,13 @@ export class QueryMemoryService {
   }
 
   private async syncFromHistory(): Promise<void> {
-    for (const item of this.historyStore.getAll()) {
+    for (const item of this.queryConsoleHistoryItems()) {
       await this.recordHistoryItem(item);
     }
   }
 
   private async syncKnownDocuments(): Promise<void> {
     const documentUris = new Set<string>();
-    for (const item of this.historyStore.getAll()) {
-      if (item.documentUri) {
-        documentUris.add(item.documentUri);
-      }
-    }
     for (const record of this.consoleStore.getAll()) {
       documentUris.add(record.documentUri);
     }
@@ -204,6 +200,16 @@ export class QueryMemoryService {
       indexedAt: existing?.indexedAt ?? now,
       updatedAt: now
     };
+  }
+
+  private queryConsoleHistoryItems(): QueryHistoryItem[] {
+    const consoleUris = queryConsoleDocumentUris(this.consoleStore.getAll());
+    return this.historyStore.getAll().filter((item) => isQueryConsoleHistoryItem(item, consoleUris));
+  }
+
+  private queryConsoleMemoryItems(): QueryMemoryItem[] {
+    const consoleUris = queryConsoleDocumentUris(this.consoleStore.getAll());
+    return this.memoryStore.getAll().filter((item) => isQueryConsoleMemoryItem(item, consoleUris));
   }
 
   private historyMemoryId(item: QueryHistoryItem): string {

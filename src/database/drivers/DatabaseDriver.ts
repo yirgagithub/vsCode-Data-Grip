@@ -23,6 +23,7 @@ export interface DatabaseDriver {
   connect(config: ConnectionConfigWithPassword): Promise<DbConnection>;
   disconnect(connectionId: string): Promise<void>;
   executeQuery(params: ExecuteQueryParams): Promise<QueryExecutionResult>;
+  executeStatements(params: ExecuteQueryParams, statements: string[]): Promise<QueryExecutionResult[]>;
   validateQuery(params: ExecuteQueryParams): Promise<QueryValidationResult>;
   cancelQuery(executionId: string): Promise<void>;
 

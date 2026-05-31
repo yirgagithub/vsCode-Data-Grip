@@ -29,7 +29,14 @@ export function App() {
   }, [setTabs, upsertTab]);
 
   if (!active) {
-    return <main className="empty">Run a SQL statement to open a result tab.</main>;
+    return (
+      <main className="empty app-empty">
+        <div className="empty-panel">
+          <span className="empty-icon">▦</span>
+          <span>Run a query to see results</span>
+        </div>
+      </main>
+    );
   }
 
   const resultSet = active.resultSets[activeResultSetIndex] ?? active.resultSets[active.activeResultSetIndex] ?? active.resultSets[0];
@@ -46,10 +53,11 @@ export function App() {
             onClick={() => setActiveResultSetIndex(index)}
             title={`${set.command ?? 'Result'} - ${set.rowCount} rows`}
           >
-            <span>{index + 1}</span>
+            <span className="resultset-icon">▦</span>
             <span>{set.command ?? 'Result'}</span>
+            <span className="resultset-count">{set.rowCount.toLocaleString()} rows</span>
           </button>
-        )) : <span className="muted">Messages</span>}
+        )) : <span className="muted resultset-empty-label">Messages</span>}
       </div>
       {active.executionStatus === 'failed' ? <MessagesPanel tab={active} /> : <ResultGrid tab={active} resultSet={resultSet} />}
       <StatusBar tab={active} resultSet={resultSet} />

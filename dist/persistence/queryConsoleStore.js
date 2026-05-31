@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.QueryConsoleStore = void 0;
 const vscode = __importStar(require("vscode"));
 const id_1 = require("../utils/id");
+const queryConsoleRecords_1 = require("./queryConsoleRecords");
 const CONSOLES_KEY = 'database.queryConsoles';
 class QueryConsoleStore {
     context;
@@ -44,6 +45,14 @@ class QueryConsoleStore {
     }
     getAll() {
         return this.context.workspaceState.get(CONSOLES_KEY, []);
+    }
+    async pruneMissingDocuments() {
+        const records = this.getAll();
+        const { existing, missing } = await (0, queryConsoleRecords_1.partitionExistingConsoleRecords)(records, (documentUri) => this.documentExists(documentUri));
+        if (missing.length) {
+            await this.context.workspaceState.update(CONSOLES_KEY, existing);
+        }
+        return missing.length;
     }
     getByConnection(connectionId) {
         return this.getAll()
@@ -138,6 +147,13 @@ class QueryConsoleStore {
     async delete(id) {
         await this.context.workspaceState.update(CONSOLES_KEY, this.getAll().filter((record) => record.id !== id));
     }
+    async deleteMany(ids) {
+        const idSet = new Set(ids);
+        if (!idSet.size) {
+            return;
+        }
+        await this.context.workspaceState.update(CONSOLES_KEY, this.getAll().filter((record) => !idSet.has(record.id)));
+    }
     async save(record) {
         const records = this.getAll().filter((existing) => existing.id !== record.id);
         records.push(record);
@@ -175,7 +191,7 @@ class QueryConsoleStore {
         catch {
             await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
             if (!vscode.workspace.workspaceFolders?.length) {
-                void vscode.window.showWarningMessage('No workspace is open. Query console files are stored in extension storage.');
+                void vscode.window.showInformationMessage('No workspace is open. Query console files are stored in extension storage; SQL autocomplete still works after metadata warms.');
             }
         }
     }
@@ -186,6 +202,24 @@ class QueryConsoleStore {
     }
     safeName(value) {
         return value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'sql-console';
+    }
+    async documentExists(documentUri) {
+        try {
+            await vscode.workspace.fs.stat(vscode.Uri.parse(documentUri));
+            return true;
+        }
+        catch (error) {
+            return !this.isFileNotFound(error);
+        }
+    }
+    isFileNotFound(error) {
+        const code = error instanceof vscode.FileSystemError
+            ? error.code
+            : typeof error === 'object' && error !== null
+                ? error.code
+                : undefined;
+        const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+        return code === 'FileNotFound' || /\b(FileNotFound|ENOENT)\b/i.test(message);
     }
 }
 exports.QueryConsoleStore = QueryConsoleStore;

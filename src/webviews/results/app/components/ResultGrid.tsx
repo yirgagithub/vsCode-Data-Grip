@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { QueryResultTab, ResultSet } from '../../../../types';
 import { formatValue } from '../format';
 import { vscode } from '../vscode';
+import { rowsToCsv, rowsToTsv } from '../format';
 
 const ROW_HEIGHT = 24;
 const BUFFER = 12;
-const GRID_COLUMNS = '56px repeat(var(--column-count), minmax(128px, 240px))';
+const DEFAULT_COLUMN_WIDTH = 188;
+const MIN_COLUMN_WIDTH = 96;
 const OPERATORS = ['contains', 'equals', 'not equals', 'starts with', 'ends with', 'is null', 'is not null'];
 
 interface ColumnFilter {
@@ -26,6 +28,14 @@ type Selection =
   | { type: 'row'; rowIndex: number }
   | { type: 'column'; column: string };
 
+interface GridContextMenu {
+  x: number;
+  y: number;
+  rowIndex?: number;
+  column?: string;
+  value?: unknown;
+}
+
 export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?: ResultSet }) {
   const [scrollTop, setScrollTop] = useState(0);
   const [sort, setSort] = useState<{ column: string; direction: 'asc' | 'desc' } | undefined>(tab.sort[0]);
@@ -37,10 +47,14 @@ export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?
   const [selection, setSelection] = useState<Selection>();
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [pageOffset, setPageOffset] = useState(0);
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  const [contextMenu, setContextMenu] = useState<GridContextMenu>();
   const rows = resultSet?.rows ?? [];
   const fields = resultSet?.fields ?? [];
   const pageLimit = tab.maxRows && tab.maxRows > 0 ? tab.maxRows : Math.max(rows.length, 1);
-  const gridColumnStyle = { '--column-count': fields.length, gridTemplateColumns: GRID_COLUMNS } as CSSProperties & Record<string, number | string>;
+  const gridColumnStyle = {
+    gridTemplateColumns: `var(--row-number-width) ${fields.map((field) => `${columnWidths[field.name] ?? DEFAULT_COLUMN_WIDTH}px`).join(' ')}`
+  } as CSSProperties;
 
   const visibleRows = useMemo(() => {
     let filtered = whereFilter
@@ -68,13 +82,103 @@ export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?
   const selectedColumn = selection?.type === 'column' ? selection.column : selectedCell?.column;
   const pageEnd = pageStart + pageRows.length;
   const hasNextPage = pageEnd < visibleRows.length;
+  const visibleColumnNames = fields.map((field) => field.name);
 
   if (!resultSet) {
     return <section className="grid-empty">No result set.</section>;
   }
 
+  const rowForIndex = (rowIndex: number): Record<string, unknown> | undefined => visibleRows[rowIndex];
+  const selectedText = () => {
+    if (!selection) {
+      return '';
+    }
+    if (selection.type === 'cell') {
+      return formatValue(selection.value);
+    }
+    if (selection.type === 'row') {
+      const row = rowForIndex(selection.rowIndex);
+      return row ? rowsToTsv([row]) : '';
+    }
+    const columnRows = visibleRows.map((row) => ({ [selection.column]: row[selection.column] }));
+    return rowsToTsv(columnRows);
+  };
+  const copySelection = () => {
+    const text = selectedText();
+    if (text) {
+      vscode.postMessage({ type: 'copy', text });
+    }
+  };
+  const moveSelection = (key: string, extend: boolean) => {
+    const rowIndex = selection?.type === 'cell'
+      ? selection.rowIndex
+      : selection?.type === 'row'
+        ? selection.rowIndex
+        : pageStart;
+    const columnIndex = selection?.type === 'cell'
+      ? Math.max(0, visibleColumnNames.indexOf(selection.column))
+      : selection?.type === 'column'
+        ? Math.max(0, visibleColumnNames.indexOf(selection.column))
+        : 0;
+    const nextRow = key === 'ArrowUp'
+      ? Math.max(0, rowIndex - 1)
+      : key === 'ArrowDown'
+        ? Math.min(Math.max(visibleRows.length - 1, 0), rowIndex + 1)
+        : rowIndex;
+    const nextColumnIndex = key === 'ArrowLeft'
+      ? Math.max(0, columnIndex - 1)
+      : key === 'ArrowRight'
+        ? Math.min(Math.max(visibleColumnNames.length - 1, 0), columnIndex + 1)
+        : columnIndex;
+    const nextColumn = visibleColumnNames[nextColumnIndex];
+    if (!nextColumn) {
+      return;
+    }
+    const nextValue = rowForIndex(nextRow)?.[nextColumn];
+    if (extend && key === 'ArrowDown') {
+      setSelection({ type: 'row', rowIndex: nextRow });
+      return;
+    }
+    setSelection({ type: 'cell', rowIndex: nextRow, column: nextColumn, value: nextValue });
+  };
+  const onGridKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c') {
+      event.preventDefault();
+      copySelection();
+      return;
+    }
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      event.preventDefault();
+      moveSelection(event.key, event.shiftKey);
+      return;
+    }
+    if (event.key === 'Enter' && selection?.type === 'cell') {
+      setInspectorOpen(true);
+    }
+  };
+  const openContextMenu = (event: ReactMouseEvent, menu: Omit<GridContextMenu, 'x' | 'y'>) => {
+    event.preventDefault();
+    setContextMenu({ ...menu, x: event.clientX, y: event.clientY });
+  };
+  const startColumnResize = (event: ReactMouseEvent, column: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = columnWidths[column] ?? DEFAULT_COLUMN_WIDTH;
+    const onMove = (moveEvent: MouseEvent) => {
+      const nextWidth = Math.max(MIN_COLUMN_WIDTH, startWidth + moveEvent.clientX - startX);
+      setColumnWidths((current) => ({ ...current, [column]: nextWidth }));
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
   return (
-    <section className="grid-shell">
+    <section className="grid-shell" onKeyDown={onGridKeyDown}>
       <div className="criteria-row">
         <label className="criteria">
           <span className="criteria-icon">▽</span>
@@ -100,15 +204,30 @@ export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?
         </label>
       </div>
       <div className={`grid-layout ${inspectorOpen ? 'with-inspector' : ''}`}>
-        <div className="grid result-grid" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
+        <div
+          className="grid result-grid"
+          onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+          onClick={() => setContextMenu(undefined)}
+          role="grid"
+          aria-rowcount={visibleRows.length}
+          aria-colcount={fields.length}
+          tabIndex={0}
+        >
           <div className="grid-header" style={gridColumnStyle}>
-            <div className="cell rownum">#</div>
+            <div className="cell rownum" role="columnheader">#</div>
             {fields.map((field) => {
               const activeFilter = filters.find((filter) => filter.column === field.name);
               return (
-                <div key={field.name} className={`cell header-cell ${activeFilter ? 'filtered' : ''} ${selectedColumn === field.name ? 'selected-column' : ''}`}>
+                <div
+                  key={field.name}
+                  className={`cell header-cell ${activeFilter ? 'filtered' : ''} ${selectedColumn === field.name ? 'selected-column' : ''}`}
+                  role="columnheader"
+                  aria-sort={sort?.column === field.name ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+                  onContextMenu={(event) => openContextMenu(event, { column: field.name })}
+                >
                   <button
                     className="header-title"
+                    aria-label={`Sort by ${field.name}`}
                     onClick={() => {
                       const nextSort = sort?.column === field.name && sort.direction === 'asc' ? { column: field.name, direction: 'desc' as const } : { column: field.name, direction: 'asc' as const };
                       setSort(nextSort);
@@ -122,10 +241,11 @@ export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?
                     {field.dataTypeName && <small>{field.dataTypeName}</small>}
                     {sort?.column === field.name && <span className="sort-mark">{sort.direction}</span>}
                   </button>
-                  <button className="filter-button" title="Filter column" onClick={() => {
+                  <button className="filter-button" title="Filter column" aria-label={`Filter ${field.name}`} onClick={() => {
                     setColumnFiltersVisible(true);
                     setOpenFilterColumn(openFilterColumn === field.name ? undefined : field.name);
-                  }}>Filter</button>
+                  }}>⌄</button>
+                  <span className="resize-handle" title="Resize column" onMouseDown={(event) => startColumnResize(event, field.name)} />
                   {columnFiltersVisible && openFilterColumn === field.name && (
                     <ColumnFilterPopover
                       filter={activeFilter ?? { column: field.name, operator: 'contains', value: '' }}
@@ -169,8 +289,15 @@ export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?
           <div className="grid-body" style={{ height: pageRows.length * ROW_HEIGHT }}>
             <div style={{ transform: `translateY(${start * ROW_HEIGHT}px)` }}>
               {slice.map((row, index) => (
-                <div className={`grid-row ${selectedRow === pageStart + start + index ? 'selected-row' : ''}`} key={start + index} style={gridColumnStyle}>
-                  <div className="cell rownum" onClick={() => setSelection({ type: 'row', rowIndex: pageStart + start + index })}>{pageStart + start + index + 1}</div>
+                <div className={`grid-row ${selectedRow === pageStart + start + index ? 'selected-row' : ''}`} key={start + index} style={gridColumnStyle} role="row">
+                  <div
+                    className="cell rownum"
+                    role="rowheader"
+                    onClick={() => setSelection({ type: 'row', rowIndex: pageStart + start + index })}
+                    onContextMenu={(event) => openContextMenu(event, { rowIndex: pageStart + start + index })}
+                  >
+                    {pageStart + start + index + 1}
+                  </div>
                   {fields.map((field) => {
                     const rowIndex = pageStart + start + index;
                     const value = row[field.name];
@@ -181,10 +308,16 @@ export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?
                         key={field.name}
                         title={formatValue(value) || 'NULL'}
                         onClick={() => setSelection({ type: 'cell', rowIndex, column: field.name, value })}
+                        onContextMenu={(event) => {
+                          setSelection({ type: 'cell', rowIndex, column: field.name, value });
+                          openContextMenu(event, { rowIndex, column: field.name, value });
+                        }}
                         onDoubleClick={() => {
                           setSelection({ type: 'cell', rowIndex, column: field.name, value });
                           setInspectorOpen(true);
                         }}
+                        role="gridcell"
+                        aria-selected={isSelected}
                       >
                         {value === null ? 'NULL' : formatValue(value)}
                       </div>
@@ -199,12 +332,50 @@ export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?
           <aside className="cell-inspector">
             <div className="inspector-title">
               <strong>{selectedCell?.column ?? 'Cell'}</strong>
-              <button className="tool" onClick={() => setInspectorOpen(false)}>Close</button>
+              <button className="tool" aria-label="Close cell inspector" onClick={() => setInspectorOpen(false)}>Close</button>
             </div>
             <pre>{selectedCell ? prettyValue(selectedCell.value) : 'No cell selected'}</pre>
           </aside>
         )}
       </div>
+      {contextMenu && (
+        <div
+          className="context-menu grid-context-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          role="menu"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button role="menuitem" onClick={() => {
+            const text = contextMenu.value !== undefined ? formatValue(contextMenu.value) : selectedText();
+            vscode.postMessage({ type: 'copy', text });
+            setContextMenu(undefined);
+          }}>
+            <span>⧉</span><span>Copy</span><kbd>Ctrl+C</kbd>
+          </button>
+          <button role="menuitem" disabled={contextMenu.rowIndex === undefined} onClick={() => {
+            const row = contextMenu.rowIndex !== undefined ? rowForIndex(contextMenu.rowIndex) : undefined;
+            if (row) vscode.postMessage({ type: 'copy', text: rowsToTsv([row]) });
+            setContextMenu(undefined);
+          }}>
+            <span>▤</span><span>Copy Row</span>
+          </button>
+          <button role="menuitem" disabled={!contextMenu.column} onClick={() => {
+            if (contextMenu.column) {
+              const columnRows = visibleRows.map((row) => ({ [contextMenu.column as string]: row[contextMenu.column as string] }));
+              vscode.postMessage({ type: 'copy', text: rowsToTsv(columnRows) });
+            }
+            setContextMenu(undefined);
+          }}>
+            <span>▥</span><span>Copy Column</span>
+          </button>
+          <button role="menuitem" onClick={() => {
+            vscode.postMessage({ type: 'copy', text: rowsToCsv(visibleRows) });
+            setContextMenu(undefined);
+          }}>
+            <span>⇩</span><span>Copy Visible as CSV</span>
+          </button>
+        </div>
+      )}
       <div className="result-pager">
         <span className="pager-group">
           <button className="pager-button" disabled={pageStart === 0} onClick={() => setPageOffset(0)}>|‹</button>

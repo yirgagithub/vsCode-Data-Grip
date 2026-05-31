@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ConnectionConfig, QueryResultTab } from '../types';
+import { ConnectionConfig, QueryExecutionProgress, QueryResultTab } from '../types';
 
 const MAX_OUTPUT_LINES_PER_CONNECTION = 600;
 
@@ -9,13 +9,41 @@ export class QueryOutputService implements vscode.Disposable {
 
   record(connection: ConnectionConfig, tab: QueryResultTab): void {
     this.channelFor(connection);
-    this.ensureCapacity(connection.id, 4 + (tab.error ? 2 : 0));
+    this.ensureCapacity(connection.id, 3 + (tab.error ? 2 : 0));
     this.append(connection.id, `[${new Date(tab.executionStartedAt).toLocaleTimeString()}] ${tab.executionStatus.toUpperCase()} ${tab.executionTimeMs ?? 0}ms ${tab.rowCount ?? 0} rows - ${tab.title}`);
-    this.append(connection.id, this.compactSql(tab.queryText));
     if (tab.error) {
       this.append(connection.id, `ERROR ${tab.error.code ? `${tab.error.code}: ` : ''}${tab.error.message}`);
     }
     this.append(connection.id, '');
+  }
+
+  recordExecutionStarted(connection: ConnectionConfig, fileName: string | undefined, statementCount: number): void {
+    this.channelFor(connection);
+    this.ensureCapacity(connection.id, 4);
+    this.append(connection.id, `[${new Date().toLocaleTimeString()}] RUNNING ${statementCount} statement${statementCount === 1 ? '' : 's'}${fileName ? ` - ${fileName}` : ''}`);
+  }
+
+  recordProgress(connection: ConnectionConfig, progress: QueryExecutionProgress): void {
+    this.channelFor(connection);
+    if (progress.status === 'started') {
+      this.ensureCapacity(connection.id, this.lineCount(progress.sql) + 4);
+      this.append(connection.id, `[${new Date().toLocaleTimeString()}] statement ${progress.statementIndex + 1}/${progress.statementCount} running`);
+      this.appendMultiline(connection.id, progress.sql);
+      return;
+    }
+
+    this.ensureCapacity(connection.id, 3 + (progress.errorMessage ? 1 : 0));
+    const duration = progress.durationMs !== undefined ? `${progress.durationMs}ms` : 'unknown duration';
+    if (progress.status === 'completed') {
+      const rows = progress.rowCount !== undefined ? ` - ${progress.rowCount} rows` : '';
+      const command = progress.command ? ` - ${progress.command}` : '';
+      this.append(connection.id, `[${new Date().toLocaleTimeString()}] statement ${progress.statementIndex + 1}/${progress.statementCount} completed in ${duration}${rows}${command}`);
+    } else {
+      this.append(connection.id, `[${new Date().toLocaleTimeString()}] statement ${progress.statementIndex + 1}/${progress.statementCount} failed in ${duration}`);
+      if (progress.errorMessage) {
+        this.append(connection.id, `ERROR ${progress.errorMessage}`);
+      }
+    }
   }
 
   show(connection: ConnectionConfig, preserveFocus = true): void {
@@ -56,6 +84,12 @@ export class QueryOutputService implements vscode.Disposable {
     this.lineCounts.set(connectionId, (this.lineCounts.get(connectionId) ?? 0) + 1);
   }
 
+  private appendMultiline(connectionId: string, text: string): void {
+    for (const line of text.split(/\r?\n/)) {
+      this.append(connectionId, `  ${line}`);
+    }
+  }
+
   private ensureCapacity(connectionId: string, incomingLines: number): void {
     const channel = this.channels.get(connectionId);
     if (!channel) {
@@ -71,8 +105,7 @@ export class QueryOutputService implements vscode.Disposable {
     this.append(connectionId, '');
   }
 
-  private compactSql(sql: string): string {
-    const compact = sql.replace(/\s+/g, ' ').trim();
-    return compact.length > 500 ? `${compact.slice(0, 497)}...` : compact;
+  private lineCount(text: string): number {
+    return text.split(/\r?\n/).length;
   }
 }

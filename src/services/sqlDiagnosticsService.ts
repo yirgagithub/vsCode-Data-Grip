@@ -18,13 +18,14 @@ export class SqlDiagnosticsService {
       return diagnostics;
     }
 
-    diagnostics.push(...await this.getSchemaDiagnostics(document, connection));
+    const scriptRelations = this.collectCreatedRelationNames(document);
+    diagnostics.push(...await this.getSchemaDiagnostics(document, connection, scriptRelations));
     if (this.connectionManager.isConnected(connection.id)) {
       const executable = selection
         ? this.sectionService.detectExecutable(document, selection)
         : this.sectionService.getSections(document)[0];
       if (executable?.sql.trim()) {
-        const plannerDiagnostic = await this.getPlannerDiagnostic(document, connection, executable);
+        const plannerDiagnostic = await this.getPlannerDiagnostic(document, connection, executable, scriptRelations);
         if (plannerDiagnostic) {
           diagnostics.push(plannerDiagnostic);
         }
@@ -33,13 +34,14 @@ export class SqlDiagnosticsService {
     return diagnostics;
   }
 
-  private async getSchemaDiagnostics(document: vscode.TextDocument, connection: ConnectionConfig): Promise<vscode.Diagnostic[]> {
+  private async getSchemaDiagnostics(document: vscode.TextDocument, connection: ConnectionConfig, scriptRelations: Set<string>): Promise<vscode.Diagnostic[]> {
     const diagnostics: vscode.Diagnostic[] = [];
     const defaultSchema = connection.defaultSchema ?? 'public';
-    const entry = this.connectionManager.isConnected(connection.id)
-      ? await this.schemaContext.loadDefaultSchema(connection)
-      : this.schemaContext.getCached(connection.id, defaultSchema);
+    const entry = await this.schemaContext.getCachedForConnection(connection, defaultSchema);
     if (!entry || entry.status !== 'ready') {
+      if (this.connectionManager.isConnected(connection.id)) {
+        this.schemaContext.refreshDefaultSchemaInBackground(connection);
+      }
       return diagnostics;
     }
 
@@ -48,7 +50,7 @@ export class SqlDiagnosticsService {
 
     for (const section of this.sectionService.getSections(document)) {
       for (const alias of section.aliases) {
-        if (cteNames.has(alias.table.toLowerCase())) {
+        if (cteNames.has(alias.table.toLowerCase()) || this.isScriptRelation(alias, scriptRelations)) {
           continue;
         }
         const schema = alias.schema ?? defaultSchema;
@@ -61,7 +63,7 @@ export class SqlDiagnosticsService {
         }
       }
 
-      diagnostics.push(...await this.getColumnDiagnostics(document, connection, section, cteNames));
+      diagnostics.push(...await this.getColumnDiagnostics(document, connection, section, cteNames, scriptRelations));
     }
 
     return diagnostics;
@@ -71,7 +73,8 @@ export class SqlDiagnosticsService {
     document: vscode.TextDocument,
     connection: ConnectionConfig,
     section: SqlSection,
-    cteNames: Set<string>
+    cteNames: Set<string>,
+    scriptRelations: Set<string>
   ): Promise<vscode.Diagnostic[]> {
     const diagnostics: vscode.Diagnostic[] = [];
     const defaultSchema = connection.defaultSchema ?? 'public';
@@ -84,7 +87,7 @@ export class SqlDiagnosticsService {
       const qualifier = match[1] ?? match[2];
       const column = match[3] ?? match[4];
       const alias = aliases.get(qualifier.toLowerCase());
-      if (!alias || cteNames.has(alias.table.toLowerCase())) {
+      if (!alias || cteNames.has(alias.table.toLowerCase()) || this.isScriptRelation(alias, scriptRelations)) {
         continue;
       }
       const key = `${alias.schema ?? defaultSchema}.${alias.table}.${column}`.toLowerCase();
@@ -92,8 +95,11 @@ export class SqlDiagnosticsService {
         continue;
       }
       seen.add(key);
-      const columns = await this.tryGetColumns(connection, alias.schema ?? defaultSchema, alias.table);
+      const columns = await this.schemaContext.getCachedColumns(connection, alias.schema ?? defaultSchema, alias.table);
       if (!columns) {
+        if (this.connectionManager.isConnected(connection.id)) {
+          this.schemaContext.refreshSchemaInBackground(connection, alias.schema ?? defaultSchema);
+        }
         continue;
       }
       if (!columns.some((item) => item.name.toLowerCase() === column.toLowerCase())) {
@@ -112,8 +118,12 @@ export class SqlDiagnosticsService {
   private async getPlannerDiagnostic(
     document: vscode.TextDocument,
     connection: ConnectionConfig,
-    section: SqlSection
+    section: SqlSection,
+    scriptRelations: Set<string>
   ): Promise<vscode.Diagnostic | undefined> {
+    if (section.aliases.some((alias) => this.isScriptRelation(alias, scriptRelations))) {
+      return undefined;
+    }
     let result;
     try {
       result = await this.connectionManager.getDriver(connection.type).validateQuery({
@@ -139,6 +149,33 @@ export class SqlDiagnosticsService {
     return new vscode.Range(document.positionAt(start), document.positionAt(start + identifier.length));
   }
 
+  private collectCreatedRelationNames(document: vscode.TextDocument): Set<string> {
+    const relations = new Set<string>();
+    const regex = /\bcreate\s+(?:temporary\s+|temp\s+)?table\s+(?:if\s+not\s+exists\s+)?((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)/gi;
+    const text = document.getText();
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(text)) !== null) {
+      const [schema, table] = this.splitQualified(match[1]);
+      relations.add(table.toLowerCase());
+      if (schema) {
+        relations.add(this.relationKey(schema, table));
+      }
+    }
+    return relations;
+  }
+
+  private isScriptRelation(alias: { schema?: string; table: string }, scriptRelations: Set<string>): boolean {
+    if (scriptRelations.has(alias.table.toLowerCase())) {
+      return !alias.schema || alias.schema.toLowerCase() === 'pg_temp';
+    }
+    return alias.schema ? scriptRelations.has(this.relationKey(alias.schema, alias.table)) : false;
+  }
+
+  private splitQualified(value: string): [string | undefined, string] {
+    const parts = value.split('.').map((part) => part.replace(/^"|"$/g, ''));
+    return parts.length > 1 ? [parts[0], parts[1]] : [undefined, parts[0]];
+  }
+
   private errorRange(document: vscode.TextDocument, section: SqlSection, error: QueryError): vscode.Range {
     const offset = Number(error.position);
     if (Number.isFinite(offset) && offset > 0) {
@@ -152,14 +189,6 @@ export class SqlDiagnosticsService {
 
   private errorMessage(error: QueryError): string {
     return [error.message, error.detail, error.hint].filter(Boolean).join('\n');
-  }
-
-  private async tryGetColumns(connection: ConnectionConfig, schema: string, table: string) {
-    try {
-      return await this.schemaContext.getColumns(connection, schema, table);
-    } catch {
-      return undefined;
-    }
   }
 
   private relationKey(schema: string, table: string): string {

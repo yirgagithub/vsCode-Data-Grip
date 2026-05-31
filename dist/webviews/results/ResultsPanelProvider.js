@@ -41,17 +41,19 @@ class ResultsPanelProvider {
     executor;
     revealSource;
     onTabsChanged;
+    runActiveEditorSelection;
     static viewType = 'sqlResults';
     view;
     tabs;
     activeTabId;
     activeConnectionId;
-    constructor(context, sessionStore, executor, revealSource, onTabsChanged) {
+    constructor(context, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection) {
         this.context = context;
         this.sessionStore = sessionStore;
         this.executor = executor;
         this.revealSource = revealSource;
         this.onTabsChanged = onTabsChanged;
+        this.runActiveEditorSelection = runActiveEditorSelection;
         this.tabs = this.sessionStore.getTabs();
         this.activeTabId = this.tabs[0]?.id;
         this.activeConnectionId = this.tabs.find((tab) => tab.id === this.activeTabId)?.connectionId;
@@ -76,9 +78,9 @@ class ResultsPanelProvider {
         this.selectConnection(connectionId);
         this.postHydrate();
     }
-    async addTab(tab) {
+    async addTab(tab, options = {}) {
         this.activeConnectionId = tab.connectionId;
-        const active = this.reusableTabFor(tab);
+        const active = options.forceNew ? undefined : this.reusableTabFor(tab);
         if (active && !active.pinned) {
             this.tabs = this.tabs.map((item) => item.id === active.id ? { ...tab, id: active.id } : item);
             this.activeTabId = active.id;
@@ -136,11 +138,15 @@ class ResultsPanelProvider {
             const tab = this.getTab(message.tabId);
             if (tab) {
                 const maxRows = typeof message.maxRows === 'number' ? message.maxRows : message.maxRows === null ? undefined : tab.maxRows;
+                if (await this.runActiveEditorSelection?.(maxRows)) {
+                    return;
+                }
                 const next = await this.executor.execute({
                     connectionId: tab.connectionId,
                     sql: tab.queryText,
                     maxRows,
                     source: {
+                        origin: tab.sourceOrigin,
                         fileName: tab.sourceFile,
                         documentUri: tab.sourceDocumentUri,
                         sectionIndex: tab.sourceSectionIndex,

@@ -55,6 +55,13 @@ class QueryHistoryStore {
     async delete(id) {
         await this.context.workspaceState.update(HISTORY_KEY, this.getAll().filter((item) => item.id !== id));
     }
+    async deleteMany(ids) {
+        const idSet = new Set(ids);
+        if (!idSet.size) {
+            return;
+        }
+        await this.context.workspaceState.update(HISTORY_KEY, this.getAll().filter((item) => !idSet.has(item.id)));
+    }
 }
 exports.QueryHistoryStore = QueryHistoryStore;
 //# sourceMappingURL=queryHistoryStore.js.map

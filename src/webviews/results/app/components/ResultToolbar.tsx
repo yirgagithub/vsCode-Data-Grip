@@ -44,8 +44,18 @@ export function ResultToolbar({ tab, resultSet }: { tab: QueryResultTab; resultS
   };
 
   return (
-    <div className="toolbar result-toolbar">
-      <button className="tool icon-tool tone-green" title="Rerun query" onClick={rerun}>▶</button>
+    <div className="toolbar result-toolbar" role="toolbar" aria-label="Result actions">
+      <div className="toolbar-group">
+        <button className="tool icon-tool tone-green active" title="Grid view" aria-label="Grid view">▦</button>
+        <button className="tool icon-tool" title="Chart view" aria-label="Chart view" disabled>◌</button>
+      </div>
+      <span className="separator" />
+      <div className="toolbar-group">
+        <button className="tool icon-tool tone-green" title="Rerun query" aria-label="Rerun query" onClick={rerun}>▶</button>
+        <button className="tool icon-tool tone-red" title="Stop query" aria-label="Stop query" disabled>■</button>
+        <button className={`tool icon-tool ${tab.pinned ? 'tone-orange active' : ''}`} title={tab.pinned ? 'Unpin tab' : 'Pin tab'} aria-label={tab.pinned ? 'Unpin tab' : 'Pin tab'} onClick={() => pinTab(tab.id, !tab.pinned)}>⌖</button>
+      </div>
+      <span className="separator" />
       <label className="limit-control" title="Rows fetched by the next run">
         <span>Rows</span>
         <select value={limitValue} onChange={(event) => changeLimit(event.target.value)}>
@@ -56,17 +66,23 @@ export function ResultToolbar({ tab, resultSet }: { tab: QueryResultTab; resultS
           <option value="custom">{maxRows && !['500', '1000', '5000'].includes(String(maxRows)) ? maxRows.toLocaleString() : 'Custom...'}</option>
         </select>
       </label>
-      <button className={`tool icon-tool ${tab.pinned ? 'tone-orange' : ''}`} title={tab.pinned ? 'Unpin tab' : 'Pin tab'} onClick={() => pinTab(tab.id, !tab.pinned)}>⌖</button>
       <span className="separator" />
-      <button className="tool icon-tool tone-purple" title="Copy fetched rows as TSV" onClick={() => vscode.postMessage({ type: 'copy', text: rowsToTsv(rows) })}>⧉</button>
-      <select className="toolbar-select" value={exportFormat} onChange={(event) => setExportFormat(event.target.value as 'csv' | 'json' | 'tsv')} title="Export format">
-        <option value="csv">CSV</option>
-        <option value="json">JSON</option>
-        <option value="tsv">TSV</option>
-      </select>
-      <button className="tool icon-tool tone-green" title={`Copy fetched rows as ${exportFormat.toUpperCase()}`} onClick={() => vscode.postMessage({ type: 'copy', text: exportText() })}>⇩</button>
+      <div className="toolbar-group">
+        <button className="tool icon-tool" title="Search in result" aria-label="Search in result" disabled>⌕</button>
+        <button className="tool icon-tool" title="Filter columns" aria-label="Filter columns" disabled>▽</button>
+        <button className="tool icon-tool tone-purple" title="Copy fetched rows as TSV" aria-label="Copy fetched rows as TSV" onClick={() => vscode.postMessage({ type: 'copy', text: rowsToTsv(rows) })}>⧉</button>
+        <select className="toolbar-select" value={exportFormat} onChange={(event) => setExportFormat(event.target.value as 'csv' | 'json' | 'tsv')} title="Export format" aria-label="Export format">
+          <option value="csv">CSV</option>
+          <option value="json">JSON</option>
+          <option value="tsv">TSV</option>
+        </select>
+        <button className="tool icon-tool tone-green" title={`Copy fetched rows as ${exportFormat.toUpperCase()}`} aria-label={`Copy fetched rows as ${exportFormat.toUpperCase()}`} onClick={() => vscode.postMessage({ type: 'copy', text: exportText() })}>⇩</button>
+      </div>
       <span className="toolbar-spacer" />
-      <span className={`status-dot ${tab.executionStatus}`} title={`${tab.executionStatus}${tab.executionTimeMs !== undefined ? ` - ${tab.executionTimeMs}ms` : ''}`} />
+      <span className="execution-pill" title={`${tab.executionStatus}${tab.executionTimeMs !== undefined ? ` - ${tab.executionTimeMs}ms` : ''}`}>
+        <span className={`status-dot ${tab.executionStatus}`} />
+        <span>{tab.executionStatus}</span>
+      </span>
       <span className="muted command-label">{resultSet?.command ?? ''}</span>
     </div>
   );

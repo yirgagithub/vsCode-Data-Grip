@@ -5,10 +5,13 @@ import { PostgresDriver } from './drivers/postgresDriver';
 import { RedshiftDriver } from './drivers/redshiftDriver';
 import { DatabaseDriver } from './drivers/DatabaseDriver';
 import { createId } from '../utils/id';
+import { connectionDefaultsForType } from '../services/connectionDefaults';
 
 export class ConnectionManager {
   private readonly drivers = new Map<DatabaseType, DatabaseDriver>();
   private readonly active = new Map<string, DbConnection>();
+  private readonly activeConnectionEmitter = new vscode.EventEmitter<string>();
+  readonly onDidChangeActiveConnections = this.activeConnectionEmitter.event;
 
   constructor(private readonly store: ConnectionStore) {
     this.drivers.set('postgres', new PostgresDriver());
@@ -64,7 +67,27 @@ export class ConnectionManager {
   }
 
   async save(config: ConnectionConfigWithPassword): Promise<void> {
+    const activeConnection = this.active.get(config.id);
     await this.store.save(config);
+    if (!activeConnection) {
+      return;
+    }
+
+    if (activeConnection.config.type !== config.type) {
+      await this.getDriver(activeConnection.config.type).disconnect(config.id);
+    }
+
+    try {
+      const nextConfig = await this.getConnectionWithPassword(config.id);
+      const connection = await this.getDriver(nextConfig.type).connect(nextConfig);
+      this.active.set(config.id, connection);
+      await this.store.setSelectedConnectionId(config.id);
+      this.activeConnectionEmitter.fire(config.id);
+    } catch (error) {
+      this.active.delete(config.id);
+      this.activeConnectionEmitter.fire(config.id);
+      throw error;
+    }
   }
 
   async setSelectedConnection(id: string | undefined): Promise<void> {
@@ -78,18 +101,31 @@ export class ConnectionManager {
 
   async connect(id: string): Promise<DbConnection> {
     const config = await this.getConnectionWithPassword(id);
-    const connection = await this.getDriver(config.type).connect(config);
-    this.active.set(id, connection);
-    await this.store.setSelectedConnectionId(id);
-    return connection;
+    try {
+      const connection = await this.getDriver(config.type).connect(config);
+      this.active.set(id, connection);
+      await this.store.setSelectedConnectionId(id);
+      this.activeConnectionEmitter.fire(id);
+      return connection;
+    } catch (error) {
+      if (this.active.has(id)) {
+        this.active.delete(id);
+        this.activeConnectionEmitter.fire(id);
+      }
+      throw error;
+    }
   }
 
   async disconnect(id: string): Promise<void> {
+    const wasConnected = this.active.has(id);
     const config = this.getConnection(id);
     if (config) {
       await this.getDriver(config.type).disconnect(id);
     }
     this.active.delete(id);
+    if (wasConnected) {
+      this.activeConnectionEmitter.fire(id);
+    }
   }
 
   async test(id: string): Promise<string> {
@@ -135,7 +171,8 @@ export class ConnectionManager {
     }
 
     const type = typePick.type;
-    const name = await vscode.window.showInputBox({ prompt: 'Connection name', value: existing?.name ?? (type === 'redshift' ? 'Redshift' : 'PostgreSQL') });
+    const defaults = connectionDefaultsForType(type);
+    const name = await vscode.window.showInputBox({ prompt: 'Connection name', value: existing?.name ?? defaults.name });
     if (!name) {
       return undefined;
     }
@@ -143,8 +180,8 @@ export class ConnectionManager {
     if (!host) {
       return undefined;
     }
-    const port = Number(await vscode.window.showInputBox({ prompt: 'Port', value: String(existing?.port ?? (type === 'redshift' ? 5439 : 5432)) }));
-    const database = await vscode.window.showInputBox({ prompt: 'Database', value: existing?.database ?? 'postgres' });
+    const port = Number(await vscode.window.showInputBox({ prompt: 'Port', value: String(existing?.port ?? defaults.port) }));
+    const database = await vscode.window.showInputBox({ prompt: 'Database', value: existing?.database ?? defaults.database });
     if (!database) {
       return undefined;
     }
@@ -164,8 +201,8 @@ export class ConnectionManager {
       database,
       username,
       password,
-      sslMode: (ssl ?? (type === 'redshift' ? 'require' : 'prefer')) as 'disable' | 'prefer' | 'require',
-      color: existing?.color ?? (host === 'localhost' ? 'green' : 'blue'),
+      sslMode: (ssl ?? defaults.sslMode) as 'disable' | 'prefer' | 'require',
+      color: existing?.color ?? defaults.color,
       defaultSchema: existing?.defaultSchema ?? 'public',
       queryTimeoutMs: vscode.workspace.getConfiguration('database').get<number>('query.timeoutMs', 300000)
     };

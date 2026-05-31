@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ColumnNode = exports.ViewNode = exports.TableNode = exports.FolderNode = exports.SchemaNode = exports.SchemasNode = exports.CatalogNode = exports.ConnectionNode = void 0;
+exports.ColumnNode = exports.ViewNode = exports.TableNode = exports.StaticFolderNode = exports.FolderNode = exports.SchemaNode = exports.SchemasNode = exports.CatalogNode = exports.ConnectionNode = void 0;
 const vscode = __importStar(require("vscode"));
 class ConnectionNode extends vscode.TreeItem {
     connection;
@@ -42,9 +42,9 @@ class ConnectionNode extends vscode.TreeItem {
         super(truncateMiddle(connection.name, 36), vscode.TreeItemCollapsibleState.Collapsed);
         this.connection = connection;
         this.id = connection.id;
-        this.description = `${connected ? 'online' : 'offline'} - ${connection.type}`;
+        this.description = `${connected ? 'online' : 'offline'} | ${connection.type}`;
         this.contextValue = 'connection';
-        this.iconPath = new vscode.ThemeIcon(connected ? 'circle-filled' : 'circle-outline', new vscode.ThemeColor(connected ? 'testing.iconPassed' : 'descriptionForeground'));
+        this.iconPath = new vscode.ThemeIcon('database', new vscode.ThemeColor(connected ? 'testing.iconPassed' : 'descriptionForeground'));
         this.tooltip = new vscode.MarkdownString([
             `**${connection.name}**`,
             '',
@@ -91,7 +91,7 @@ class SchemaNode extends vscode.TreeItem {
         this.connection = connection;
         this.schema = schema;
         this.contextValue = 'schema';
-        this.iconPath = new vscode.ThemeIcon('symbol-namespace');
+        this.iconPath = new vscode.ThemeIcon('library');
         this.tooltip = schema.name;
     }
 }
@@ -109,10 +109,23 @@ class FolderNode extends vscode.TreeItem {
         this.folder = folder;
         this.tableName = tableName;
         this.contextValue = folder.toLowerCase().replace(/\s+/g, '-');
-        this.iconPath = new vscode.ThemeIcon('folder');
+        this.iconPath = new vscode.ThemeIcon(folder === 'Materialized Views' ? 'symbol-structure' : 'folder');
     }
 }
 exports.FolderNode = FolderNode;
+class StaticFolderNode extends vscode.TreeItem {
+    connection;
+    name;
+    kind = 'static-folder';
+    constructor(connection, name, collapsibleState = vscode.TreeItemCollapsibleState.Collapsed) {
+        super(name, collapsibleState);
+        this.connection = connection;
+        this.name = name;
+        this.contextValue = name.toLowerCase().replace(/\s+/g, '-');
+        this.iconPath = new vscode.ThemeIcon(name === 'Query Files' ? 'files' : 'folder');
+    }
+}
+exports.StaticFolderNode = StaticFolderNode;
 class TableNode extends vscode.TreeItem {
     connection;
     table;
@@ -123,7 +136,7 @@ class TableNode extends vscode.TreeItem {
         this.table = table;
         this.description = table.rowEstimate !== undefined ? `~${table.rowEstimate}` : undefined;
         this.contextValue = 'table';
-        this.iconPath = new vscode.ThemeIcon('table');
+        this.iconPath = new vscode.ThemeIcon(table.type === 'materialized_view' ? 'symbol-structure' : 'table');
         this.tooltip = table.comment ? `${table.schema}.${table.name}\n${table.comment}` : `${table.schema}.${table.name}`;
         this.command = { command: 'database.openTableData', title: 'Open Table Data', arguments: [this] };
     }

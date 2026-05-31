@@ -121,33 +121,61 @@ class TableDataPanel {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${safeTable}</title>
   <style>
+    :root {
+      color-scheme: light dark;
+      --bg-main: var(--vscode-editor-background);
+      --bg-panel: var(--vscode-sideBar-background);
+      --bg-header: var(--vscode-editorWidget-background);
+      --bg-hover: var(--vscode-list-hoverBackground);
+      --bg-active: var(--vscode-list-activeSelectionBackground);
+      --bg-selected: var(--vscode-list-inactiveSelectionBackground);
+      --border: var(--vscode-panel-border);
+      --text-main: var(--vscode-editor-foreground);
+      --text-muted: var(--vscode-descriptionForeground);
+      --accent: var(--vscode-focusBorder);
+      --space-xxs: clamp(0.125rem, 0.1rem + 0.1vw, 0.25rem);
+      --space-xs: clamp(0.25rem, 0.2rem + 0.15vw, 0.375rem);
+      --space-sm: clamp(0.375rem, 0.3rem + 0.2vw, 0.5rem);
+      --space-md: clamp(0.5rem, 0.45rem + 0.3vw, 0.75rem);
+      --icon-size: clamp(0.9rem, 0.82rem + 0.25vw, 1.1rem);
+      --toolbar-button-size: clamp(1.55rem, 1.35rem + 0.55vw, 1.95rem);
+      --row-height: clamp(1.35rem, 1.25rem + 0.25vw, 1.55rem);
+      --radius-sm: 0.25rem;
+      font-family: var(--vscode-font-family);
+      font-size: clamp(0.75rem, 0.72rem + 0.15vw, 0.9rem);
+      line-height: 1.35;
+    }
+    * {
+      box-sizing: border-box;
+    }
     body {
       margin: 0;
-      color: var(--vscode-editor-foreground);
-      background: var(--vscode-editor-background);
+      color: var(--text-main);
+      background: var(--bg-main);
       font-family: var(--vscode-font-family);
-      font-size: var(--vscode-font-size);
       overflow: hidden;
     }
     .shell {
       height: 100vh;
       display: grid;
-      grid-template-rows: 48px 40px 1fr;
+      grid-template-rows: auto auto minmax(0, 1fr);
     }
     .toolbar {
       display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 0 12px;
-      border-bottom: 1px solid var(--vscode-panel-border);
-      background: var(--vscode-sideBar-background);
-      box-sizing: border-box;
+      gap: var(--space-xxs);
+      min-width: 0;
+      padding: var(--space-xs) var(--space-sm);
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-panel);
+      overflow-x: auto;
+      scrollbar-width: thin;
     }
     .toolbar-separator {
       width: 1px;
-      height: 28px;
-      margin: 0 8px;
-      background: var(--vscode-panel-border);
+      height: 1.15rem;
+      margin: 0 var(--space-xs);
+      background: var(--border);
     }
     .toolbar-spacer {
       flex: 1;
@@ -155,20 +183,19 @@ class TableDataPanel {
     .criteria-row {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      border-bottom: 1px solid var(--vscode-panel-border);
-      background: var(--vscode-editorWidget-background);
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-header);
     }
     .criteria {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: var(--space-xs);
       min-width: 0;
-      height: 40px;
-      padding: 0 12px;
-      color: var(--vscode-descriptionForeground);
-      background: var(--vscode-editorWidget-background);
-      border-right: 1px solid var(--vscode-panel-border);
-      box-sizing: border-box;
+      min-height: clamp(1.8rem, 1.6rem + 0.45vw, 2.2rem);
+      padding: var(--space-xxs) var(--space-sm);
+      color: var(--text-muted);
+      background: var(--bg-header);
+      border-right: 1px solid var(--border);
     }
     .criteria strong {
       color: var(--vscode-editor-foreground);
@@ -190,8 +217,8 @@ class TableDataPanel {
     .criteria input {
       flex: 1;
       min-width: 120px;
-      height: 28px;
-      padding: 0 6px;
+      height: var(--toolbar-button-size);
+      padding: 0 var(--space-sm);
       color: var(--vscode-input-foreground);
       background: transparent;
       border: 0;
@@ -204,20 +231,20 @@ class TableDataPanel {
     }
     button,
     select {
-      height: 28px;
+      height: var(--toolbar-button-size);
       align-self: center;
-      color: var(--vscode-editor-foreground);
+      color: var(--text-main);
       background: transparent;
       border: 1px solid transparent;
-      border-radius: 4px;
+      border-radius: var(--radius-sm);
       font: inherit;
-      padding: 0 8px;
+      padding: 0 var(--space-sm);
     }
     .icon-button {
-      width: 30px;
+      width: var(--toolbar-button-size);
       padding: 0;
-      color: var(--vscode-descriptionForeground);
-      font-size: 20px;
+      color: var(--text-muted);
+      font-size: var(--icon-size);
       line-height: 1;
     }
     .icon-button[data-tone="blue"] {
@@ -257,7 +284,7 @@ class TableDataPanel {
       position: relative;
       min-height: 0;
       overflow: hidden;
-      background: var(--vscode-editor-background);
+      background: var(--bg-main);
     }
     .grid {
       height: 100%;
@@ -272,32 +299,34 @@ class TableDataPanel {
       table-layout: fixed;
     }
     col.rownum-col {
-      width: 56px;
+      width: clamp(2.65rem, 2.35rem + 0.6vw, 3.5rem);
     }
     col.data-col {
-      width: 244px;
+      width: clamp(10rem, 18vw, 15rem);
     }
     thead th {
       position: sticky;
       top: 0;
       z-index: 2;
-      background: var(--vscode-editorWidget-background);
-      color: var(--vscode-editor-foreground);
+      background: var(--bg-header);
+      color: var(--text-main);
       font-weight: 600;
       text-align: left;
       vertical-align: top;
     }
     th,
     td {
-      height: 31px;
+      height: var(--row-height);
       box-sizing: border-box;
-      max-width: 244px;
-      padding: 3px 10px;
-      border-right: 1px solid var(--vscode-panel-border);
-      border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 60%, transparent);
+      max-width: clamp(10rem, 18vw, 15rem);
+      padding: 0.18rem var(--space-sm);
+      border-right: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 56%, transparent);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      font-family: var(--vscode-editor-font-family);
+      font-size: clamp(0.72rem, 0.7rem + 0.12vw, 0.86rem);
     }
     .header-button {
       display: flex;
@@ -375,11 +404,11 @@ class TableDataPanel {
       display: table-row;
     }
     .column-filter-row th {
-      top: 31px;
+      top: var(--row-height);
     }
     .column-filter-row input {
       width: 100%;
-      height: 24px;
+      height: calc(var(--row-height) - 0.2rem);
       box-sizing: border-box;
       color: var(--vscode-input-foreground);
       background: var(--vscode-input-background);
@@ -396,50 +425,50 @@ class TableDataPanel {
       position: sticky;
       left: 0;
       z-index: 3;
-      min-width: 52px;
-      width: 56px;
-      color: var(--vscode-descriptionForeground);
+      min-width: clamp(2.65rem, 2.35rem + 0.6vw, 3.5rem);
+      width: clamp(2.65rem, 2.35rem + 0.6vw, 3.5rem);
+      color: var(--text-muted);
       text-align: right;
-      background: var(--vscode-editorWidget-background);
+      background: var(--bg-header);
     }
     tbody tr:nth-child(even) {
       background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-editor-foreground));
     }
     tbody tr.selected-row td,
     tbody tr.selected-row th {
-      background: var(--vscode-list-inactiveSelectionBackground);
+      background: var(--bg-selected);
     }
     th.selected-column,
     td.selected-column {
       background: color-mix(in srgb, var(--vscode-list-activeSelectionBackground) 55%, transparent);
     }
     td.selected-cell {
-      background: var(--vscode-list-activeSelectionBackground);
+      background: var(--bg-active);
       color: var(--vscode-list-activeSelectionForeground);
-      outline: 1px solid var(--vscode-focusBorder);
+      outline: 1px solid var(--accent);
       outline-offset: -1px;
     }
     td.null {
-      color: var(--vscode-descriptionForeground);
+      color: var(--text-muted);
       font-style: italic;
     }
     .pager {
       position: absolute;
       left: 50%;
-      bottom: 10px;
+      bottom: var(--space-sm);
       z-index: 5;
       transform: translateX(-50%);
-      font-size: 12px;
+      font-size: .86em;
     }
     .pager-group {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      height: 36px;
-      padding: 0 12px;
-      border: 1px solid var(--vscode-panel-border);
-      border-radius: 9px;
-      background: var(--vscode-editorWidget-background);
+      gap: var(--space-xs);
+      height: clamp(1.9rem, 1.65rem + 0.45vw, 2.35rem);
+      padding: 0 var(--space-sm);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg-header);
       box-shadow: 0 6px 18px rgba(0, 0, 0, .28);
     }
     .page-size {
@@ -448,11 +477,11 @@ class TableDataPanel {
       background: transparent;
     }
     .pager-button {
-      width: 28px;
-      height: 28px;
+      width: var(--toolbar-button-size);
+      height: var(--toolbar-button-size);
       padding: 0;
-      color: var(--vscode-descriptionForeground);
-      font-size: 19px;
+      color: var(--text-muted);
+      font-size: var(--icon-size);
     }
     .pager-button:disabled {
       opacity: .38;

@@ -41,13 +41,39 @@ class QueryOutputService {
     lineCounts = new Map();
     record(connection, tab) {
         this.channelFor(connection);
-        this.ensureCapacity(connection.id, 4 + (tab.error ? 2 : 0));
+        this.ensureCapacity(connection.id, 3 + (tab.error ? 2 : 0));
         this.append(connection.id, `[${new Date(tab.executionStartedAt).toLocaleTimeString()}] ${tab.executionStatus.toUpperCase()} ${tab.executionTimeMs ?? 0}ms ${tab.rowCount ?? 0} rows - ${tab.title}`);
-        this.append(connection.id, this.compactSql(tab.queryText));
         if (tab.error) {
             this.append(connection.id, `ERROR ${tab.error.code ? `${tab.error.code}: ` : ''}${tab.error.message}`);
         }
         this.append(connection.id, '');
+    }
+    recordExecutionStarted(connection, fileName, statementCount) {
+        this.channelFor(connection);
+        this.ensureCapacity(connection.id, 4);
+        this.append(connection.id, `[${new Date().toLocaleTimeString()}] RUNNING ${statementCount} statement${statementCount === 1 ? '' : 's'}${fileName ? ` - ${fileName}` : ''}`);
+    }
+    recordProgress(connection, progress) {
+        this.channelFor(connection);
+        if (progress.status === 'started') {
+            this.ensureCapacity(connection.id, this.lineCount(progress.sql) + 4);
+            this.append(connection.id, `[${new Date().toLocaleTimeString()}] statement ${progress.statementIndex + 1}/${progress.statementCount} running`);
+            this.appendMultiline(connection.id, progress.sql);
+            return;
+        }
+        this.ensureCapacity(connection.id, 3 + (progress.errorMessage ? 1 : 0));
+        const duration = progress.durationMs !== undefined ? `${progress.durationMs}ms` : 'unknown duration';
+        if (progress.status === 'completed') {
+            const rows = progress.rowCount !== undefined ? ` - ${progress.rowCount} rows` : '';
+            const command = progress.command ? ` - ${progress.command}` : '';
+            this.append(connection.id, `[${new Date().toLocaleTimeString()}] statement ${progress.statementIndex + 1}/${progress.statementCount} completed in ${duration}${rows}${command}`);
+        }
+        else {
+            this.append(connection.id, `[${new Date().toLocaleTimeString()}] statement ${progress.statementIndex + 1}/${progress.statementCount} failed in ${duration}`);
+            if (progress.errorMessage) {
+                this.append(connection.id, `ERROR ${progress.errorMessage}`);
+            }
+        }
     }
     show(connection, preserveFocus = true) {
         this.channelFor(connection).show(preserveFocus);
@@ -82,6 +108,11 @@ class QueryOutputService {
         channel.appendLine(line);
         this.lineCounts.set(connectionId, (this.lineCounts.get(connectionId) ?? 0) + 1);
     }
+    appendMultiline(connectionId, text) {
+        for (const line of text.split(/\r?\n/)) {
+            this.append(connectionId, `  ${line}`);
+        }
+    }
     ensureCapacity(connectionId, incomingLines) {
         const channel = this.channels.get(connectionId);
         if (!channel) {
@@ -96,9 +127,8 @@ class QueryOutputService {
         this.append(connectionId, `[${new Date().toLocaleTimeString()}] Output truncated to keep memory bounded.`);
         this.append(connectionId, '');
     }
-    compactSql(sql) {
-        const compact = sql.replace(/\s+/g, ' ').trim();
-        return compact.length > 500 ? `${compact.slice(0, 497)}...` : compact;
+    lineCount(text) {
+        return text.split(/\r?\n/).length;
     }
 }
 exports.QueryOutputService = QueryOutputService;

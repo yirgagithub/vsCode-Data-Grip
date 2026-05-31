@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ConnectionConfig, QueryConsoleRecord } from '../types';
 import { createId } from '../utils/id';
+import { partitionExistingConsoleRecords } from './queryConsoleRecords';
 
 const CONSOLES_KEY = 'database.queryConsoles';
 
@@ -9,6 +10,19 @@ export class QueryConsoleStore {
 
   getAll(): QueryConsoleRecord[] {
     return this.context.workspaceState.get<QueryConsoleRecord[]>(CONSOLES_KEY, []);
+  }
+
+  async pruneMissingDocuments(): Promise<number> {
+    const records = this.getAll();
+    const { existing, missing } = await partitionExistingConsoleRecords(
+      records,
+      (documentUri) => this.documentExists(documentUri)
+    );
+
+    if (missing.length) {
+      await this.context.workspaceState.update(CONSOLES_KEY, existing);
+    }
+    return missing.length;
   }
 
   getByConnection(connectionId: string): QueryConsoleRecord | undefined {
@@ -116,6 +130,14 @@ export class QueryConsoleStore {
     await this.context.workspaceState.update(CONSOLES_KEY, this.getAll().filter((record) => record.id !== id));
   }
 
+  async deleteMany(ids: string[]): Promise<void> {
+    const idSet = new Set(ids);
+    if (!idSet.size) {
+      return;
+    }
+    await this.context.workspaceState.update(CONSOLES_KEY, this.getAll().filter((record) => !idSet.has(record.id)));
+  }
+
   private async save(record: QueryConsoleRecord): Promise<void> {
     const records = this.getAll().filter((existing) => existing.id !== record.id);
     records.push(record);
@@ -154,7 +176,7 @@ export class QueryConsoleStore {
     } catch {
       await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
       if (!vscode.workspace.workspaceFolders?.length) {
-        void vscode.window.showWarningMessage('No workspace is open. Query console files are stored in extension storage.');
+        void vscode.window.showInformationMessage('No workspace is open. Query console files are stored in extension storage; SQL autocomplete still works after metadata warms.');
       }
     }
   }
@@ -167,5 +189,24 @@ export class QueryConsoleStore {
 
   private safeName(value: string): string {
     return value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'sql-console';
+  }
+
+  private async documentExists(documentUri: string): Promise<boolean> {
+    try {
+      await vscode.workspace.fs.stat(vscode.Uri.parse(documentUri));
+      return true;
+    } catch (error) {
+      return !this.isFileNotFound(error);
+    }
+  }
+
+  private isFileNotFound(error: unknown): boolean {
+    const code = error instanceof vscode.FileSystemError
+      ? error.code
+      : typeof error === 'object' && error !== null
+        ? (error as { code?: unknown }).code
+        : undefined;
+    const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+    return code === 'FileNotFound' || /\b(FileNotFound|ENOENT)\b/i.test(message);
   }
 }

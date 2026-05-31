@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
+  <style>
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .arc { animation: spin .8s linear infinite; transform-origin: 8px 8px; }
+  </style>
+  <circle cx="8" cy="8" r="5.6" stroke="#f2c94c" stroke-width="2" opacity=".25"/>
+  <path class="arc" d="M8 2.4a5.6 5.6 0 0 1 5.6 5.6" stroke="#f2c94c" stroke-width="2" stroke-linecap="round"/>
+</svg>

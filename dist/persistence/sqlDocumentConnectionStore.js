@@ -15,9 +15,30 @@ class SqlDocumentConnectionStore {
         return this.getAll().find((record) => record.documentUri === documentUri);
     }
     async set(documentUri, connectionId) {
+        const existing = this.get(documentUri);
         const records = this.getAll().filter((record) => record.documentUri !== documentUri);
-        records.push({ documentUri, connectionId, updatedAt: Date.now() });
+        records.push({ ...existing, documentUri, connectionId, updatedAt: Date.now() });
         await this.context.workspaceState.update(SQL_DOCUMENT_CONNECTIONS_KEY, records.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_SQL_DOCUMENT_CONNECTIONS));
+    }
+    async markExecuted(documentUri, connectionId, range) {
+        const now = Date.now();
+        const existing = this.get(documentUri);
+        const records = this.getAll().filter((record) => record.documentUri !== documentUri);
+        records.push({
+            ...existing,
+            documentUri,
+            connectionId,
+            lastExecutedRange: range,
+            lastTouchedAt: now,
+            updatedAt: now
+        });
+        await this.context.workspaceState.update(SQL_DOCUMENT_CONNECTIONS_KEY, records.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_SQL_DOCUMENT_CONNECTIONS));
+    }
+    async touch(documentUri) {
+        const now = Date.now();
+        await this.context.workspaceState.update(SQL_DOCUMENT_CONNECTIONS_KEY, this.getAll().map((record) => record.documentUri === documentUri
+            ? { ...record, lastTouchedAt: now, updatedAt: now }
+            : record));
     }
     async delete(documentUri) {
         await this.context.workspaceState.update(SQL_DOCUMENT_CONNECTIONS_KEY, this.getAll().filter((record) => record.documentUri !== documentUri));

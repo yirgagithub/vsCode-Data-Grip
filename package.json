@@ -24,6 +24,7 @@
     "onCommand:database.openSqlConsole",
     "onCommand:database.openQueryFile",
     "onCommand:database.setSqlFileConnection",
+    "onCommand:database.showSqlMetadataStatus",
     "onCommand:database.executeCurrentQuery",
     "onCommand:database.executeSelection",
     "onCommand:database.executeFile",
@@ -70,33 +71,15 @@
         "category": "Database"
       },
       {
-        "command": "database.executeCurrentQuery",
-        "title": "Run SQL",
-        "category": "Database",
-        "icon": "$(play)"
-      },
-      {
         "command": "database.showResults",
         "title": "Show SQL Results",
         "category": "Database"
       },
       {
-        "command": "database.executeSelection",
-        "title": "Run Selected SQL",
-        "category": "Database",
-        "icon": "$(run)"
-      },
-      {
         "command": "database.executeFile",
-        "title": "Run Script",
+        "title": "Execute File",
         "category": "Database",
         "icon": "$(run-all)"
-      },
-      {
-        "command": "database.executeStatementRange",
-        "title": "Run Query",
-        "category": "Database",
-        "icon": "$(play)"
       },
       {
         "command": "database.cancelCurrentQuery",
@@ -119,6 +102,11 @@
         "title": "Set SQL File Connection",
         "category": "Database",
         "icon": "$(database)"
+      },
+      {
+        "command": "database.showSqlMetadataStatus",
+        "title": "Show SQL Metadata Status",
+        "category": "Database"
       },
       {
         "command": "database.focusResults",
@@ -593,6 +581,10 @@
           "group": "inspect@2"
         },
         {
+          "command": "database.showSqlMetadataStatus",
+          "group": "inspect@3"
+        },
+        {
           "command": "database.showQueryHistory",
           "group": "history@1"
         },
@@ -620,25 +612,19 @@
           "group": "navigation@0"
         },
         {
-          "command": "database.executeCurrentQuery",
-          "when": "editorLangId == sql",
-          "group": "navigation@1"
-        },
-        {
-          "command": "database.executeSelection",
-          "when": "editorLangId == sql && editorHasSelection",
-          "icon": "$(run)",
-          "group": "navigation@2"
-        },
-        {
           "command": "database.executeFile",
           "when": "editorLangId == sql",
-          "group": "navigation@3"
+          "group": "navigation@1"
         },
         {
           "command": "database.findPastQuery",
           "when": "editorLangId == sql",
           "group": "history@1"
+        },
+        {
+          "command": "database.showSqlMetadataStatus",
+          "when": "editorLangId == sql",
+          "group": "inspect@1"
         },
         {
           "command": "database.aiFixSql",
@@ -658,39 +644,27 @@
           "group": "navigation@0"
         },
         {
-          "command": "database.executeCurrentQuery",
-          "when": "editorLangId == sql",
-          "group": "navigation@1"
-        },
-        {
-          "command": "database.executeSelection",
-          "when": "editorLangId == sql",
-          "icon": "$(run)",
-          "group": "navigation@2"
-        },
-        {
           "command": "database.executeFile",
           "when": "editorLangId == sql",
-          "group": "navigation@3"
+          "group": "navigation@1"
         },
         {
           "command": "database.findPastQuery",
           "when": "editorLangId == sql",
           "group": "history@1"
+        },
+        {
+          "command": "database.showSqlMetadataStatus",
+          "when": "editorLangId == sql",
+          "group": "inspect@1"
         }
       ]
     },
     "keybindings": [
       {
-        "command": "database.executeCurrentQuery",
+        "command": "database.executeFile",
         "key": "ctrl+enter",
         "mac": "cmd+enter",
-        "when": "editorTextFocus && editorLangId == sql"
-      },
-      {
-        "command": "database.executeFile",
-        "key": "ctrl+shift+enter",
-        "mac": "cmd+shift+enter",
         "when": "editorTextFocus && editorLangId == sql"
       },
       {

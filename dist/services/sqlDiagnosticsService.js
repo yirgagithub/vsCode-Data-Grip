@@ -50,13 +50,14 @@ class SqlDiagnosticsService {
         if (!connection) {
             return diagnostics;
         }
-        diagnostics.push(...await this.getSchemaDiagnostics(document, connection));
+        const scriptRelations = this.collectCreatedRelationNames(document);
+        diagnostics.push(...await this.getSchemaDiagnostics(document, connection, scriptRelations));
         if (this.connectionManager.isConnected(connection.id)) {
             const executable = selection
                 ? this.sectionService.detectExecutable(document, selection)
                 : this.sectionService.getSections(document)[0];
             if (executable?.sql.trim()) {
-                const plannerDiagnostic = await this.getPlannerDiagnostic(document, connection, executable);
+                const plannerDiagnostic = await this.getPlannerDiagnostic(document, connection, executable, scriptRelations);
                 if (plannerDiagnostic) {
                     diagnostics.push(plannerDiagnostic);
                 }
@@ -64,20 +65,21 @@ class SqlDiagnosticsService {
         }
         return diagnostics;
     }
-    async getSchemaDiagnostics(document, connection) {
+    async getSchemaDiagnostics(document, connection, scriptRelations) {
         const diagnostics = [];
         const defaultSchema = connection.defaultSchema ?? 'public';
-        const entry = this.connectionManager.isConnected(connection.id)
-            ? await this.schemaContext.loadDefaultSchema(connection)
-            : this.schemaContext.getCached(connection.id, defaultSchema);
+        const entry = await this.schemaContext.getCachedForConnection(connection, defaultSchema);
         if (!entry || entry.status !== 'ready') {
+            if (this.connectionManager.isConnected(connection.id)) {
+                this.schemaContext.refreshDefaultSchemaInBackground(connection);
+            }
             return diagnostics;
         }
         const knownRelations = new Set([...entry.tables, ...entry.views].map((item) => this.relationKey(item.schema, item.name)));
         const cteNames = this.collectCteNames(this.sectionService.getTree(document));
         for (const section of this.sectionService.getSections(document)) {
             for (const alias of section.aliases) {
-                if (cteNames.has(alias.table.toLowerCase())) {
+                if (cteNames.has(alias.table.toLowerCase()) || this.isScriptRelation(alias, scriptRelations)) {
                     continue;
                 }
                 const schema = alias.schema ?? defaultSchema;
@@ -85,11 +87,11 @@ class SqlDiagnosticsService {
                     diagnostics.push(new vscode.Diagnostic(this.findIdentifierRange(document, section, alias.schema ? `${alias.schema}.${alias.table}` : alias.table), `Table or view "${alias.schema ? `${alias.schema}.` : ''}${alias.table}" does not exist in ${schema}.`, vscode.DiagnosticSeverity.Error));
                 }
             }
-            diagnostics.push(...await this.getColumnDiagnostics(document, connection, section, cteNames));
+            diagnostics.push(...await this.getColumnDiagnostics(document, connection, section, cteNames, scriptRelations));
         }
         return diagnostics;
     }
-    async getColumnDiagnostics(document, connection, section, cteNames) {
+    async getColumnDiagnostics(document, connection, section, cteNames, scriptRelations) {
         const diagnostics = [];
         const defaultSchema = connection.defaultSchema ?? 'public';
         const aliases = new Map(section.aliases.map((alias) => [alias.alias.toLowerCase(), alias]));
@@ -100,7 +102,7 @@ class SqlDiagnosticsService {
             const qualifier = match[1] ?? match[2];
             const column = match[3] ?? match[4];
             const alias = aliases.get(qualifier.toLowerCase());
-            if (!alias || cteNames.has(alias.table.toLowerCase())) {
+            if (!alias || cteNames.has(alias.table.toLowerCase()) || this.isScriptRelation(alias, scriptRelations)) {
                 continue;
             }
             const key = `${alias.schema ?? defaultSchema}.${alias.table}.${column}`.toLowerCase();
@@ -108,8 +110,11 @@ class SqlDiagnosticsService {
                 continue;
             }
             seen.add(key);
-            const columns = await this.tryGetColumns(connection, alias.schema ?? defaultSchema, alias.table);
+            const columns = await this.schemaContext.getCachedColumns(connection, alias.schema ?? defaultSchema, alias.table);
             if (!columns) {
+                if (this.connectionManager.isConnected(connection.id)) {
+                    this.schemaContext.refreshSchemaInBackground(connection, alias.schema ?? defaultSchema);
+                }
                 continue;
             }
             if (!columns.some((item) => item.name.toLowerCase() === column.toLowerCase())) {
@@ -119,7 +124,10 @@ class SqlDiagnosticsService {
         }
         return diagnostics;
     }
-    async getPlannerDiagnostic(document, connection, section) {
+    async getPlannerDiagnostic(document, connection, section, scriptRelations) {
+        if (section.aliases.some((alias) => this.isScriptRelation(alias, scriptRelations))) {
+            return undefined;
+        }
         let result;
         try {
             result = await this.connectionManager.getDriver(connection.type).validateQuery({
@@ -140,6 +148,30 @@ class SqlDiagnosticsService {
         const start = section.start + Math.max(0, index);
         return new vscode.Range(document.positionAt(start), document.positionAt(start + identifier.length));
     }
+    collectCreatedRelationNames(document) {
+        const relations = new Set();
+        const regex = /\bcreate\s+(?:temporary\s+|temp\s+)?table\s+(?:if\s+not\s+exists\s+)?((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)/gi;
+        const text = document.getText();
+        let match;
+        while ((match = regex.exec(text)) !== null) {
+            const [schema, table] = this.splitQualified(match[1]);
+            relations.add(table.toLowerCase());
+            if (schema) {
+                relations.add(this.relationKey(schema, table));
+            }
+        }
+        return relations;
+    }
+    isScriptRelation(alias, scriptRelations) {
+        if (scriptRelations.has(alias.table.toLowerCase())) {
+            return !alias.schema || alias.schema.toLowerCase() === 'pg_temp';
+        }
+        return alias.schema ? scriptRelations.has(this.relationKey(alias.schema, alias.table)) : false;
+    }
+    splitQualified(value) {
+        const parts = value.split('.').map((part) => part.replace(/^"|"$/g, ''));
+        return parts.length > 1 ? [parts[0], parts[1]] : [undefined, parts[0]];
+    }
     errorRange(document, section, error) {
         const offset = Number(error.position);
         if (Number.isFinite(offset) && offset > 0) {
@@ -152,14 +184,6 @@ class SqlDiagnosticsService {
     }
     errorMessage(error) {
         return [error.message, error.detail, error.hint].filter(Boolean).join('\n');
-    }
-    async tryGetColumns(connection, schema, table) {
-        try {
-            return await this.schemaContext.getColumns(connection, schema, table);
-        }
-        catch {
-            return undefined;
-        }
     }
     relationKey(schema, table) {
         return `${schema}.${table}`.toLowerCase();

@@ -1,10 +1,76 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parseQueryMemorySummaryText } from '../src/ai/queryMemorySummaryParser';
+import { ConnectionManager } from '../src/database/connectionManager';
+import { QueryExecutor } from '../src/database/queryExecutor';
+import { splitSqlStatements } from '../src/database/sqlSplitter';
+import { PostgresDriver } from '../src/database/drivers/postgresDriver';
 import { resolveDocumentConnection } from '../src/services/documentConnectionResolver';
+import { connectionDefaultsForType } from '../src/services/connectionDefaults';
+import { executionOriginForDocument, isQueryConsoleHistoryItem, isQueryConsoleMemoryItem, queryConsoleDocumentUris } from '../src/services/queryConsoleHistory';
 import { extractQualifiedColumns, extractQueryTables, outputColumnNames } from '../src/services/queryMemoryMetadata';
 import { QueryMemorySearch } from '../src/services/queryMemorySearch';
+import { SchemaContextService } from '../src/services/schemaContextService';
+import { connectionMetadataFingerprint, parseStoredSchemaCacheEntry, SCHEMA_METADATA_CACHE_VERSION, serializeSchemaCacheEntry } from '../src/services/schemaMetadataCacheStore';
+import { SqlDiagnosticsService } from '../src/services/sqlDiagnosticsService';
+import { relationCompletionCandidates, relationCompletionContext, selectListColumnCompletionContext } from '../src/services/sqlMetadataCompletion';
+import { connectAndRefreshSqlMetadata } from '../src/services/sqlMetadataWarmup';
 import { SqlSafetyClassifier } from '../src/services/sqlSafetyClassifier';
-import { ConnectionConfig, QueryConsoleRecord, QueryMemoryItem } from '../src/types';
+import { SqlSectionService } from '../src/services/sqlSectionService';
+import { shouldRunSelectionForStatement } from '../src/services/sqlSelectionExecution';
+import { partitionExistingConsoleRecords } from '../src/persistence/queryConsoleRecords';
+import { ResultsPanelProvider } from '../src/webviews/results/ResultsPanelProvider';
+import { ConnectionConfig, QueryConsoleRecord, QueryHistoryItem, QueryMemoryItem, QueryResultTab, SchemaCacheEntry } from '../src/types';
+
+vi.mock('vscode', () => ({
+  commands: {
+    executeCommand: vi.fn(async () => undefined)
+  },
+  workspace: {
+    getConfiguration: vi.fn(() => ({
+      get: vi.fn((_key: string, fallback: unknown) => fallback)
+    }))
+  },
+  Diagnostic: class {
+    constructor(public range: unknown, public message: string, public severity: number) {}
+  },
+  DiagnosticSeverity: {
+    Error: 0
+  },
+  EventEmitter: class {
+    event = vi.fn();
+    fire = vi.fn();
+    dispose = vi.fn();
+  },
+  Position: class {
+    constructor(public line: number, public character: number) {}
+    compareTo(other: { line: number; character: number }) {
+      return this.line - other.line || this.character - other.character;
+    }
+  },
+  Range: class {
+    start: { line: number; character: number };
+    end: { line: number; character: number };
+
+    constructor(start: { line: number; character: number }, end: { line: number; character: number }) {
+      this.start = start;
+      this.end = end;
+    }
+
+    get isEmpty() {
+      return this.start.line === this.end.line && this.start.character === this.end.character;
+    }
+
+    isEqual(other: { start: { line: number; character: number }; end: { line: number; character: number } }) {
+      return this.start.line === other.start.line
+        && this.start.character === other.start.character
+        && this.end.line === other.end.line
+        && this.end.character === other.end.character;
+    }
+  },
+  Uri: {
+    joinPath: vi.fn((...parts: unknown[]) => ({ parts }))
+  }
+}));
 
 describe('SqlSafetyClassifier', () => {
   const classifier = new SqlSafetyClassifier();
@@ -24,6 +90,187 @@ describe('SqlSafetyClassifier', () => {
   it('builds preview sql for risky writes', () => {
     expect(classifier.previewSql('delete from invoices where customer_id = 10')).toContain('select *');
     expect(classifier.previewSql('update public.users set active = false where id = 1')).toContain('where id = 1');
+  });
+});
+
+describe('SQL statement splitting', () => {
+  it('splits a selected block into multiple executable statements', () => {
+    const statements = splitSqlStatements(`select *
+from public.adjust_offer
+limit 100;
+
+select * from public.appsflyer_offer;`);
+
+    expect(statements.map((statement) => statement.sql)).toEqual([
+      'select *\nfrom public.adjust_offer\nlimit 100',
+      'select * from public.appsflyer_offer'
+    ]);
+  });
+
+  it('runs a multi-statement selection when the code lens range only overlaps it', () => {
+    const selectedSql = `select network_offer_id
+from adjust_offer;
+
+select * from public.appsflyer_offer;`;
+
+    expect(shouldRunSelectionForStatement([
+      {
+        sql: selectedSql,
+        range: textRange(3, 0, 6, 38)
+      }
+    ], textRange(0, 0, 4, 18))).toBe(true);
+  });
+
+  it('does not let a single-token selection override a code lens run', () => {
+    expect(shouldRunSelectionForStatement([
+      {
+        sql: 'network_offer_id',
+        range: textRange(3, 7, 3, 23)
+      }
+    ], textRange(0, 0, 4, 18))).toBe(false);
+  });
+});
+
+describe('QueryExecutor batch execution', () => {
+  it('executes multi-statement SQL through one driver batch so temp tables and transactions share a session', async () => {
+    const local = connection({ id: 'local' });
+    const executeStatements = vi.fn(async (_params, statements: string[]) => statements.map((sql, index) => ({
+      executionId: `execution-${index}`,
+      fields: [],
+      rows: [],
+      rowCount: 0,
+      command: sql.split(/\s+/)[0]?.toUpperCase(),
+      durationMs: 1
+    })));
+    const manager = {
+      getConnection: vi.fn(() => local),
+      isConnected: vi.fn(() => true),
+      connect: vi.fn(),
+      getDriver: vi.fn(() => ({ executeStatements }))
+    };
+    const executor = new QueryExecutor(
+      manager as never,
+      { add: vi.fn() } as never,
+      undefined,
+      safeClassifier() as never
+    );
+    const sql = 'begin; create temp table t as select 1 as id; select * from t; commit;';
+
+    const tab = await executor.execute({ connectionId: local.id, sql });
+
+    expect(executeStatements).toHaveBeenCalledTimes(1);
+    expect(executeStatements.mock.calls[0][1]).toEqual([
+      'begin',
+      'create temp table t as select 1 as id',
+      'select * from t',
+      'commit'
+    ]);
+    expect(tab.executionStatus).toBe('completed');
+    expect(tab.resultSets).toHaveLength(4);
+  });
+});
+
+describe('PostgresDriver result normalization', () => {
+  it('does not crash when a command result omits fields and rows', async () => {
+    const driver = new StubPostgresDriver([{ command: 'CREATE', rowCount: null }]);
+
+    const [result] = await driver.executeStatements(
+      { connectionId: 'local', sql: 'create temp table t as select 1' },
+      ['create temp table t as select 1']
+    );
+
+    expect(result.fields).toEqual([]);
+    expect(result.rows).toEqual([]);
+    expect(result.rowCount).toBe(0);
+    expect(result.command).toBe('CREATE');
+  });
+
+  it('emits statement progress for each statement in a batch', async () => {
+    const driver = new StubPostgresDriver([
+      { command: 'SELECT', rowCount: 1, fields: [], rows: [{ id: 1 }] },
+      { command: 'INSERT', rowCount: 2, fields: [], rows: [] }
+    ]);
+    const onProgress = vi.fn();
+    const firstSql = 'select *\nfrom users';
+    const secondSql = 'insert into audit_log select * from users';
+
+    await driver.executeStatements(
+      { connectionId: 'local', sql: `${firstSql}; ${secondSql};`, onProgress },
+      [firstSql, secondSql]
+    );
+
+    expect(onProgress.mock.calls.map(([progress]) => progress.status)).toEqual([
+      'started',
+      'completed',
+      'started',
+      'completed'
+    ]);
+    expect(onProgress.mock.calls.map(([progress]) => progress.sql)).toEqual([
+      firstSql,
+      firstSql,
+      secondSql,
+      secondSql
+    ]);
+    expect(onProgress.mock.calls[1][0]).toMatchObject({ statementIndex: 0, statementCount: 2, rowCount: 1, command: 'SELECT' });
+    expect(onProgress.mock.calls[3][0]).toMatchObject({ statementIndex: 1, statementCount: 2, rowCount: 2, command: 'INSERT' });
+  });
+});
+
+describe('ResultsPanelProvider', () => {
+  it('keeps forced result tabs separate when executing a selected SQL batch', async () => {
+    const savedTabs: QueryResultTab[][] = [];
+    const provider = new ResultsPanelProvider(
+      { extensionUri: {} } as never,
+      {
+        getTabs: () => [],
+        saveTabs: async (tabs: QueryResultTab[]) => {
+          savedTabs.push(tabs);
+        }
+      } as never,
+      {} as never
+    );
+
+    await provider.addTab(resultTab({
+      id: 'tab-adjust',
+      title: 'SELECT public.adjust_offer',
+      queryText: 'select * from public.adjust_offer limit 100'
+    }), { forceNew: true });
+    await provider.addTab(resultTab({
+      id: 'tab-appsflyer',
+      title: 'SELECT public.appsflyer_offer',
+      queryText: 'select * from public.appsflyer_offer'
+    }), { forceNew: true });
+
+    expect(provider.getTabs().map((tab) => tab.queryText)).toEqual([
+      'select * from public.adjust_offer limit 100',
+      'select * from public.appsflyer_offer'
+    ]);
+    expect(savedTabs.at(-1)?.map((tab) => tab.id)).toEqual(['tab-adjust', 'tab-appsflyer']);
+  });
+
+  it('lets the result toolbar run an active multi-statement editor selection before rerunning a tab', async () => {
+    const executor = { execute: vi.fn() };
+    const runActiveSelection = vi.fn(async () => true);
+    const provider = new ResultsPanelProvider(
+      { extensionUri: {} } as never,
+      {
+        getTabs: () => [resultTab({ id: 'tab-adjust', queryText: 'select * from public.adjust_offer' })],
+        saveTabs: vi.fn()
+      } as never,
+      executor as never,
+      undefined,
+      undefined,
+      runActiveSelection
+    );
+
+    await (provider as never as { onMessage(message: unknown): Promise<void> }).onMessage({
+      type: 'rerunTab',
+      tabId: 'tab-adjust',
+      maxRows: 1000
+    });
+
+    expect(runActiveSelection).toHaveBeenCalledWith(1000);
+    expect(executor.execute).not.toHaveBeenCalled();
   });
 });
 
@@ -99,6 +346,414 @@ describe('resolveDocumentConnection', () => {
   });
 });
 
+describe('connection defaults', () => {
+  it('uses Redshift connection defaults that match the Redshift endpoint shape', () => {
+    expect(connectionDefaultsForType('redshift')).toMatchObject({
+      port: '5439',
+      database: 'dev',
+      sslMode: 'require'
+    });
+  });
+
+  it('keeps PostgreSQL defaults separate from Redshift defaults', () => {
+    expect(connectionDefaultsForType('postgres')).toMatchObject({
+      port: '5432',
+      database: 'postgres',
+      sslMode: 'prefer'
+    });
+  });
+});
+
+describe('ConnectionManager', () => {
+  it('reconnects an active connection after saving timeout changes', async () => {
+    let saved = connection({ id: 'dwh', type: 'redshift', queryTimeoutMs: 300000 });
+    const store = {
+      getAll: vi.fn(() => [saved]),
+      save: vi.fn(async (config) => {
+        const { password: _password, ...metadata } = config;
+        saved = metadata;
+      }),
+      withPassword: vi.fn(async (config) => ({ ...config, password: 'secret' })),
+      setSelectedConnectionId: vi.fn(),
+      getSelectedConnectionId: vi.fn(() => saved.id),
+      delete: vi.fn()
+    };
+    const driver = {
+      id: 'redshift',
+      displayName: 'Redshift',
+      connect: vi.fn(async (config) => ({ id: config.id, config, connectedAt: Date.now() })),
+      disconnect: vi.fn()
+    };
+    const manager = new ConnectionManager(store as never);
+    (manager as unknown as { drivers: Map<string, unknown> }).drivers.set('redshift', driver);
+
+    await manager.connect(saved.id);
+    await manager.save({ ...saved, queryTimeoutMs: 1800000, password: 'secret' });
+
+    expect(driver.connect).toHaveBeenCalledTimes(2);
+    expect(driver.connect.mock.calls[1][0].queryTimeoutMs).toBe(1800000);
+    expect(manager.getActiveConnections()[0].config.queryTimeoutMs).toBe(1800000);
+  });
+});
+
+describe('partitionExistingConsoleRecords', () => {
+  it('separates stale query console records from existing SQL files', async () => {
+    const records = [
+      consoleFor('file:///workspace/.vscode-data-grip/live.sql', 'local'),
+      consoleFor('file:///workspace/.vscode-data-grip/missing.sql', 'local')
+    ];
+
+    const result = await partitionExistingConsoleRecords(
+      records,
+      async (documentUri) => !documentUri.endsWith('/missing.sql')
+    );
+
+    expect(result.existing.map((record) => record.documentUri)).toEqual(['file:///workspace/.vscode-data-grip/live.sql']);
+    expect(result.missing.map((record) => record.documentUri)).toEqual(['file:///workspace/.vscode-data-grip/missing.sql']);
+  });
+});
+
+describe('query console history filters', () => {
+  const consoleUris = queryConsoleDocumentUris([
+    consoleFor('file:///workspace/.vscode-data-grip/local.sql', 'local')
+  ]);
+
+  it('classifies executions from tracked consoles separately from project sql files', () => {
+    expect(executionOriginForDocument('file:///workspace/.vscode-data-grip/local.sql', consoleUris)).toBe('queryConsole');
+    expect(executionOriginForDocument('file:///workspace/project/report.sql', consoleUris)).toBe('sqlFile');
+  });
+
+  it('keeps only query console history, including legacy records from tracked consoles', () => {
+    const consoleHistory = historyFor({ documentUri: 'file:///workspace/.vscode-data-grip/local.sql' });
+    const legacyConsoleHistory = historyFor({ documentUri: 'file:///old-workspace/.vscode-data-grip/deleted-console.sql' });
+    const projectHistory = historyFor({ documentUri: 'file:///workspace/project/report.sql' });
+    const taggedConsoleHistory = historyFor({ sourceOrigin: 'queryConsole', documentUri: 'file:///workspace/project/report.sql' });
+    const taggedProjectHistory = historyFor({ sourceOrigin: 'sqlFile', documentUri: 'file:///workspace/.vscode-data-grip/local.sql' });
+
+    expect(isQueryConsoleHistoryItem(consoleHistory, consoleUris)).toBe(true);
+    expect(isQueryConsoleHistoryItem(legacyConsoleHistory, consoleUris)).toBe(true);
+    expect(isQueryConsoleHistoryItem(projectHistory, consoleUris)).toBe(false);
+    expect(isQueryConsoleHistoryItem(taggedConsoleHistory, consoleUris)).toBe(true);
+    expect(isQueryConsoleHistoryItem(taggedProjectHistory, consoleUris)).toBe(false);
+  });
+
+  it('keeps query memory search scoped to query console-backed records', () => {
+    expect(isQueryConsoleMemoryItem(memory({ documentUri: 'file:///workspace/.vscode-data-grip/local.sql' }), consoleUris)).toBe(true);
+    expect(isQueryConsoleMemoryItem(memory({ documentUri: 'file:///workspace/project/report.sql' }), consoleUris)).toBe(false);
+  });
+});
+
+describe('schema metadata cache', () => {
+  it('fingerprints connection identity fields and rejects incompatible snapshots', () => {
+    const local = connection({ id: 'local', database: 'app' });
+    const otherDatabase = connection({ id: 'local', database: 'warehouse' });
+    const entry = schemaEntry({ connectionId: local.id });
+    const serialized = serializeSchemaCacheEntry(local, entry);
+
+    expect(connectionMetadataFingerprint(local)).not.toBe(connectionMetadataFingerprint(otherDatabase));
+    expect(parseStoredSchemaCacheEntry(local, serialized)?.entry.connectionId).toBe('local');
+    expect(parseStoredSchemaCacheEntry(otherDatabase, serialized)).toBeUndefined();
+    expect(parseStoredSchemaCacheEntry(local, serialized.replace(`"version":${SCHEMA_METADATA_CACHE_VERSION}`, '"version":0'))).toBeUndefined();
+  });
+
+  it('hydrates stale disk metadata for columns without connecting or hitting the driver', async () => {
+    const local = connection({ id: 'local' });
+    const hydrated = schemaEntry({
+      connectionId: local.id,
+      loadedAt: Date.now() - 10 * 60_000,
+      columns: {
+        'public.users': [
+          { schema: 'public', table: 'users', name: 'email', ordinal: 1, dataType: 'text', nullable: false }
+        ]
+      }
+    });
+    const manager = {
+      getConnection: vi.fn(() => local),
+      isConnected: vi.fn(() => false),
+      getDriver: vi.fn()
+    };
+    const store = {
+      hydrate: vi.fn(async () => hydrated),
+      persist: vi.fn(),
+      deleteConnection: vi.fn(),
+      getStorageError: vi.fn()
+    };
+
+    const service = new SchemaContextService(manager as never, store as never);
+    const entry = await service.getCachedForConnection(local, 'public');
+    const columns = await service.getCachedColumns(local, 'public', 'users');
+
+    expect(entry?.status).toBe('stale');
+    expect(columns?.map((column) => column.name)).toEqual(['email']);
+    expect(manager.getDriver).not.toHaveBeenCalled();
+  });
+
+  it('does not reuse stale columns after a live column refresh failure', async () => {
+    const local = connection({ id: 'local' });
+    const hydrated = schemaEntry({
+      connectionId: local.id,
+      loadedAt: Date.now() - 10 * 60_000,
+      columns: {
+        'public.users': [
+          { schema: 'public', table: 'users', name: 'old_email', ordinal: 1, dataType: 'text', nullable: false }
+        ]
+      }
+    });
+    const driver = {
+      getSchemas: vi.fn(async () => [{ name: 'public' }]),
+      getTables: vi.fn(async () => [{ schema: 'public', name: 'users', type: 'table' }]),
+      getViews: vi.fn(async () => []),
+      getColumns: vi.fn(async () => {
+        throw new Error('column metadata unavailable');
+      })
+    };
+    const manager = {
+      getConnection: vi.fn(() => local),
+      isConnected: vi.fn(() => true),
+      getDriver: vi.fn(() => driver)
+    };
+    const store = {
+      hydrate: vi.fn(async () => hydrated),
+      persist: vi.fn(),
+      deleteConnection: vi.fn(),
+      getStorageError: vi.fn()
+    };
+
+    const service = new SchemaContextService(manager as never, store as never);
+    await service.getCachedForConnection(local, 'public');
+    const refreshed = await service.loadDefaultSchema(local, true);
+    const columns = await service.getCachedColumns(local, 'public', 'users');
+
+    expect(refreshed.status).toBe('ready');
+    expect(columns).toBeUndefined();
+    expect(store.persist).toHaveBeenCalledWith(local, expect.objectContaining({ columns: {} }));
+  });
+
+  it('keeps column metadata refresh from consuming the whole connection pool', async () => {
+    const local = connection({ id: 'local' });
+    const tables = Array.from({ length: 10 }, (_, index) => ({
+      schema: 'public',
+      name: `table_${index}`,
+      type: 'table' as const
+    }));
+    let activeColumnLoads = 0;
+    let maxActiveColumnLoads = 0;
+    const driver = {
+      getSchemas: vi.fn(async () => [{ name: 'public' }]),
+      getTables: vi.fn(async () => tables),
+      getViews: vi.fn(async () => []),
+      getColumns: vi.fn(async (_connectionId: string, schema: string, table: string) => {
+        activeColumnLoads += 1;
+        maxActiveColumnLoads = Math.max(maxActiveColumnLoads, activeColumnLoads);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        activeColumnLoads -= 1;
+        return [{ schema, table, name: 'id', ordinal: 1, dataType: 'integer', nullable: false }];
+      })
+    };
+    const manager = {
+      getConnection: vi.fn(() => local),
+      isConnected: vi.fn(() => true),
+      getDriver: vi.fn(() => driver)
+    };
+    const store = {
+      hydrate: vi.fn(),
+      persist: vi.fn(),
+      deleteConnection: vi.fn(),
+      getStorageError: vi.fn()
+    };
+
+    const service = new SchemaContextService(manager as never, store as never);
+    const refreshed = await service.loadDefaultSchema(local, true);
+
+    expect(refreshed.status).toBe('ready');
+    expect(Object.keys(refreshed.columns)).toHaveLength(tables.length);
+    expect(maxActiveColumnLoads).toBeLessThanOrEqual(4);
+  });
+
+  it('deduplicates overlapping forced schema refreshes for the same connection', async () => {
+    const local = connection({ id: 'local' });
+    let resolveTables: ((tables: Array<{ schema: string; name: string; type: 'table' }>) => void) | undefined;
+    const tablesPending = new Promise<Array<{ schema: string; name: string; type: 'table' }>>((resolve) => {
+      resolveTables = resolve;
+    });
+    const driver = {
+      getSchemas: vi.fn(async () => [{ name: 'public' }]),
+      getTables: vi.fn(async () => tablesPending),
+      getViews: vi.fn(async () => []),
+      getColumns: vi.fn(async (_connectionId: string, schema: string, table: string) => [
+        { schema, table, name: 'id', ordinal: 1, dataType: 'integer', nullable: false }
+      ])
+    };
+    const manager = {
+      getConnection: vi.fn(() => local),
+      isConnected: vi.fn(() => true),
+      getDriver: vi.fn(() => driver)
+    };
+    const store = {
+      hydrate: vi.fn(),
+      persist: vi.fn(),
+      deleteConnection: vi.fn(),
+      getStorageError: vi.fn()
+    };
+
+    const service = new SchemaContextService(manager as never, store as never);
+    const first = service.loadDefaultSchema(local, true);
+    const second = service.loadDefaultSchema(local, true);
+
+    resolveTables?.([{ schema: 'public', name: 'users', type: 'table' }]);
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    expect(driver.getSchemas).toHaveBeenCalledTimes(1);
+    expect(driver.getTables).toHaveBeenCalledTimes(1);
+    expect(driver.getViews).toHaveBeenCalledTimes(1);
+    expect(driver.getColumns).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SQL diagnostics', () => {
+  it('does not flag tables created earlier in the same script as missing schema objects', async () => {
+    const local = connection({ id: 'local' });
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => false)
+      } as never,
+      {
+        getCachedForConnection: vi.fn(async () => schemaEntry({
+          connectionId: local.id,
+          tables: [{ schema: 'public', name: 'adjust_reporting_raw', type: 'table' }]
+        })),
+        getCachedColumns: vi.fn(),
+        refreshDefaultSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+
+    const diagnostics = await service.getDiagnostics(sqlDocument(`create temp table adjust_kpi_raw__keeper as
+select *
+from public.adjust_reporting_raw;
+
+insert into public.adjust_reporting_raw(channel)
+select channel
+from adjust_kpi_raw__keeper;`) as never, undefined, local);
+
+    expect(diagnostics.map((diagnostic) => diagnostic.message)).not.toContain(
+      'Table or view "adjust_kpi_raw__keeper" does not exist in public.'
+    );
+  });
+
+  it('still flags relations that are neither in schema metadata nor created in the script', async () => {
+    const local = connection({ id: 'local' });
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => false)
+      } as never,
+      {
+        getCachedForConnection: vi.fn(async () => schemaEntry({ connectionId: local.id, tables: [] })),
+        getCachedColumns: vi.fn(),
+        refreshDefaultSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+
+    const diagnostics = await service.getDiagnostics(sqlDocument('select * from missing_relation;') as never, undefined, local);
+
+    expect(diagnostics.map((diagnostic) => diagnostic.message)).toContain(
+      'Table or view "missing_relation" does not exist in public.'
+    );
+  });
+});
+
+describe('SQL metadata warmup', () => {
+  it('connects an offline query console connection before refreshing metadata', async () => {
+    const local = connection({ id: 'local' });
+    const active = { id: local.id, config: local, connectedAt: Date.now() };
+    const manager = {
+      isConnected: vi.fn(() => false),
+      connect: vi.fn(async () => active)
+    };
+    const schemaContext = {
+      refreshDefaultSchemaInBackground: vi.fn()
+    };
+
+    await connectAndRefreshSqlMetadata(manager, schemaContext, local);
+
+    expect(manager.connect).toHaveBeenCalledWith(local.id);
+    expect(schemaContext.refreshDefaultSchemaInBackground).toHaveBeenCalledWith(local);
+  });
+
+  it('refreshes an already-connected query console connection without reconnecting', async () => {
+    const local = connection({ id: 'local' });
+    const manager = {
+      isConnected: vi.fn(() => true),
+      connect: vi.fn()
+    };
+    const schemaContext = {
+      refreshDefaultSchemaInBackground: vi.fn()
+    };
+
+    await connectAndRefreshSqlMetadata(manager, schemaContext, local);
+
+    expect(manager.connect).not.toHaveBeenCalled();
+    expect(schemaContext.refreshDefaultSchemaInBackground).toHaveBeenCalledWith(local);
+  });
+});
+
+describe('SQL metadata completions', () => {
+  it('recognizes select-list column completion before the FROM table below the cursor', () => {
+    const sql = `select network_
+from public.adjust_offer`;
+    const cursorPrefix = sql.slice(0, sql.indexOf('\n'));
+
+    expect(selectListColumnCompletionContext(cursorPrefix)).toBe(true);
+    expect(new SqlSectionService().extractTables(sql)).toEqual([
+      { schema: 'public', table: 'adjust_offer' }
+    ]);
+  });
+
+  it('does not treat relation clauses as select-list column completion', () => {
+    expect(selectListColumnCompletionContext('select network_offer from public.')).toBe(false);
+    expect(selectListColumnCompletionContext('select network_offer from public.adjust_offer where network_')).toBe(false);
+  });
+
+  it('uses the nearest select before the cursor for select-list column completion', () => {
+    expect(selectListColumnCompletionContext('with previous as (select id from public.old_table) select network_')).toBe(true);
+  });
+
+  it('matches schema-qualified table prefixes without treating them as aliases', () => {
+    const context = relationCompletionContext('select * from public.appsflyer_');
+    const entry = schemaEntry({
+      tables: [
+        { schema: 'public', name: 'appsflyer_offer', type: 'table' },
+        { schema: 'private', name: 'appsflyer_offer', type: 'table' },
+        { schema: 'public', name: 'adjust_offer', type: 'table' }
+      ]
+    });
+
+    expect(context).toEqual({ schema: 'public', partial: 'appsflyer_' });
+    expect(relationCompletionCandidates(entry, context!).map((relation) => `${relation.schema}.${relation.name}`)).toEqual([
+      'public.appsflyer_offer'
+    ]);
+  });
+
+  it('matches all tables for a schema-qualified trailing dot', () => {
+    const context = relationCompletionContext('join public.');
+    const entry = schemaEntry({
+      tables: [
+        { schema: 'public', name: 'appsflyer_offer', type: 'table' },
+        { schema: 'public', name: 'users', type: 'table' },
+        { schema: 'private', name: 'users', type: 'table' }
+      ]
+    });
+
+    expect(context).toEqual({ schema: 'public', partial: '' });
+    expect(relationCompletionCandidates(entry, context!).map((relation) => relation.name)).toEqual([
+      'appsflyer_offer',
+      'users'
+    ]);
+  });
+});
+
 function memory(overrides: Partial<QueryMemoryItem>): QueryMemoryItem {
   return {
     id: overrides.id ?? 'memory',
@@ -111,10 +766,26 @@ function memory(overrides: Partial<QueryMemoryItem>): QueryMemoryItem {
     tables: overrides.tables ?? [],
     columns: overrides.columns ?? [],
     outputColumns: overrides.outputColumns ?? [],
+    documentUri: overrides.documentUri,
     status: overrides.status ?? 'completed',
     indexedAt: overrides.indexedAt ?? Date.now(),
     updatedAt: overrides.updatedAt ?? Date.now(),
     executedAt: overrides.executedAt
+  };
+}
+
+function historyFor(overrides: Partial<QueryHistoryItem>): QueryHistoryItem {
+  return {
+    id: overrides.id ?? 'history',
+    connectionId: overrides.connectionId ?? 'local',
+    databaseType: overrides.databaseType ?? 'postgres',
+    sql: overrides.sql ?? 'select * from invoices',
+    sourceOrigin: overrides.sourceOrigin,
+    sourceFile: overrides.sourceFile,
+    documentUri: overrides.documentUri,
+    favorite: overrides.favorite,
+    executedAt: overrides.executedAt ?? Date.now(),
+    status: overrides.status ?? 'completed'
   };
 }
 
@@ -134,6 +805,60 @@ function connection(overrides: Partial<ConnectionConfig>): ConnectionConfig {
   };
 }
 
+function schemaEntry(overrides: Partial<SchemaCacheEntry>): SchemaCacheEntry {
+  return {
+    connectionId: overrides.connectionId ?? 'local',
+    schemaName: overrides.schemaName ?? 'public',
+    schemas: overrides.schemas ?? [{ name: 'public' }],
+    tables: overrides.tables ?? [{ schema: 'public', name: 'users', type: 'table' }],
+    views: overrides.views ?? [],
+    columns: overrides.columns ?? {},
+    indexes: overrides.indexes ?? {},
+    keys: overrides.keys ?? {},
+    loadedAt: overrides.loadedAt ?? Date.now(),
+    status: overrides.status ?? 'ready',
+    errorMessage: overrides.errorMessage,
+    cacheVersion: overrides.cacheVersion,
+    connectionFingerprint: overrides.connectionFingerprint,
+    source: overrides.source
+  };
+}
+
+function sqlDocument(text: string) {
+  const lines = text.split('\n');
+  return {
+    languageId: 'sql',
+    uri: { toString: () => 'file:///workspace/query.sql' },
+    getText: (range?: { start: { line: number; character: number }; end: { line: number; character: number } }) => {
+      if (!range) {
+        return text;
+      }
+      return text.slice(offsetAt(lines, range.start), offsetAt(lines, range.end));
+    },
+    positionAt: (offset: number) => positionAt(lines, offset),
+    offsetAt: (position: { line: number; character: number }) => offsetAt(lines, position)
+  };
+}
+
+function positionAt(lines: string[], offset: number): { line: number; character: number } {
+  let remaining = Math.max(0, offset);
+  for (let line = 0; line < lines.length; line += 1) {
+    if (remaining <= lines[line].length) {
+      return { line, character: remaining };
+    }
+    remaining -= lines[line].length + 1;
+  }
+  return { line: lines.length - 1, character: lines.at(-1)?.length ?? 0 };
+}
+
+function offsetAt(lines: string[], position: { line: number; character: number }): number {
+  let offset = 0;
+  for (let line = 0; line < Math.min(position.line, lines.length); line += 1) {
+    offset += lines[line].length + 1;
+  }
+  return offset + position.character;
+}
+
 function consoleFor(documentUri: string, connectionId: string): QueryConsoleRecord {
   return {
     id: `console-${connectionId}`,
@@ -142,4 +867,79 @@ function consoleFor(documentUri: string, connectionId: string): QueryConsoleReco
     createdAt: 1,
     updatedAt: 1
   };
+}
+
+function resultTab(overrides: Partial<QueryResultTab>): QueryResultTab {
+  return {
+    id: overrides.id ?? 'tab',
+    title: overrides.title ?? 'SQL',
+    customTitle: overrides.customTitle,
+    pinned: overrides.pinned ?? false,
+    connectionId: overrides.connectionId ?? 'local',
+    databaseType: overrides.databaseType ?? 'postgres',
+    databaseName: overrides.databaseName ?? 'aph',
+    schemaName: overrides.schemaName ?? 'public',
+    queryText: overrides.queryText ?? 'select 1',
+    sourceOrigin: overrides.sourceOrigin,
+    sourceFile: overrides.sourceFile,
+    sourceDocumentUri: overrides.sourceDocumentUri,
+    sourceQueryId: overrides.sourceQueryId,
+    sourceSectionIndex: overrides.sourceSectionIndex,
+    sourceRange: overrides.sourceRange,
+    executionStatus: overrides.executionStatus ?? 'completed',
+    executionStartedAt: overrides.executionStartedAt ?? 1,
+    executionFinishedAt: overrides.executionFinishedAt ?? 2,
+    executionTimeMs: overrides.executionTimeMs ?? 1,
+    rowCount: overrides.rowCount ?? 0,
+    maxRows: overrides.maxRows,
+    error: overrides.error,
+    resultSets: overrides.resultSets ?? [],
+    activeResultSetIndex: overrides.activeResultSetIndex ?? 0,
+    filters: overrides.filters ?? [],
+    sort: overrides.sort ?? [],
+    columnState: overrides.columnState ?? [],
+    scrollState: overrides.scrollState,
+    createdAt: overrides.createdAt ?? 1,
+    updatedAt: overrides.updatedAt ?? 2
+  };
+}
+
+function safeClassifier() {
+  return {
+    classify: vi.fn(() => ({
+      risk: 'safe',
+      reasons: [],
+      statements: [],
+      requiresConfirmation: false,
+      previewAvailable: false
+    }))
+  };
+}
+
+function textRange(startLine: number, startCharacter: number, endLine: number, endCharacter: number) {
+  return {
+    start: { line: startLine, character: startCharacter },
+    end: { line: endLine, character: endCharacter }
+  };
+}
+
+class StubPostgresDriver extends PostgresDriver {
+  private readonly client: { processID: number; query: ReturnType<typeof vi.fn>; release: ReturnType<typeof vi.fn> };
+  private readonly pool: { connect: ReturnType<typeof vi.fn> };
+
+  constructor(private readonly queryResults: unknown[]) {
+    super();
+    this.client = {
+      processID: 123,
+      query: vi.fn(async () => this.queryResults.shift()),
+      release: vi.fn()
+    };
+    this.pool = {
+      connect: vi.fn(async () => this.client)
+    };
+  }
+
+  protected override requirePool(_connectionId: string) {
+    return this.pool as never;
+  }
 }

@@ -1,4 +1,4 @@
-import { Pool, PoolClient, PoolConfig } from 'pg';
+import { Pool, PoolClient, PoolConfig, QueryResult } from 'pg';
 import { randomUUID } from 'crypto';
 import { DatabaseDriver } from './DatabaseDriver';
 import {
@@ -62,28 +62,74 @@ export class PostgresDriver implements DatabaseDriver {
   }
 
   async executeQuery(params: ExecuteQueryParams): Promise<QueryExecutionResult> {
-    const executionId = randomUUID();
+    const [result] = await this.executeStatements(params, [params.sql]);
+    return result;
+  }
+
+  async executeStatements(params: ExecuteQueryParams, statements: string[]): Promise<QueryExecutionResult[]> {
     const pool = this.requirePool(params.connectionId);
     const client = await pool.connect();
-    const started = Date.now();
-    this.activeExecutions.set(executionId, { connectionId: params.connectionId, processId: (client as PoolClient & { processID?: number }).processID });
+    const results: QueryExecutionResult[] = [];
+    const hasExplicitTransaction = statements.some((sql) => /\bbegin\b/i.test(sql));
 
     try {
-      const maxRows = Number.isFinite(params.maxRows) && params.maxRows && params.maxRows > 0 ? Math.floor(params.maxRows) : undefined;
-      const limitedSql = maxRows && this.canApplyClientLimit(params.sql)
-        ? `select * from (${params.sql.replace(/;+\s*$/, '')}) __dg_query limit ${maxRows}`
-        : params.sql;
-      const result = await client.query(limitedSql);
-      return {
-        executionId,
-        fields: result.fields.map((field) => ({ name: field.name, dataTypeId: field.dataTypeID })),
-        rows: result.rows,
-        rowCount: result.rowCount ?? result.rows.length,
-        command: result.command,
-        durationMs: Date.now() - started
-      };
+      for (const [index, sql] of statements.entries()) {
+        const executionId = randomUUID();
+        const started = Date.now();
+        params.onProgress?.({
+          statementIndex: index,
+          statementCount: statements.length,
+          sql,
+          status: 'started',
+          executionId,
+          startedAt: started
+        });
+        this.activeExecutions.set(executionId, { connectionId: params.connectionId, processId: (client as PoolClient & { processID?: number }).processID });
+        try {
+          const result = await client.query(this.sqlWithClientLimit(sql, params.maxRows));
+          const queryResults = Array.isArray(result) ? result : [result];
+          const executionResults = queryResults.map((item) => this.toExecutionResult(item, executionId, started));
+          params.onProgress?.({
+            statementIndex: index,
+            statementCount: statements.length,
+            sql,
+            status: 'completed',
+            executionId,
+            startedAt: started,
+            durationMs: Date.now() - started,
+            rowCount: executionResults.reduce((total, item) => total + item.rowCount, 0),
+            command: executionResults.at(-1)?.command
+          });
+          for (const item of executionResults) {
+            results.push(item);
+          }
+        } catch (error) {
+          params.onProgress?.({
+            statementIndex: index,
+            statementCount: statements.length,
+            sql,
+            status: 'failed',
+            executionId,
+            startedAt: started,
+            durationMs: Date.now() - started,
+            errorMessage: error instanceof Error ? error.message : String(error)
+          });
+          throw error;
+        } finally {
+          this.activeExecutions.delete(executionId);
+        }
+      }
+      return results;
+    } catch (error) {
+      if (hasExplicitTransaction) {
+        try {
+          await client.query('rollback');
+        } catch {
+          // The original query error is more useful than rollback cleanup failure.
+        }
+      }
+      throw error;
     } finally {
-      this.activeExecutions.delete(executionId);
       client.release();
     }
   }
@@ -270,6 +316,26 @@ export class PostgresDriver implements DatabaseDriver {
   private canApplyClientLimit(sql: string): boolean {
     const normalized = sql.trim().replace(/^--.*$/gm, '').trim().toLowerCase();
     return normalized.startsWith('select') || normalized.startsWith('with');
+  }
+
+  private sqlWithClientLimit(sql: string, maxRows: number | undefined): string {
+    const limit = Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : undefined;
+    return limit && this.canApplyClientLimit(sql)
+      ? `select * from (${sql.replace(/;+\s*$/, '')}) __dg_query limit ${limit}`
+      : sql;
+  }
+
+  private toExecutionResult(result: QueryResult | undefined, executionId: string, started: number): QueryExecutionResult {
+    const fields = result?.fields ?? [];
+    const rows = result?.rows ?? [];
+    return {
+      executionId,
+      fields: fields.map((field) => ({ name: field.name, dataTypeId: field.dataTypeID })),
+      rows,
+      rowCount: result?.rowCount ?? rows.length,
+      command: result?.command,
+      durationMs: Date.now() - started
+    };
   }
 
   private canExplain(sql: string): boolean {

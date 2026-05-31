@@ -38,10 +38,13 @@ const vscode = __importStar(require("vscode"));
 const postgresDriver_1 = require("./drivers/postgresDriver");
 const redshiftDriver_1 = require("./drivers/redshiftDriver");
 const id_1 = require("../utils/id");
+const connectionDefaults_1 = require("../services/connectionDefaults");
 class ConnectionManager {
     store;
     drivers = new Map();
     active = new Map();
+    activeConnectionEmitter = new vscode.EventEmitter();
+    onDidChangeActiveConnections = this.activeConnectionEmitter.event;
     constructor(store) {
         this.store = store;
         this.drivers.set('postgres', new postgresDriver_1.PostgresDriver());
@@ -88,7 +91,26 @@ class ConnectionManager {
         return driver;
     }
     async save(config) {
+        const activeConnection = this.active.get(config.id);
         await this.store.save(config);
+        if (!activeConnection) {
+            return;
+        }
+        if (activeConnection.config.type !== config.type) {
+            await this.getDriver(activeConnection.config.type).disconnect(config.id);
+        }
+        try {
+            const nextConfig = await this.getConnectionWithPassword(config.id);
+            const connection = await this.getDriver(nextConfig.type).connect(nextConfig);
+            this.active.set(config.id, connection);
+            await this.store.setSelectedConnectionId(config.id);
+            this.activeConnectionEmitter.fire(config.id);
+        }
+        catch (error) {
+            this.active.delete(config.id);
+            this.activeConnectionEmitter.fire(config.id);
+            throw error;
+        }
     }
     async setSelectedConnection(id) {
         await this.store.setSelectedConnectionId(id);
@@ -99,17 +121,31 @@ class ConnectionManager {
     }
     async connect(id) {
         const config = await this.getConnectionWithPassword(id);
-        const connection = await this.getDriver(config.type).connect(config);
-        this.active.set(id, connection);
-        await this.store.setSelectedConnectionId(id);
-        return connection;
+        try {
+            const connection = await this.getDriver(config.type).connect(config);
+            this.active.set(id, connection);
+            await this.store.setSelectedConnectionId(id);
+            this.activeConnectionEmitter.fire(id);
+            return connection;
+        }
+        catch (error) {
+            if (this.active.has(id)) {
+                this.active.delete(id);
+                this.activeConnectionEmitter.fire(id);
+            }
+            throw error;
+        }
     }
     async disconnect(id) {
+        const wasConnected = this.active.has(id);
         const config = this.getConnection(id);
         if (config) {
             await this.getDriver(config.type).disconnect(id);
         }
         this.active.delete(id);
+        if (wasConnected) {
+            this.activeConnectionEmitter.fire(id);
+        }
     }
     async test(id) {
         const config = await this.getConnectionWithPassword(id);
@@ -149,7 +185,8 @@ class ConnectionManager {
             return undefined;
         }
         const type = typePick.type;
-        const name = await vscode.window.showInputBox({ prompt: 'Connection name', value: existing?.name ?? (type === 'redshift' ? 'Redshift' : 'PostgreSQL') });
+        const defaults = (0, connectionDefaults_1.connectionDefaultsForType)(type);
+        const name = await vscode.window.showInputBox({ prompt: 'Connection name', value: existing?.name ?? defaults.name });
         if (!name) {
             return undefined;
         }
@@ -157,8 +194,8 @@ class ConnectionManager {
         if (!host) {
             return undefined;
         }
-        const port = Number(await vscode.window.showInputBox({ prompt: 'Port', value: String(existing?.port ?? (type === 'redshift' ? 5439 : 5432)) }));
-        const database = await vscode.window.showInputBox({ prompt: 'Database', value: existing?.database ?? 'postgres' });
+        const port = Number(await vscode.window.showInputBox({ prompt: 'Port', value: String(existing?.port ?? defaults.port) }));
+        const database = await vscode.window.showInputBox({ prompt: 'Database', value: existing?.database ?? defaults.database });
         if (!database) {
             return undefined;
         }
@@ -177,8 +214,8 @@ class ConnectionManager {
             database,
             username,
             password,
-            sslMode: (ssl ?? (type === 'redshift' ? 'require' : 'prefer')),
-            color: existing?.color ?? (host === 'localhost' ? 'green' : 'blue'),
+            sslMode: (ssl ?? defaults.sslMode),
+            color: existing?.color ?? defaults.color,
             defaultSchema: existing?.defaultSchema ?? 'public',
             queryTimeoutMs: vscode.workspace.getConfiguration('database').get('query.timeoutMs', 300000)
         };

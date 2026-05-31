@@ -54,7 +54,11 @@ class DatabaseTreeProvider {
             return this.connectionManager.getConnections().map((connection) => new nodes_1.ConnectionNode(connection, this.connectionManager.isConnected(connection.id)));
         }
         if (element instanceof nodes_1.ConnectionNode) {
-            return [new nodes_1.CatalogNode(element.connection)];
+            return [
+                new nodes_1.CatalogNode(element.connection),
+                new nodes_1.StaticFolderNode(element.connection, 'Server Objects'),
+                new nodes_1.StaticFolderNode(element.connection, 'Query Files')
+            ];
         }
         if (element instanceof nodes_1.CatalogNode) {
             return [new nodes_1.SchemasNode(element.connection)];
@@ -67,13 +71,19 @@ class DatabaseTreeProvider {
         if (element instanceof nodes_1.SchemaNode) {
             return [
                 new nodes_1.FolderNode(element.connection, element.schema.name, 'Tables'),
+                new nodes_1.FolderNode(element.connection, element.schema.name, 'Materialized Views'),
                 new nodes_1.FolderNode(element.connection, element.schema.name, 'Views')
             ];
         }
         if (element instanceof nodes_1.FolderNode && element.folder === 'Tables') {
             await this.ensureConnected(element.connection.id);
             const tables = await this.connectionManager.getDriver(element.connection.type).getTables(element.connection.id, element.schema);
-            return tables.map((table) => new nodes_1.TableNode(element.connection, table));
+            return tables.filter((table) => table.type !== 'materialized_view').map((table) => new nodes_1.TableNode(element.connection, table));
+        }
+        if (element instanceof nodes_1.FolderNode && element.folder === 'Materialized Views') {
+            await this.ensureConnected(element.connection.id);
+            const tables = await this.connectionManager.getDriver(element.connection.type).getTables(element.connection.id, element.schema);
+            return tables.filter((table) => table.type === 'materialized_view').map((table) => new nodes_1.TableNode(element.connection, table));
         }
         if (element instanceof nodes_1.FolderNode && element.folder === 'Views') {
             await this.ensureConnected(element.connection.id);
@@ -94,6 +104,12 @@ class DatabaseTreeProvider {
             }
             const columns = await this.connectionManager.getDriver(element.connection.type).getColumns(element.connection.id, element.schema, table);
             return columns.map((column) => new nodes_1.ColumnNode(element.connection, column));
+        }
+        if (element instanceof nodes_1.StaticFolderNode && element.name === 'Server Objects') {
+            return [
+                new nodes_1.StaticFolderNode(element.connection, 'groups', vscode.TreeItemCollapsibleState.None),
+                new nodes_1.StaticFolderNode(element.connection, 'users', vscode.TreeItemCollapsibleState.None)
+            ];
         }
         return [];
     }

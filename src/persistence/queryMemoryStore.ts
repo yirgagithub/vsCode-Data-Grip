@@ -32,4 +32,12 @@ export class QueryMemoryStore {
   async delete(id: string): Promise<void> {
     await this.context.workspaceState.update(MEMORY_KEY, this.getAll().filter((item) => item.id !== id));
   }
+
+  async deleteMany(ids: string[]): Promise<void> {
+    const idSet = new Set(ids);
+    if (!idSet.size) {
+      return;
+    }
+    await this.context.workspaceState.update(MEMORY_KEY, this.getAll().filter((item) => !idSet.has(item.id)));
+  }
 }

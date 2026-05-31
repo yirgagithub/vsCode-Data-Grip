@@ -5,19 +5,15 @@ export function ResultsTabs({ tabs, activeTabId }: { tabs: QueryResultTab[]; act
   const { activateTab, closeTab, pinTab, renameTab } = useResultsStore();
 
   return (
-    <div className="tabs" role="tablist">
+    <div className="tabs result-tabs" role="tablist" aria-label="SQL result tabs">
+      <div className="tab-strip-leading" aria-hidden="true">
+        <span className="codicon-lite console-icon">▣</span>
+        <span>Output</span>
+      </div>
       {tabs.map((tab) => (
-        <button
+        <div
           key={tab.id}
           className={`tab ${tab.id === activeTabId ? 'active' : ''} status-${tab.executionStatus}`}
-          onClick={() => activateTab(tab.id)}
-          onDoubleClick={() => {
-            const title = prompt('Tab title', tab.customTitle ?? tab.title);
-            if (title) {
-              renameTab(tab.id, title);
-            }
-          }}
-          role="tab"
           title={[
             tab.customTitle ?? tab.title,
             tab.executionTimeMs !== undefined ? `${tab.executionTimeMs}ms` : undefined,
@@ -25,30 +21,50 @@ export function ResultsTabs({ tabs, activeTabId }: { tabs: QueryResultTab[]; act
             tab.executionStatus
           ].filter(Boolean).join(' - ')}
         >
-          <span className={`connection-dot ${tab.databaseType}`} />
-          <span className="tab-title">{tab.customTitle ?? tab.title}</span>
-          <span
-            className={`icon ${tab.pinned ? 'on' : ''}`}
-            title={tab.pinned ? 'Unpin' : 'Pin'}
+          <button
+            className="tab-main"
+            onClick={() => activateTab(tab.id)}
+            onDoubleClick={() => {
+              const title = prompt('Tab title', tab.customTitle ?? tab.title);
+              if (title) {
+                renameTab(tab.id, title);
+              }
+            }}
+            role="tab"
+            aria-selected={tab.id === activeTabId}
+            aria-label={`${tab.customTitle ?? tab.title}, ${tab.executionStatus}`}
+          >
+            <span className={`connection-dot ${tab.databaseType} status-${tab.executionStatus}`} />
+            <span className="tab-object-icon" aria-hidden="true">▦</span>
+            <span className="tab-title">{tab.customTitle ?? tab.title}</span>
+          </button>
+          <button
+            type="button"
+            className={`icon tab-icon-action ${tab.pinned ? 'on' : ''}`}
+            title={tab.pinned ? 'Unpin result tab' : 'Pin result tab'}
+            aria-label={tab.pinned ? 'Unpin result tab' : 'Pin result tab'}
             onClick={(event) => {
               event.stopPropagation();
               pinTab(tab.id, !tab.pinned);
             }}
           >
             ⌖
-          </span>
-          <span
-            className="icon"
+          </button>
+          <button
+            type="button"
+            className="icon tab-icon-action close-action"
             title="Close"
+            aria-label="Close result tab"
             onClick={(event) => {
               event.stopPropagation();
               closeTab(tab.id);
             }}
           >
             ×
-          </span>
-        </button>
+          </button>
+        </div>
       ))}
+      <div className="tabs-overflow-shadow" aria-hidden="true" />
     </div>
   );
 }

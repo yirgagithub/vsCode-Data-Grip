@@ -7,6 +7,7 @@ export type DatabaseNode =
   | SchemasNode
   | SchemaNode
   | FolderNode
+  | StaticFolderNode
   | TableNode
   | ViewNode
   | ColumnNode;
@@ -16,10 +17,10 @@ export class ConnectionNode extends vscode.TreeItem {
   constructor(public readonly connection: ConnectionConfig, connected: boolean) {
     super(truncateMiddle(connection.name, 36), vscode.TreeItemCollapsibleState.Collapsed);
     this.id = connection.id;
-    this.description = `${connected ? 'online' : 'offline'} - ${connection.type}`;
+    this.description = `${connected ? 'online' : 'offline'} | ${connection.type}`;
     this.contextValue = 'connection';
     this.iconPath = new vscode.ThemeIcon(
-      connected ? 'circle-filled' : 'circle-outline',
+      'database',
       new vscode.ThemeColor(connected ? 'testing.iconPassed' : 'descriptionForeground')
     );
     this.tooltip = new vscode.MarkdownString(
@@ -62,7 +63,7 @@ export class SchemaNode extends vscode.TreeItem {
   constructor(public readonly connection: ConnectionConfig, public readonly schema: SchemaInfo) {
     super(truncateMiddle(schema.name, 40), vscode.TreeItemCollapsibleState.Collapsed);
     this.contextValue = 'schema';
-    this.iconPath = new vscode.ThemeIcon('symbol-namespace');
+    this.iconPath = new vscode.ThemeIcon('library');
     this.tooltip = schema.name;
   }
 }
@@ -77,7 +78,20 @@ export class FolderNode extends vscode.TreeItem {
   ) {
     super(folder, vscode.TreeItemCollapsibleState.Collapsed);
     this.contextValue = folder.toLowerCase().replace(/\s+/g, '-');
-    this.iconPath = new vscode.ThemeIcon('folder');
+    this.iconPath = new vscode.ThemeIcon(folder === 'Materialized Views' ? 'symbol-structure' : 'folder');
+  }
+}
+
+export class StaticFolderNode extends vscode.TreeItem {
+  readonly kind = 'static-folder';
+  constructor(
+    public readonly connection: ConnectionConfig,
+    public readonly name: 'Server Objects' | 'Query Files' | 'groups' | 'users',
+    collapsibleState: vscode.TreeItemCollapsibleState = vscode.TreeItemCollapsibleState.Collapsed
+  ) {
+    super(name, collapsibleState);
+    this.contextValue = name.toLowerCase().replace(/\s+/g, '-');
+    this.iconPath = new vscode.ThemeIcon(name === 'Query Files' ? 'files' : 'folder');
   }
 }
 
@@ -87,7 +101,7 @@ export class TableNode extends vscode.TreeItem {
     super(truncateMiddle(table.name, 48), vscode.TreeItemCollapsibleState.Collapsed);
     this.description = table.rowEstimate !== undefined ? `~${table.rowEstimate}` : undefined;
     this.contextValue = 'table';
-    this.iconPath = new vscode.ThemeIcon('table');
+    this.iconPath = new vscode.ThemeIcon(table.type === 'materialized_view' ? 'symbol-structure' : 'table');
     this.tooltip = table.comment ? `${table.schema}.${table.name}\n${table.comment}` : `${table.schema}.${table.name}`;
     this.command = { command: 'database.openTableData', title: 'Open Table Data', arguments: [this] };
   }

@@ -38,11 +38,11 @@ export class QueryExecutor {
 
       const statements = splitSqlStatements(params.sql);
       const sqlParts = statements.length ? statements.map((statement) => statement.sql) : [params.sql];
-      for (const [index, sql] of sqlParts.entries()) {
-        const result = await this.connectionManager.getDriver(config.type).executeQuery({ ...params, sql });
+      const results = await this.connectionManager.getDriver(config.type).executeStatements(params, sqlParts);
+      for (const [index, result] of results.entries()) {
         resultSets.push({
           id: result.executionId,
-          title: sqlParts.length > 1 ? `Result ${index + 1}` : this.resultTitle(params.sql, params.source?.fileName),
+          title: sqlParts.length > 1 ? `Result ${index + 1}` : this.resultTitle(sqlParts[index] ?? params.sql, params.source?.fileName),
           fields: result.fields,
           rows: result.rows,
           rowCount: result.rowCount,
@@ -58,6 +58,7 @@ export class QueryExecutor {
         connectionId: config.id,
         databaseType: config.type,
         sql: params.sql,
+        sourceOrigin: params.source?.origin,
         sourceFile: params.source?.fileName,
         documentUri: params.source?.documentUri,
         schemaName: config.defaultSchema,
@@ -71,8 +72,7 @@ export class QueryExecutor {
         tables: extractQueryTables(params.sql),
         columns: extractQualifiedColumns(params.sql)
       };
-      await this.historyStore.add(historyItem);
-      await this.recorder?.recordHistoryItem(historyItem);
+      await this.recordHistory(params, historyItem);
 
       return {
         id: tabId,
@@ -83,6 +83,7 @@ export class QueryExecutor {
         databaseName: config.database,
         schemaName: config.defaultSchema,
         queryText: params.sql,
+        sourceOrigin: params.source?.origin,
         sourceFile: params.source?.fileName,
         sourceDocumentUri: params.source?.documentUri,
         sourceQueryId: params.source?.queryId,
@@ -109,6 +110,7 @@ export class QueryExecutor {
         connectionId: config.id,
         databaseType: config.type,
         sql: params.sql,
+        sourceOrigin: params.source?.origin,
         sourceFile: params.source?.fileName,
         documentUri: params.source?.documentUri,
         schemaName: config.defaultSchema,
@@ -121,8 +123,7 @@ export class QueryExecutor {
         tables: extractQueryTables(params.sql),
         columns: extractQualifiedColumns(params.sql)
       };
-      await this.historyStore.add(historyItem);
-      await this.recorder?.recordHistoryItem(historyItem);
+      await this.recordHistory(params, historyItem);
 
       return {
         id: tabId,
@@ -133,6 +134,7 @@ export class QueryExecutor {
         databaseName: config.database,
         schemaName: config.defaultSchema,
         queryText: params.sql,
+        sourceOrigin: params.source?.origin,
         sourceFile: params.source?.fileName,
         sourceDocumentUri: params.source?.documentUri,
         sourceQueryId: params.source?.queryId,
@@ -171,6 +173,14 @@ export class QueryExecutor {
       return keyword;
     }
     return fileName?.split(/[\\/]/).pop() ?? 'SQL';
+  }
+
+  private async recordHistory(params: ExecuteQueryParams, item: QueryHistoryItem): Promise<void> {
+    if (params.source?.origin !== 'queryConsole') {
+      return;
+    }
+    await this.historyStore.add(item);
+    await this.recorder?.recordHistoryItem(item);
   }
 
   private async confirmDestructiveIfNeeded(isProduction: boolean, sql: string): Promise<void> {

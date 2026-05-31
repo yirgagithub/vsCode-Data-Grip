@@ -2,6 +2,8 @@ export type DatabaseType = 'postgres' | 'redshift';
 
 export type ConnectionColor = 'red' | 'yellow' | 'green' | 'blue' | 'purple' | 'gray';
 
+export type QueryExecutionOrigin = 'queryConsole' | 'sqlFile';
+
 export interface ConnectionConfig {
   id: string;
   name: string;
@@ -44,7 +46,9 @@ export interface QueryField {
 export interface ExecuteQueryParams {
   connectionId: string;
   sql: string;
+  onProgress?: (progress: QueryExecutionProgress) => void;
   source?: {
+    origin?: QueryExecutionOrigin;
     fileName?: string;
     documentUri?: string;
     queryId?: string;
@@ -57,6 +61,21 @@ export interface ExecuteQueryParams {
     };
   };
   maxRows?: number;
+}
+
+export type QueryExecutionProgressStatus = 'started' | 'completed' | 'failed';
+
+export interface QueryExecutionProgress {
+  statementIndex: number;
+  statementCount: number;
+  sql: string;
+  status: QueryExecutionProgressStatus;
+  executionId?: string;
+  startedAt?: number;
+  durationMs?: number;
+  rowCount?: number;
+  command?: string;
+  errorMessage?: string;
 }
 
 export interface QueryExecutionResult {
@@ -192,6 +211,7 @@ export interface QueryResultTab {
   databaseName?: string;
   schemaName?: string;
   queryText: string;
+  sourceOrigin?: QueryExecutionOrigin;
   sourceFile?: string;
   sourceDocumentUri?: string;
   sourceQueryId?: string;
@@ -224,6 +244,7 @@ export interface QueryHistoryItem {
   connectionId: string;
   databaseType: DatabaseType;
   sql: string;
+  sourceOrigin?: QueryExecutionOrigin;
   sourceFile?: string;
   documentUri?: string;
   schemaName?: string;
@@ -351,10 +372,14 @@ export interface QueryConsoleRecord {
 }
 
 export type SchemaCacheStatus = 'empty' | 'loading' | 'ready' | 'stale' | 'error';
+export type SchemaCacheSource = 'memory' | 'disk' | 'live';
 
 export interface SchemaCacheEntry {
   connectionId: string;
   schemaName: string;
+  cacheVersion?: number;
+  connectionFingerprint?: string;
+  source?: SchemaCacheSource;
   schemas: SchemaInfo[];
   tables: TableInfo[];
   views: ViewInfo[];
