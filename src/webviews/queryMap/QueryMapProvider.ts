@@ -550,11 +550,10 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
       background: var(--bg-panel);
     }
     .services-header {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: var(--space-sm);
+      display: flex;
+      justify-content: flex-end;
       align-items: center;
-      padding: var(--space-sm);
+      padding: var(--space-xs) var(--space-sm);
       border-bottom: 1px solid var(--border);
     }
     .title {
@@ -892,10 +891,6 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
     function renderHeader() {
       const header = document.createElement('div');
       header.className = 'services-header';
-      const title = document.createElement('div');
-      title.className = 'title';
-      title.textContent = 'Query Sessions';
-      header.appendChild(title);
       const toolbar = document.createElement('div');
       toolbar.className = 'toolbar';
       toolbar.setAttribute('role', 'toolbar');
