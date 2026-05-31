@@ -517,7 +517,7 @@ class QueryMapProvider {
     .toolbar-glyph,
     .tree-toggle {
       position: relative;
-      width: calc(var(--icon-size) * 1.15);
+      width: var(--icon-size);
       height: var(--icon-size);
       display: inline-block;
       color: currentColor;
@@ -543,27 +543,27 @@ class QueryMapProvider {
     }
     .toolbar-glyph.expand-all::before,
     .toolbar-glyph.expand-all::after {
-      top: 50%;
+      left: 50%;
     }
     .toolbar-glyph.expand-all::before {
-      left: .12rem;
-      transform: translateY(-50%) rotate(135deg);
+      top: .08rem;
+      transform: translateX(-50%) rotate(-135deg);
     }
     .toolbar-glyph.expand-all::after {
-      right: .12rem;
-      transform: translateY(-50%) rotate(-45deg);
+      bottom: .08rem;
+      transform: translateX(-50%) rotate(45deg);
     }
     .toolbar-glyph.collapse-all::before,
     .toolbar-glyph.collapse-all::after {
-      top: 50%;
+      left: 50%;
     }
     .toolbar-glyph.collapse-all::before {
-      left: .12rem;
-      transform: translateY(-50%) rotate(-45deg);
+      top: .08rem;
+      transform: translateX(-50%) rotate(45deg);
     }
     .toolbar-glyph.collapse-all::after {
-      right: .12rem;
-      transform: translateY(-50%) rotate(135deg);
+      bottom: .08rem;
+      transform: translateX(-50%) rotate(-135deg);
     }
     .tabs {
       min-width: 0;
