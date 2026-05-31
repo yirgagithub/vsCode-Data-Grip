@@ -581,7 +581,7 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
     .toolbar-glyph,
     .tree-toggle {
       position: relative;
-      width: var(--icon-size);
+      width: calc(var(--icon-size) * 1.15);
       height: var(--icon-size);
       display: inline-block;
       color: currentColor;
@@ -607,18 +607,28 @@ export class QueryMapProvider implements vscode.WebviewViewProvider {
     }
     .toolbar-glyph.expand-all::before,
     .toolbar-glyph.expand-all::after {
-      left: 50%;
-      transform: translateX(-50%) rotate(45deg);
+      top: 50%;
     }
-    .toolbar-glyph.expand-all::before { top: .22rem; }
-    .toolbar-glyph.expand-all::after { top: .58rem; }
+    .toolbar-glyph.expand-all::before {
+      left: .12rem;
+      transform: translateY(-50%) rotate(135deg);
+    }
+    .toolbar-glyph.expand-all::after {
+      right: .12rem;
+      transform: translateY(-50%) rotate(-45deg);
+    }
     .toolbar-glyph.collapse-all::before,
     .toolbar-glyph.collapse-all::after {
-      left: 50%;
-      transform: translateX(-50%) rotate(-135deg);
+      top: 50%;
     }
-    .toolbar-glyph.collapse-all::before { top: .64rem; }
-    .toolbar-glyph.collapse-all::after { top: .28rem; }
+    .toolbar-glyph.collapse-all::before {
+      left: .12rem;
+      transform: translateY(-50%) rotate(-45deg);
+    }
+    .toolbar-glyph.collapse-all::after {
+      right: .12rem;
+      transform: translateY(-50%) rotate(135deg);
+    }
     .tabs {
       min-width: 0;
       display: flex;
