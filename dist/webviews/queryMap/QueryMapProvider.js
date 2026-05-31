@@ -518,13 +518,29 @@ class QueryMapProvider {
     .tree-toggle {
       position: relative;
       width: var(--icon-size);
-      height: var(--icon-size);
       display: inline-block;
       color: currentColor;
       flex: 0 0 auto;
     }
+    .toolbar-glyph {
+      height: calc(var(--icon-size) * 1.28);
+      line-height: 1;
+    }
+    .tree-toggle {
+      height: var(--icon-size);
+    }
     .toolbar-glyph::before,
-    .toolbar-glyph::after,
+    .toolbar-glyph::after {
+      position: absolute;
+      left: 50%;
+      width: auto;
+      height: auto;
+      border: 0;
+      font-size: calc(var(--icon-size) * .72);
+      font-weight: 700;
+      line-height: .7;
+      transform: translateX(-50%);
+    }
     .tree-toggle::before {
       content: '';
       position: absolute;
@@ -541,29 +557,21 @@ class QueryMapProvider {
     .tree-toggle.expanded::before {
       transform: translate(-55%, -62%) rotate(45deg);
     }
-    .toolbar-glyph.expand-all::before,
-    .toolbar-glyph.expand-all::after {
-      left: 50%;
-    }
     .toolbar-glyph.expand-all::before {
-      top: .08rem;
-      transform: translateX(-50%) rotate(-135deg);
+      content: '˄';
+      top: .02rem;
     }
     .toolbar-glyph.expand-all::after {
-      bottom: .08rem;
-      transform: translateX(-50%) rotate(45deg);
-    }
-    .toolbar-glyph.collapse-all::before,
-    .toolbar-glyph.collapse-all::after {
-      left: 50%;
+      content: '˅';
+      bottom: .02rem;
     }
     .toolbar-glyph.collapse-all::before {
-      top: .08rem;
-      transform: translateX(-50%) rotate(45deg);
+      content: '˅';
+      top: .02rem;
     }
     .toolbar-glyph.collapse-all::after {
-      bottom: .08rem;
-      transform: translateX(-50%) rotate(-135deg);
+      content: '˄';
+      bottom: .02rem;
     }
     .tabs {
       min-width: 0;
