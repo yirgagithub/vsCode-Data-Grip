@@ -168,6 +168,10 @@ class QueryMapProvider {
             await this.refreshData();
             return;
         }
+        if (message.type === 'newConsole') {
+            await vscode.commands.executeCommand('database.openSqlConsole');
+            return;
+        }
         if (message.type === 'clearActiveSessions') {
             const ids = this.groups.flatMap((group) => group.documents.map((document) => document.id));
             if (!ids.length) {
@@ -511,6 +515,47 @@ class QueryMapProvider {
       color: var(--vscode-icon-foreground, var(--text-muted));
       flex: 0 0 auto;
     }
+    .toolbar-glyph,
+    .tree-toggle {
+      position: relative;
+      width: var(--icon-size);
+      height: var(--icon-size);
+      display: inline-block;
+      color: currentColor;
+      flex: 0 0 auto;
+    }
+    .toolbar-glyph::before,
+    .toolbar-glyph::after,
+    .tree-toggle::before {
+      content: '';
+      position: absolute;
+      width: .42rem;
+      height: .42rem;
+      border-right: 1.5px solid currentColor;
+      border-bottom: 1.5px solid currentColor;
+    }
+    .tree-toggle::before {
+      top: 50%;
+      left: 50%;
+      transform: translate(-55%, -50%) rotate(-45deg);
+    }
+    .tree-toggle.expanded::before {
+      transform: translate(-55%, -62%) rotate(45deg);
+    }
+    .toolbar-glyph.expand-all::before,
+    .toolbar-glyph.expand-all::after {
+      left: 50%;
+      transform: translateX(-50%) rotate(45deg);
+    }
+    .toolbar-glyph.expand-all::before { top: .22rem; }
+    .toolbar-glyph.expand-all::after { top: .58rem; }
+    .toolbar-glyph.collapse-all::before,
+    .toolbar-glyph.collapse-all::after {
+      left: 50%;
+      transform: translateX(-50%) rotate(-135deg);
+    }
+    .toolbar-glyph.collapse-all::before { top: .64rem; }
+    .toolbar-glyph.collapse-all::after { top: .28rem; }
     .tabs {
       min-width: 0;
       display: flex;
@@ -539,7 +584,7 @@ class QueryMapProvider {
     .panel-layout {
       min-height: 0;
       display: grid;
-      grid-template-rows: minmax(0, 1fr) minmax(7rem, 34vh);
+      grid-template-rows: minmax(0, 1fr);
       overflow: hidden;
       background: var(--bg-main);
     }
@@ -562,7 +607,11 @@ class QueryMapProvider {
       font-weight: 600;
     }
     .connection-header {
+      width: 100%;
       padding-left: calc(var(--space-md) + var(--space-sm));
+      border: 0;
+      border-radius: 0;
+      text-align: left;
       font-weight: 500;
     }
     .tree-count {
@@ -730,7 +779,6 @@ class QueryMapProvider {
     @keyframes pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
     @media (min-width: 42rem) {
       .panel-layout {
-        grid-template-columns: minmax(16rem, 36%) minmax(0, 1fr);
         grid-template-rows: minmax(0, 1fr);
       }
       .output {
@@ -758,10 +806,11 @@ class QueryMapProvider {
     let currentState = { groups: [], historyGroups: [] };
     let activeTab = saved.activeTab || 'active';
     let selected = saved.selected || undefined;
+    let expanded = saved.expanded || {};
     let openMenuNode;
 
     function saveState() {
-      vscode.setState({ activeTab, selected });
+      vscode.setState({ activeTab, selected, expanded });
     }
 
     function render(state) {
@@ -781,17 +830,16 @@ class QueryMapProvider {
       header.className = 'services-header';
       const title = document.createElement('div');
       title.className = 'title';
-      title.textContent = 'Services';
+      title.textContent = 'Query Sessions';
       header.appendChild(title);
       const toolbar = document.createElement('div');
       toolbar.className = 'toolbar';
       toolbar.setAttribute('role', 'toolbar');
-      toolbar.setAttribute('aria-label', 'Services actions');
-      toolbar.appendChild(icon('+', 'Open newest console', () => openNewest('active')));
+      toolbar.setAttribute('aria-label', 'Query session actions');
+      toolbar.appendChild(icon('+', 'New query console', () => vscode.postMessage({ type: 'newConsole' })));
       toolbar.appendChild(icon('↻', 'Refresh', () => vscode.postMessage({ type: 'refreshQuerySessions' })));
-      toolbar.appendChild(icon('▾', 'Expand all', () => {}));
-      toolbar.appendChild(icon('▸', 'Collapse all', () => {}));
-      toolbar.appendChild(icon('⌕', 'Filter active sessions', () => {}));
+      toolbar.appendChild(toolbarIcon('expand-all', 'Expand all', () => setAllExpanded(true)));
+      toolbar.appendChild(toolbarIcon('collapse-all', 'Collapse all', () => setAllExpanded(false)));
       header.appendChild(toolbar);
       return header;
     }
@@ -844,16 +892,17 @@ class QueryMapProvider {
       layout.className = 'panel-layout';
       const list = document.createElement('div');
       list.className = 'services-tree';
-      const total = groups.reduce((sum, group) => sum + (group.documents || []).length, 0);
-      list.appendChild(treeHeader('▾', 'Database', total ? String(total) : ''));
+      list.setAttribute('aria-label', 'Database query sessions');
       for (const group of groups) {
-        list.appendChild(connectionHeader(group));
-        for (const documentGroup of group.documents) {
-          list.appendChild(consoleRow(documentGroup));
+        const key = groupKey('active', group);
+        list.appendChild(connectionHeader(group, key));
+        if (isExpanded(key)) {
+          for (const documentGroup of group.documents) {
+            list.appendChild(consoleRow(documentGroup));
+          }
         }
       }
       layout.appendChild(list);
-      layout.appendChild(renderOutput(selectedActiveItem() || newestActiveItem()));
       return layout;
     }
 
@@ -864,16 +913,17 @@ class QueryMapProvider {
       layout.className = 'panel-layout';
       const list = document.createElement('div');
       list.className = 'services-tree';
-      const total = groups.reduce((sum, group) => sum + (group.items || []).length, 0);
-      list.appendChild(treeHeader('▾', 'Console History', total ? String(total) : ''));
+      list.setAttribute('aria-label', 'Query session history');
       for (const group of groups) {
-        list.appendChild(connectionHeader(group));
-        for (const item of group.items) {
-          list.appendChild(historyRow(item));
+        const key = groupKey('history', group);
+        list.appendChild(connectionHeader(group, key));
+        if (isExpanded(key)) {
+          for (const item of group.items) {
+            list.appendChild(historyRow(item));
+          }
         }
       }
       layout.appendChild(list);
-      layout.appendChild(renderOutput(selectedHistoryItem() || newestHistoryItem()));
       return layout;
     }
 
@@ -910,11 +960,56 @@ class QueryMapProvider {
       return node;
     }
 
-    function connectionHeader(group) {
-      const node = document.createElement('div');
+    function connectionHeader(group, key) {
+      const node = document.createElement('button');
+      node.type = 'button';
       node.className = 'connection-header';
       const count = group.documents ? group.documents.length : (group.items ? group.items.length : 0);
-      node.innerHTML = '<span>▾</span><span>' + escapeHtml(group.connectionName + (group.databaseName ? ' / ' + group.databaseName : '')) + '</span><span class="tree-count">' + count + '</span>';
+      const open = isExpanded(key);
+      node.setAttribute('aria-expanded', open ? 'true' : 'false');
+      node.title = open ? 'Collapse connection' : 'Expand connection';
+      node.onclick = () => toggleExpanded(key);
+      node.appendChild(treeToggle(open));
+      const label = document.createElement('span');
+      label.textContent = group.connectionName + (group.databaseName ? ' / ' + group.databaseName : '');
+      node.appendChild(label);
+      const countNode = document.createElement('span');
+      countNode.className = 'tree-count';
+      countNode.textContent = String(count);
+      node.appendChild(countNode);
+      return node;
+    }
+
+    function groupKey(scope, group) {
+      return scope + ':' + (group.id || group.connectionName + '/' + (group.databaseName || ''));
+    }
+
+    function isExpanded(key) {
+      return expanded[key] !== false;
+    }
+
+    function toggleExpanded(key) {
+      expanded = { ...expanded, [key]: !isExpanded(key) };
+      saveState();
+      render(currentState);
+    }
+
+    function setAllExpanded(value) {
+      const scope = activeTab === 'history' ? 'history' : 'active';
+      const groups = activeTab === 'history' ? (currentState.historyGroups || []) : (currentState.groups || []);
+      const next = { ...expanded };
+      for (const group of groups) {
+        next[groupKey(scope, group)] = value;
+      }
+      expanded = next;
+      saveState();
+      render(currentState);
+    }
+
+    function treeToggle(open) {
+      const node = document.createElement('span');
+      node.className = 'tree-toggle' + (open ? ' expanded' : '');
+      node.setAttribute('aria-hidden', 'true');
       return node;
     }
 
@@ -1013,6 +1108,15 @@ class QueryMapProvider {
         event.stopPropagation();
         onclick(event);
       };
+      return button;
+    }
+
+    function toolbarIcon(kind, title, onclick) {
+      const button = icon('', title, onclick);
+      const glyph = document.createElement('span');
+      glyph.className = 'toolbar-glyph ' + kind;
+      glyph.setAttribute('aria-hidden', 'true');
+      button.appendChild(glyph);
       return button;
     }
 
