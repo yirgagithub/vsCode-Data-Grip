@@ -514,7 +514,6 @@ class QueryMapProvider {
       color: var(--vscode-icon-foreground, var(--text-muted));
       flex: 0 0 auto;
     }
-    .toolbar-glyph,
     .tree-toggle {
       position: relative;
       width: var(--icon-size);
@@ -522,24 +521,15 @@ class QueryMapProvider {
       color: currentColor;
       flex: 0 0 auto;
     }
-    .toolbar-glyph {
-      height: calc(var(--icon-size) * 1.28);
-      line-height: 1;
-    }
     .tree-toggle {
       height: var(--icon-size);
     }
-    .toolbar-glyph::before,
-    .toolbar-glyph::after {
-      position: absolute;
-      left: 50%;
-      width: auto;
-      height: auto;
-      border: 0;
-      font-size: calc(var(--icon-size) * .72);
-      font-weight: 700;
-      line-height: .7;
-      transform: translateX(-50%);
+    .toolbar-svg {
+      width: calc(var(--icon-size) * 1.1);
+      height: calc(var(--icon-size) * 1.1);
+      display: block;
+      color: currentColor;
+      pointer-events: none;
     }
     .tree-toggle::before {
       content: '';
@@ -556,22 +546,6 @@ class QueryMapProvider {
     }
     .tree-toggle.expanded::before {
       transform: translate(-55%, -62%) rotate(45deg);
-    }
-    .toolbar-glyph.expand-all::before {
-      content: '˄';
-      top: .02rem;
-    }
-    .toolbar-glyph.expand-all::after {
-      content: '˅';
-      bottom: .02rem;
-    }
-    .toolbar-glyph.collapse-all::before {
-      content: '˅';
-      top: .02rem;
-    }
-    .toolbar-glyph.collapse-all::after {
-      content: '˄';
-      bottom: .02rem;
     }
     .tabs {
       min-width: 0;
@@ -1126,10 +1100,25 @@ class QueryMapProvider {
 
     function toolbarIcon(kind, title, onclick) {
       const button = icon('', title, onclick);
-      const glyph = document.createElement('span');
-      glyph.className = 'toolbar-glyph ' + kind;
-      glyph.setAttribute('aria-hidden', 'true');
-      button.appendChild(glyph);
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.classList.add('toolbar-svg');
+      svg.setAttribute('viewBox', '0 0 16 16');
+      svg.setAttribute('aria-hidden', 'true');
+      svg.setAttribute('focusable', 'false');
+      const paths = kind === 'expand-all'
+        ? ['M5 6 L8 3 L11 6', 'M5 10 L8 13 L11 10']
+        : ['M5 4 L8 7 L11 4', 'M5 12 L8 9 L11 12'];
+      for (const d of paths) {
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', d);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke', 'currentColor');
+        path.setAttribute('stroke-width', '1.8');
+        path.setAttribute('stroke-linecap', 'round');
+        path.setAttribute('stroke-linejoin', 'round');
+        svg.appendChild(path);
+      }
+      button.appendChild(svg);
       return button;
     }
 
