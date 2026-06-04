@@ -1,7 +1,7 @@
 {
   "name": "vscode-data-grip",
   "displayName": "Data Grip",
-  "description": "IDE-native PostgreSQL and Redshift SQL tooling for VS Code.",
+  "description": "An AI-native VS Code database client for PostgreSQL and Redshift.",
   "version": "0.0.1",
   "publisher": "avow",
   "engines": {

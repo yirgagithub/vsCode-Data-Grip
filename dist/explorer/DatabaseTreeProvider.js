@@ -54,14 +54,16 @@ class DatabaseTreeProvider {
             return this.connectionManager.getConnections().map((connection) => new nodes_1.ConnectionNode(connection, this.connectionManager.isConnected(connection.id)));
         }
         if (element instanceof nodes_1.ConnectionNode) {
+            return [new nodes_1.CatalogNode(element.connection)];
+        }
+        if (element instanceof nodes_1.CatalogNode) {
+            await this.ensureConnected(element.connection.id);
+            const schemas = await this.connectionManager.getDriver(element.connection.type).getSchemas(element.connection.id);
             return [
-                new nodes_1.CatalogNode(element.connection),
+                ...schemas.map((schema) => new nodes_1.SchemaNode(element.connection, schema)),
                 new nodes_1.StaticFolderNode(element.connection, 'Server Objects'),
                 new nodes_1.StaticFolderNode(element.connection, 'Query Files')
             ];
-        }
-        if (element instanceof nodes_1.CatalogNode) {
-            return [new nodes_1.SchemasNode(element.connection)];
         }
         if (element instanceof nodes_1.SchemasNode) {
             await this.ensureConnected(element.connection.id);
