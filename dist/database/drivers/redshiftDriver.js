@@ -5,6 +5,13 @@ const postgresDriver_1 = require("./postgresDriver");
 class RedshiftDriver extends postgresDriver_1.PostgresDriver {
     id = 'redshift';
     displayName = 'Amazon Redshift';
+    async getSchemas(connectionId) {
+        const result = await this.requirePool(connectionId).query(`select schema_name as name
+       from information_schema.schemata
+       where schema_name <> 'information_schema'
+       order by schema_name`);
+        return result.rows;
+    }
     async getTables(connectionId, schema) {
         const result = await this.requirePool(connectionId).query(`select schemaname as schema, tablename as name, 'table' as type
        from pg_tables

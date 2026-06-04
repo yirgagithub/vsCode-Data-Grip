@@ -1,9 +1,19 @@
 import { PostgresDriver } from './postgresDriver';
-import { ColumnInfo, ConnectionConfigWithPassword, TableInfo, ViewInfo } from '../../types';
+import { ColumnInfo, ConnectionConfigWithPassword, SchemaInfo, TableInfo, ViewInfo } from '../../types';
 
 export class RedshiftDriver extends PostgresDriver {
   override readonly id = 'redshift' as const;
   override readonly displayName = 'Amazon Redshift';
+
+  override async getSchemas(connectionId: string): Promise<SchemaInfo[]> {
+    const result = await this.requirePool(connectionId).query(
+      `select schema_name as name
+       from information_schema.schemata
+       where schema_name <> 'information_schema'
+       order by schema_name`
+    );
+    return result.rows;
+  }
 
   override async getTables(connectionId: string, schema: string): Promise<TableInfo[]> {
     const result = await this.requirePool(connectionId).query(

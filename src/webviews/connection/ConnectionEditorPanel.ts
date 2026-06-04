@@ -8,6 +8,8 @@ type EditorMessage =
   | { type: 'ready' }
   | { type: 'test'; config: FormConnection }
   | { type: 'save'; config: FormConnection }
+  | { type: 'delete'; id: string }
+  | { type: 'select'; id: string | 'new' }
   | { type: 'cancel' };
 
 interface FormConnection {
@@ -66,12 +68,23 @@ export class ConnectionEditorPanel {
       this.panel.dispose();
       return;
     }
+    if (message.type === 'delete') {
+      await this.connectionManager.delete(message.id);
+      const connections = this.connectionManager.getConnections();
+      await this.connectionManager.setSelectedConnection(connections[0]?.id);
+      await this.panel.webview.postMessage({
+        type: 'connections',
+        connections,
+        selectedId: connections[0]?.id ?? 'new'
+      });
+      return;
+    }
     if (message.type === 'test') {
       await this.postState('testing', 'Testing connection...');
       try {
         let config = this.fromForm(message.config);
-        if (!config.password && this.existing?.id) {
-          const existingWithPassword = await this.connectionManager.getConnectionWithPassword(this.existing.id);
+        if (!config.password && config.id) {
+          const existingWithPassword = await this.connectionManager.getConnectionWithPassword(config.id);
           config = { ...config, password: existingWithPassword.password };
         }
         const detail = await this.connectionManager.testConfig(config);
@@ -83,7 +96,11 @@ export class ConnectionEditorPanel {
     }
     if (message.type === 'save') {
       try {
-        const config = this.fromForm(message.config);
+        let config = this.fromForm(message.config);
+        if (!config.password && config.id) {
+          const existingWithPassword = await this.connectionManager.getConnectionWithPassword(config.id);
+          config = { ...config, password: existingWithPassword.password };
+        }
         this.resolve(config);
         this.panel.dispose();
       } catch (error) {
@@ -147,6 +164,7 @@ export class ConnectionEditorPanel {
   private html(webview: vscode.Webview, form: FormConnection): string {
     const nonce = getNonce();
     const data = JSON.stringify(form).replace(/</g, '\\u003c');
+    const connections = JSON.stringify(this.connectionManager.getConnections()).replace(/</g, '\\u003c');
     const defaults = JSON.stringify(DEFAULTS_BY_DATABASE_TYPE).replace(/</g, '\\u003c');
     return `<!doctype html>
 <html lang="en">
@@ -317,6 +335,7 @@ export class ConnectionEditorPanel {
       padding: 0 var(--space-sm);
       border: 0;
       border-radius: 0;
+      background: transparent;
       text-align: left;
     }
     .source-row.active {
@@ -355,7 +374,7 @@ export class ConnectionEditorPanel {
     }
     .top-fields {
       display: grid;
-      grid-template-columns: auto minmax(0, 1fr) auto minmax(7rem, 10rem);
+      grid-template-columns: auto minmax(0, 1fr) auto minmax(11rem, 14rem) auto minmax(7rem, 10rem);
       gap: var(--space-sm);
       align-items: center;
       padding: var(--space-md);
@@ -496,6 +515,16 @@ export class ConnectionEditorPanel {
       align-items: center;
       gap: var(--space-xs);
       padding: 0 var(--space-sm);
+      text-align: left;
+      width: 100%;
+      border-radius: 0;
+      border: 0;
+      background: transparent;
+      color: var(--text-main);
+    }
+    .schema-row.active {
+      background: var(--bg-active);
+      color: var(--vscode-list-activeSelectionForeground, var(--text-main));
     }
     .schema-row.child { padding-left: calc(var(--space-lg) * 1.6); }
     .schema-row input[type="checkbox"],
@@ -655,6 +684,11 @@ export class ConnectionEditorPanel {
           <div class="top-fields">
             <span class="field-label">Name:</span>
             <input name="name" autocomplete="off" aria-label="Connection name">
+            <span class="field-label">Driver:</span>
+            <select name="type" id="typeField" aria-label="Database type">
+              <option value="postgres">PostgreSQL</option>
+              <option value="redshift">Amazon Redshift</option>
+            </select>
             <span class="field-label">Color:</span>
             <select name="color" aria-label="Connection color">
               <option>green</option>
@@ -671,21 +705,9 @@ export class ConnectionEditorPanel {
             <button type="button" class="tab" data-tab="options" role="tab">Options</button>
             <button type="button" class="tab" data-tab="ssh" role="tab">SSH/SSL</button>
             <button type="button" class="tab" data-tab="schemas" role="tab">Schemas</button>
-            <button type="button" class="tab" data-tab="advanced" role="tab">Advanced</button>
-            <button type="button" class="tab" data-tab="kubernetes" role="tab">Kubernetes</button>
           </div>
           <div class="tab-panel active" data-panel="general">
-            <select name="type" id="typeField" class="sr-only" aria-label="Database type">
-              <option value="postgres">PostgreSQL</option>
-              <option value="redshift">Amazon Redshift</option>
-            </select>
             <div class="form-grid">
-              <span class="field-label">Driver:</span>
-              <select id="driverPreview" aria-label="Driver" tabindex="-1">
-                <option>PostgreSQL</option>
-                <option>Amazon Redshift</option>
-              </select>
-              <span></span>
               <span class="field-label">Connection type:</span>
               <div class="segment full-row" role="group" aria-label="Connection type">
                 <button type="button" data-db-type="postgres">default</button>
@@ -719,6 +741,10 @@ export class ConnectionEditorPanel {
               <label class="check"><input name="readOnlyDefault" type="checkbox">Read-only by default</label>
               <span class="field-label">Environment:</span>
               <label class="check"><input name="production" type="checkbox">Production connection</label>
+              <span class="field-label">Connect timeout ms:</span>
+              <input name="connectTimeoutMs" inputmode="numeric" aria-label="Connect timeout milliseconds">
+              <span class="field-label">Query timeout ms:</span>
+              <input name="queryTimeoutMs" inputmode="numeric" aria-label="Query timeout milliseconds">
             </div>
           </div>
           <div class="tab-panel" data-panel="ssh">
@@ -739,13 +765,13 @@ export class ConnectionEditorPanel {
                 <input aria-label="Search schemas" placeholder="Search">
               </div>
               <div class="schema-tree" role="tree" aria-label="Schemas">
-                <label class="schema-row"><input type="checkbox" checked disabled><span>▾</span><span>All databases</span></label>
-                <label class="schema-row"><input type="checkbox" disabled><span>▸</span><span>All external databases</span></label>
-                <label class="schema-row"><input type="checkbox" checked disabled><span>▾</span><span>Default database</span></label>
-                <label class="schema-row child"><input type="checkbox" checked disabled><span>▾</span><span id="schemaDatabaseLabel">database</span></label>
-                <label class="schema-row child"><input type="checkbox" disabled><span>▸</span><span>awsdatacatalog</span></label>
-                <label class="schema-row child"><input type="checkbox" disabled><span>▸</span><span>dev</span></label>
-                <label class="schema-row child"><input type="checkbox" disabled><span>▸</span><span>padb_harvest</span></label>
+                <button type="button" class="schema-row" data-schema-pattern="*"><span>▾</span><span>All databases</span></button>
+                <button type="button" class="schema-row" data-schema-pattern="external"><span>▸</span><span>All external databases</span></button>
+                <button type="button" class="schema-row" data-schema-pattern="default"><span>▾</span><span>Default database</span></button>
+                <button type="button" class="schema-row child" data-schema-pattern="database"><span>▾</span><span id="schemaDatabaseLabel">database</span></button>
+                <button type="button" class="schema-row child" data-schema-pattern="awsdatacatalog"><span>▸</span><span>awsdatacatalog</span></button>
+                <button type="button" class="schema-row child" data-schema-pattern="dev"><span>▸</span><span>dev</span></button>
+                <button type="button" class="schema-row child" data-schema-pattern="padb_harvest"><span>▸</span><span>padb_harvest</span></button>
               </div>
               <div class="schema-footer">
                 <label class="pattern"><span class="field-label">Schema pattern:</span><code id="schemaPattern">@:@|avow:public</code></label>
@@ -756,17 +782,6 @@ export class ConnectionEditorPanel {
                 </div>
               </div>
             </div>
-          </div>
-          <div class="tab-panel" data-panel="advanced">
-            <div class="advanced-grid">
-              <span class="field-label">Connect timeout ms:</span>
-              <input name="connectTimeoutMs" inputmode="numeric" aria-label="Connect timeout milliseconds">
-              <span class="field-label">Query timeout ms:</span>
-              <input name="queryTimeoutMs" inputmode="numeric" aria-label="Query timeout milliseconds">
-            </div>
-          </div>
-          <div class="tab-panel" data-panel="kubernetes">
-            <div class="empty-state">No Kubernetes tunnel configured.</div>
           </div>
         </section>
       </div>
@@ -783,8 +798,14 @@ export class ConnectionEditorPanel {
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const formData = ${data};
+    const allConnections = ${connections};
     const defaultsByType = ${defaults};
     const form = document.getElementById('form');
+    const connectionList = allConnections.map((connection) => ({ ...connection }));
+    let selectedId = formData.id ?? (connectionList[0]?.id || 'new');
+    let draftActive = !formData.id;
+    const currentSchemaRows = Array.from(document.querySelectorAll('[data-schema-pattern]'));
+    const schemaSearch = form.querySelector('input[aria-label="Search schemas"]');
     for (const [key, value] of Object.entries(formData)) {
       const field = form.elements.namedItem(key);
       if (!field) continue;
@@ -793,7 +814,6 @@ export class ConnectionEditorPanel {
     }
     let previousType = formData.type || 'postgres';
     const typeField = form.elements.namedItem('type');
-    const driverPreview = document.getElementById('driverPreview');
     const sourceName = document.getElementById('sourceName');
     const urlPreview = document.getElementById('urlPreview');
     const schemaPattern = document.getElementById('schemaPattern');
@@ -801,6 +821,82 @@ export class ConnectionEditorPanel {
     const typeButtons = Array.from(document.querySelectorAll('[data-db-type]'));
     const tabs = Array.from(document.querySelectorAll('[data-tab]'));
     const panels = Array.from(document.querySelectorAll('[data-panel]'));
+    const addButton = document.querySelector('.rail-toolbar button[title="Add data source"]');
+    const removeButton = document.querySelector('.rail-toolbar button[title="Remove data source"]');
+    const sourceRows = document.querySelector('.data-source-list');
+    function connectionLabel(connection) {
+      return connection.name || defaultsByType[connection.type || 'postgres'].name;
+    }
+    function renderSourceList() {
+      const selected = selectedId;
+      sourceRows.innerHTML = '';
+      const draftRow = document.createElement('button');
+      draftRow.type = 'button';
+      draftRow.className = 'source-row' + (selected === 'new' ? ' active' : '');
+      draftRow.innerHTML = '<span class="db-icon">＋</span><span class="source-name">New connection</span><span class="status-dot" title="Draft"></span>';
+      draftRow.addEventListener('click', () => selectConnection('new'));
+      sourceRows.appendChild(draftRow);
+      for (const connection of connectionList) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'source-row' + (selected === connection.id ? ' active' : '');
+        row.innerHTML = '<span class="db-icon">▣</span><span class="source-name"></span><span class="status-dot" title="Configured"></span>';
+        row.querySelector('.source-name').textContent = connectionLabel(connection);
+        row.addEventListener('click', () => selectConnection(connection.id));
+        sourceRows.appendChild(row);
+      }
+    }
+    function loadConnection(connection) {
+      const next = connection || {
+        id: undefined,
+        name: defaultsByType[form.elements.namedItem('type').value || 'postgres'].name,
+        type: form.elements.namedItem('type').value || 'postgres',
+        host: 'localhost',
+        port: defaultsByType[form.elements.namedItem('type').value || 'postgres'].port,
+        database: defaultsByType[form.elements.namedItem('type').value || 'postgres'].database,
+        username: '',
+        password: '',
+        sslMode: defaultsByType[form.elements.namedItem('type').value || 'postgres'].sslMode,
+        defaultSchema: 'public',
+        color: defaultsByType[form.elements.namedItem('type').value || 'postgres'].color
+      };
+      for (const [key, value] of Object.entries(next)) {
+        const field = form.elements.namedItem(key);
+        if (!field) continue;
+        if (field.type === 'checkbox') field.checked = value === true;
+        else field.value = value ?? '';
+      }
+      formData.id = next.id;
+      previousType = form.elements.namedItem('type').value || 'postgres';
+      draftActive = !next.id;
+      syncDerivedFields();
+      renderSourceList();
+    }
+    function selectConnection(id) {
+      selectedId = id;
+      if (id === 'new') {
+        loadConnection({
+          type: typeField.value || 'postgres',
+          name: defaultsByType[typeField.value || 'postgres'].name,
+          host: 'localhost',
+          port: defaultsByType[typeField.value || 'postgres'].port,
+          database: defaultsByType[typeField.value || 'postgres'].database,
+          username: '',
+          password: '',
+          sslMode: defaultsByType[typeField.value || 'postgres'].sslMode,
+          defaultSchema: 'public',
+          color: defaultsByType[typeField.value || 'postgres'].color
+        });
+        return;
+      }
+      const existing = connectionList.find((connection) => connection.id === id);
+      if (existing) {
+        loadConnection({
+          ...existing,
+          password: ''
+        });
+      }
+    }
     function syncDerivedFields() {
       const name = form.elements.namedItem('name').value || 'Connection';
       const type = typeField.value;
@@ -812,11 +908,10 @@ export class ConnectionEditorPanel {
       schemaDatabaseLabel.textContent = database + ' (Default database)';
       schemaPattern.textContent = '@:@|' + database + ':' + schema;
       urlPreview.value = 'jdbc:' + (type === 'redshift' ? 'redshift' : 'postgresql') + '://' + host + (port ? ':' + port : '') + '/' + database;
-      driverPreview.value = type === 'redshift' ? 'Amazon Redshift' : 'PostgreSQL';
       typeButtons.forEach((button) => button.classList.toggle('active', button.dataset.dbType === type));
+      renderSourceList();
     }
-    typeField.addEventListener('change', () => {
-      const nextType = typeField.value;
+    function applyDefaultsForType(nextType) {
       const previousDefaults = defaultsByType[previousType] || defaultsByType.postgres;
       const nextDefaults = defaultsByType[nextType] || defaultsByType.postgres;
       for (const name of ['name', 'port', 'database', 'sslMode', 'color']) {
@@ -827,6 +922,10 @@ export class ConnectionEditorPanel {
         }
       }
       previousType = nextType;
+    }
+    typeField.addEventListener('change', () => {
+      const nextType = typeField.value;
+      applyDefaultsForType(nextType);
       syncDerivedFields();
     });
     typeButtons.forEach((button) => {
@@ -834,10 +933,6 @@ export class ConnectionEditorPanel {
         typeField.value = button.dataset.dbType;
         typeField.dispatchEvent(new Event('change'));
       });
-    });
-    driverPreview.addEventListener('change', () => {
-      typeField.value = driverPreview.value === 'Amazon Redshift' ? 'redshift' : 'postgres';
-      typeField.dispatchEvent(new Event('change'));
     });
     tabs.forEach((tab) => {
       tab.addEventListener('click', () => {
@@ -852,6 +947,35 @@ export class ConnectionEditorPanel {
     for (const name of ['name', 'host', 'port', 'database', 'defaultSchema']) {
       form.elements.namedItem(name)?.addEventListener('input', syncDerivedFields);
     }
+    form.elements.namedItem('type')?.addEventListener('change', syncDerivedFields);
+    addButton.addEventListener('click', () => selectConnection('new'));
+    removeButton.addEventListener('click', () => {
+      if (selectedId === 'new') {
+        const fallback = connectionList[0];
+        selectedId = fallback?.id || 'new';
+        selectConnection(selectedId);
+        return;
+      }
+      const id = selectedId;
+      if (!id) return;
+      vscode.postMessage({ type: 'delete', id });
+    });
+    schemaSearch?.addEventListener('input', () => {
+      const term = schemaSearch.value.trim().toLowerCase();
+      currentSchemaRows.forEach((row) => {
+        const label = row.textContent?.toLowerCase() || '';
+        row.hidden = !!term && !label.includes(term) && !(row.dataset.schemaPattern || '').includes(term);
+      });
+    });
+    currentSchemaRows.forEach((row) => {
+      row.addEventListener('click', () => {
+        const pattern = row.dataset.schemaPattern;
+        if (!pattern) return;
+        const defaultSchema = pattern === '*' ? 'public' : pattern === 'default' ? (form.elements.namedItem('defaultSchema').value || 'public') : pattern;
+        form.elements.namedItem('defaultSchema').value = defaultSchema;
+        syncDerivedFields();
+      });
+    });
     function collect() {
       const data = {};
       for (const element of form.elements) {
@@ -866,6 +990,25 @@ export class ConnectionEditorPanel {
     document.getElementById('cancel').addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
     document.getElementById('cancelTop').addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
     window.addEventListener('message', event => {
+      if (event.data?.type === 'connections') {
+        connectionList.splice(0, connectionList.length, ...(event.data.connections || []));
+        if (event.data.selectedId) {
+          selectedId = event.data.selectedId;
+        }
+        if (selectedId === 'new' || !connectionList.some((connection) => connection.id === selectedId)) {
+          selectedId = connectionList[0]?.id || 'new';
+        }
+        renderSourceList();
+        if (selectedId === 'new') {
+          selectConnection('new');
+        } else {
+          const active = connectionList.find((connection) => connection.id === selectedId);
+          if (active) {
+            loadConnection({ ...active, password: '' });
+          }
+        }
+        return;
+      }
       const status = document.getElementById('status');
       status.className = event.data.state || '';
       status.textContent = event.data.message || '';
@@ -873,7 +1016,12 @@ export class ConnectionEditorPanel {
       document.getElementById('save').disabled = testing;
       document.getElementById('test').disabled = testing;
     });
-    syncDerivedFields();
+    renderSourceList();
+    if (formData.id) {
+      selectConnection(formData.id);
+    } else {
+      selectConnection('new');
+    }
   </script>
 </body>
 </html>`;
