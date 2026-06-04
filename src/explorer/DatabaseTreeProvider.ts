@@ -22,15 +22,17 @@ export class DatabaseTreeProvider implements vscode.TreeDataProvider<DatabaseNod
     }
 
     if (element instanceof ConnectionNode) {
-      return [
-        new CatalogNode(element.connection),
-        new StaticFolderNode(element.connection, 'Server Objects'),
-        new StaticFolderNode(element.connection, 'Query Files')
-      ];
+      return [new CatalogNode(element.connection)];
     }
 
     if (element instanceof CatalogNode) {
-      return [new SchemasNode(element.connection)];
+      await this.ensureConnected(element.connection.id);
+      const schemas = await this.connectionManager.getDriver(element.connection.type).getSchemas(element.connection.id);
+      return [
+        ...schemas.map((schema) => new SchemaNode(element.connection, schema)),
+        new StaticFolderNode(element.connection, 'Server Objects'),
+        new StaticFolderNode(element.connection, 'Query Files')
+      ];
     }
 
     if (element instanceof SchemasNode) {
