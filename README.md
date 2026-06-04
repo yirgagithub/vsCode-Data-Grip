@@ -2,6 +2,23 @@
 
 An AI-native VS Code database client for PostgreSQL and Redshift.
 
+## Why I Built This
+
+This project started when my company moved away from IntelliJ IDEA and I lost the DataGrip workflow I relied on every day. I tried to find a VS Code extension that felt like a real replacement, but nothing I found came close to the mix of schema browsing, SQL editing, and database introspection that made DataGrip so practical.
+
+That gap is what pushed me to build this extension. The goal was to bring a DataGrip-style experience into VS Code instead of forcing a context switch back to a separate IDE.
+
+The AI-native layer is there to make repeated database work faster, not to replace the core editor experience. It helps with things like:
+
+- executing queries and keeping them in durable, searchable history
+- finding an old query later when you remember the intent, not the exact SQL
+- using semantic search over query history to recover work you forgot to save
+- explaining schema context, table structure, and query behavior
+- suggesting Redshift table improvements, including candidate distribution keys and other storage choices
+- combining database metadata with history so AI responses stay grounded in the real database
+
+The result is a database client that feels native to VS Code, but still aims for the depth I missed from DataGrip.
+
 ## Quick Start: Schema-Aware SQL
 
 1. Run `Database: Add Database Connection` or pick an existing connection from the Database view.
