@@ -64,6 +64,7 @@ class CatalogNode extends vscode.TreeItem {
     constructor(connection) {
         super(truncateMiddle(connection.database, 40), vscode.TreeItemCollapsibleState.Collapsed);
         this.connection = connection;
+        this.id = `catalog:${connection.id}:${connection.database}`;
         this.description = connection.host;
         this.contextValue = 'catalog';
         this.iconPath = new vscode.ThemeIcon('server-environment');
@@ -77,6 +78,7 @@ class SchemasNode extends vscode.TreeItem {
     constructor(connection) {
         super('Schemas', vscode.TreeItemCollapsibleState.Collapsed);
         this.connection = connection;
+        this.id = `schemas:${connection.id}`;
         this.contextValue = 'schemas';
         this.iconPath = new vscode.ThemeIcon('library');
     }
@@ -90,6 +92,7 @@ class SchemaNode extends vscode.TreeItem {
         super(truncateMiddle(schema.name, 40), vscode.TreeItemCollapsibleState.Collapsed);
         this.connection = connection;
         this.schema = schema;
+        this.id = `schema:${connection.id}:${schema.name}`;
         this.contextValue = 'schema';
         this.iconPath = new vscode.ThemeIcon('library');
         this.tooltip = schema.name;
@@ -108,6 +111,7 @@ class FolderNode extends vscode.TreeItem {
         this.schema = schema;
         this.folder = folder;
         this.tableName = tableName;
+        this.id = `folder:${connection.id}:${schema}:${folder}:${tableName ?? ''}`;
         this.contextValue = folder.toLowerCase().replace(/\s+/g, '-');
         this.iconPath = new vscode.ThemeIcon(folder === 'Materialized Views' ? 'symbol-structure' : 'folder');
     }
@@ -121,6 +125,7 @@ class StaticFolderNode extends vscode.TreeItem {
         super(name, collapsibleState);
         this.connection = connection;
         this.name = name;
+        this.id = `static-folder:${connection.id}:${name}`;
         this.contextValue = name.toLowerCase().replace(/\s+/g, '-');
         this.iconPath = new vscode.ThemeIcon(name === 'Query Files' ? 'files' : 'folder');
     }
@@ -134,6 +139,7 @@ class TableNode extends vscode.TreeItem {
         super(truncateMiddle(table.name, 48), vscode.TreeItemCollapsibleState.Collapsed);
         this.connection = connection;
         this.table = table;
+        this.id = `table:${connection.id}:${table.schema}:${table.name}`;
         this.description = table.rowEstimate !== undefined ? `~${table.rowEstimate}` : undefined;
         this.contextValue = 'table';
         this.iconPath = new vscode.ThemeIcon(table.type === 'materialized_view' ? 'symbol-structure' : 'table');
@@ -150,6 +156,7 @@ class ViewNode extends vscode.TreeItem {
         super(truncateMiddle(view.name, 48), vscode.TreeItemCollapsibleState.None);
         this.connection = connection;
         this.view = view;
+        this.id = `view:${connection.id}:${view.schema}:${view.name}`;
         this.contextValue = 'view';
         this.iconPath = new vscode.ThemeIcon('eye');
         this.tooltip = `${view.schema}.${view.name}`;
@@ -164,6 +171,7 @@ class ColumnNode extends vscode.TreeItem {
         super(truncateMiddle(column.name, 44), vscode.TreeItemCollapsibleState.None);
         this.connection = connection;
         this.column = column;
+        this.id = `column:${connection.id}:${column.schema}:${column.table}:${column.name}`;
         this.description = truncateEnd(`${column.dataType}${column.nullable ? '' : ' not null'}`, 30);
         this.contextValue = 'column';
         this.iconPath = new vscode.ThemeIcon(column.name.toLowerCase() === 'id' ? 'key' : 'symbol-field');
