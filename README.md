@@ -1,6 +1,6 @@
 # Data Grip
 
-IDE-native PostgreSQL and Redshift SQL tooling for VS Code.
+An AI-native VS Code database client for PostgreSQL and Redshift.
 
 ## Quick Start: Schema-Aware SQL
 

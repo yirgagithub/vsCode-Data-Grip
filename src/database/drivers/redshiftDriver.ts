@@ -18,7 +18,7 @@ export class RedshiftDriver extends PostgresDriver {
            select nspname as name
            from pg_namespace
          ) schemas
-         where name <> 'information_schema' and name not like 'pg_toast%'
+         where name <> 'information_schema' and name not like 'pg_toast%' and name not like 'pg_temp%'
          order by name`
       );
       return result.rows;
@@ -26,7 +26,7 @@ export class RedshiftDriver extends PostgresDriver {
       const result = await pool.query(
         `select nspname as name
          from pg_namespace
-         where nspname <> 'information_schema' and nspname not like 'pg_toast%'
+         where nspname <> 'information_schema' and nspname not like 'pg_toast%' and nspname not like 'pg_temp%'
          order by nspname`
       );
       return result.rows;
