@@ -6,17 +6,40 @@ const react_1 = require("react");
 const format_1 = require("../format");
 const vscode_1 = require("../vscode");
 const format_2 = require("../format");
-const ROW_HEIGHT = 24;
+const ROW_HEIGHT = 32;
 const BUFFER = 12;
-const DEFAULT_COLUMN_WIDTH = 188;
-const MIN_COLUMN_WIDTH = 96;
-const OPERATORS = ['contains', 'equals', 'not equals', 'starts with', 'ends with', 'is null', 'is not null'];
+const DEFAULT_COLUMN_WIDTH = 220;
+const MIN_COLUMN_WIDTH = 112;
+const MAX_FILTER_OPTIONS = 250;
+const NUMERIC_TYPE_IDS = new Set([20, 21, 23, 700, 701, 790, 1700]);
+const NUMERIC_TYPE_NAMES = [
+    'bigint',
+    'bigserial',
+    'decimal',
+    'double precision',
+    'float',
+    'float4',
+    'float8',
+    'int',
+    'int2',
+    'int4',
+    'int8',
+    'integer',
+    'money',
+    'numeric',
+    'real',
+    'serial',
+    'serial2',
+    'serial4',
+    'serial8',
+    'smallint'
+];
 function ResultGrid({ tab, resultSet }) {
     const [scrollTop, setScrollTop] = (0, react_1.useState)(0);
     const [sort, setSort] = (0, react_1.useState)(tab.sort[0]);
     const [whereFilter, setWhereFilter] = (0, react_1.useState)('');
     const [orderBy, setOrderBy] = (0, react_1.useState)(tab.sort[0] ? `${tab.sort[0].column} ${tab.sort[0].direction}` : '');
-    const [columnFiltersVisible, setColumnFiltersVisible] = (0, react_1.useState)(false);
+    const [columnFiltersVisible, setColumnFiltersVisible] = (0, react_1.useState)(true);
     const [filters, setFilters] = (0, react_1.useState)([]);
     const [openFilterColumn, setOpenFilterColumn] = (0, react_1.useState)();
     const [selection, setSelection] = (0, react_1.useState)();
@@ -45,6 +68,13 @@ function ResultGrid({ tab, resultSet }) {
             return order.direction === 'asc' ? av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' }) : bv.localeCompare(av, undefined, { numeric: true, sensitivity: 'base' });
         });
     }, [rows, sort, whereFilter, filters, orderBy, fields]);
+    const selectedColumnStats = (0, react_1.useMemo)(() => {
+        if (selection?.type !== 'column') {
+            return undefined;
+        }
+        const field = fields.find((item) => item.name === selection.column);
+        return field ? calculateColumnStats(field, visibleRows) : undefined;
+    }, [selection, fields, visibleRows]);
     const pageStart = Math.min(pageOffset, Math.max(0, Math.floor((visibleRows.length - 1) / pageLimit) * pageLimit));
     const pageRows = visibleRows.slice(pageStart, pageStart + pageLimit);
     const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER);
@@ -147,7 +177,7 @@ function ResultGrid({ tab, resultSet }) {
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
     };
-    return ((0, jsx_runtime_1.jsxs)("section", { className: "grid-shell", onKeyDown: onGridKeyDown, children: [(0, jsx_runtime_1.jsxs)("div", { className: "criteria-row", children: [(0, jsx_runtime_1.jsxs)("label", { className: "criteria", children: [(0, jsx_runtime_1.jsx)("span", { className: "criteria-icon", children: "\u25BD" }), (0, jsx_runtime_1.jsx)("strong", { children: "WHERE" }), (0, jsx_runtime_1.jsx)("input", { value: whereFilter, onChange: (event) => {
+    return ((0, jsx_runtime_1.jsxs)("section", { className: "grid-shell", onKeyDown: onGridKeyDown, children: [(0, jsx_runtime_1.jsxs)("div", { className: "criteria-row", children: [(0, jsx_runtime_1.jsxs)("label", { className: "criteria", children: [(0, jsx_runtime_1.jsx)("span", { className: "criteria-icon", children: (0, jsx_runtime_1.jsx)(FilterIcon, {}) }), (0, jsx_runtime_1.jsx)("strong", { children: "WHERE" }), (0, jsx_runtime_1.jsx)("input", { value: whereFilter, onChange: (event) => {
                                     setWhereFilter(event.target.value);
                                     setPageOffset(0);
                                 } })] }), (0, jsx_runtime_1.jsxs)("label", { className: "criteria", children: [(0, jsx_runtime_1.jsx)("span", { className: "criteria-icon order", children: "\u2261" }), (0, jsx_runtime_1.jsx)("strong", { children: "ORDER BY" }), (0, jsx_runtime_1.jsx)("input", { value: orderBy, onChange: (event) => {
@@ -155,33 +185,25 @@ function ResultGrid({ tab, resultSet }) {
                                     setPageOffset(0);
                                 } })] })] }), (0, jsx_runtime_1.jsxs)("div", { className: `grid-layout ${inspectorOpen ? 'with-inspector' : ''}`, children: [(0, jsx_runtime_1.jsxs)("div", { className: "grid result-grid", onScroll: (event) => setScrollTop(event.currentTarget.scrollTop), onClick: () => setContextMenu(undefined), role: "grid", "aria-rowcount": visibleRows.length, "aria-colcount": fields.length, tabIndex: 0, children: [(0, jsx_runtime_1.jsxs)("div", { className: "grid-header", style: gridColumnStyle, children: [(0, jsx_runtime_1.jsx)("div", { className: "cell rownum", role: "columnheader", children: "#" }), fields.map((field) => {
                                         const activeFilter = filters.find((filter) => filter.column === field.name);
-                                        return ((0, jsx_runtime_1.jsxs)("div", { className: `cell header-cell ${activeFilter ? 'filtered' : ''} ${selectedColumn === field.name ? 'selected-column' : ''}`, role: "columnheader", "aria-sort": sort?.column === field.name ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none', onContextMenu: (event) => openContextMenu(event, { column: field.name }), children: [(0, jsx_runtime_1.jsxs)("button", { className: "header-title", "aria-label": `Sort by ${field.name}`, onClick: () => {
+                                        return ((0, jsx_runtime_1.jsxs)("div", { className: `cell header-cell ${activeFilter ? 'filtered' : ''} ${selectedColumn === field.name ? 'selected-column' : ''}`, role: "columnheader", "aria-sort": sort?.column === field.name ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none', onContextMenu: (event) => openContextMenu(event, { column: field.name }), children: [(0, jsx_runtime_1.jsxs)("button", { className: "header-title", "aria-label": `Select column ${field.name}`, onClick: () => {
+                                                        setSelection({ type: 'column', column: field.name });
+                                                    }, children: [(0, jsx_runtime_1.jsx)("span", { className: "column-type-icon" }), (0, jsx_runtime_1.jsx)("span", { children: field.name }), field.dataTypeName && (0, jsx_runtime_1.jsx)("small", { children: field.dataTypeName })] }), (0, jsx_runtime_1.jsx)("button", { className: `sort-button ${sort?.column === field.name ? 'active' : ''}`, title: `Sort ${field.name}`, "aria-label": `Sort ${field.name}`, onClick: (event) => {
+                                                        event.stopPropagation();
                                                         const nextSort = sort?.column === field.name && sort.direction === 'asc' ? { column: field.name, direction: 'desc' } : { column: field.name, direction: 'asc' };
                                                         setSort(nextSort);
                                                         setOrderBy(`${nextSort.column} ${nextSort.direction}`);
                                                         setSelection({ type: 'column', column: field.name });
                                                         setPageOffset(0);
-                                                    }, children: [(0, jsx_runtime_1.jsx)("span", { className: "column-type-icon" }), (0, jsx_runtime_1.jsx)("span", { children: field.name }), field.dataTypeName && (0, jsx_runtime_1.jsx)("small", { children: field.dataTypeName }), sort?.column === field.name && (0, jsx_runtime_1.jsx)("span", { className: "sort-mark", children: sort.direction })] }), (0, jsx_runtime_1.jsx)("button", { className: "filter-button", title: "Filter column", "aria-label": `Filter ${field.name}`, onClick: () => {
-                                                        setColumnFiltersVisible(true);
+                                                    }, children: sort?.column === field.name ? (sort.direction === 'asc' ? '▲' : '▼') : '↕' }), columnFiltersVisible && ((0, jsx_runtime_1.jsx)("button", { className: `filter-button ${activeFilter ? 'active' : ''}`, title: "Filter column", "aria-label": `Filter ${field.name}`, onClick: () => {
                                                         setOpenFilterColumn(openFilterColumn === field.name ? undefined : field.name);
-                                                    }, children: "\u2304" }), (0, jsx_runtime_1.jsx)("span", { className: "resize-handle", title: "Resize column", onMouseDown: (event) => startColumnResize(event, field.name) }), columnFiltersVisible && openFilterColumn === field.name && ((0, jsx_runtime_1.jsx)(ColumnFilterPopover, { filter: activeFilter ?? { column: field.name, operator: 'contains', value: '' }, onApply: (filter) => {
+                                                    }, children: (0, jsx_runtime_1.jsx)(FilterIcon, {}) })), (0, jsx_runtime_1.jsx)("span", { className: "resize-handle", title: "Resize column", onMouseDown: (event) => startColumnResize(event, field.name) }), columnFiltersVisible && openFilterColumn === field.name && ((0, jsx_runtime_1.jsx)(ColumnFilterPopover, { column: field.name, rows: rows, filter: activeFilter, onApply: (filter) => {
                                                         setFilters((current) => [...current.filter((item) => item.column !== field.name), filter]);
-                                                        setOpenFilterColumn(undefined);
+                                                        setPageOffset(0);
                                                     }, onClear: () => {
                                                         setFilters((current) => current.filter((item) => item.column !== field.name));
-                                                        setOpenFilterColumn(undefined);
+                                                        setPageOffset(0);
                                                     } }))] }, field.name));
-                                    })] }), columnFiltersVisible && ((0, jsx_runtime_1.jsxs)("div", { className: "grid-row column-filter-row", style: gridColumnStyle, children: [(0, jsx_runtime_1.jsx)("div", { className: "cell rownum" }), fields.map((field) => {
-                                        const activeFilter = filters.find((filter) => filter.column === field.name);
-                                        return ((0, jsx_runtime_1.jsx)("div", { className: "cell", children: (0, jsx_runtime_1.jsx)("input", { value: activeFilter?.value ?? '', onChange: (event) => {
-                                                    const value = event.target.value;
-                                                    setFilters((current) => [
-                                                        ...current.filter((item) => item.column !== field.name),
-                                                        ...(value ? [{ column: field.name, operator: 'contains', value }] : [])
-                                                    ]);
-                                                    setPageOffset(0);
-                                                } }) }, field.name));
-                                    })] })), (0, jsx_runtime_1.jsx)("div", { className: "grid-body", style: { height: pageRows.length * ROW_HEIGHT }, children: (0, jsx_runtime_1.jsx)("div", { style: { transform: `translateY(${start * ROW_HEIGHT}px)` }, children: slice.map((row, index) => ((0, jsx_runtime_1.jsxs)("div", { className: `grid-row ${selectedRow === pageStart + start + index ? 'selected-row' : ''}`, style: gridColumnStyle, role: "row", children: [(0, jsx_runtime_1.jsx)("div", { className: "cell rownum", role: "rowheader", onClick: () => setSelection({ type: 'row', rowIndex: pageStart + start + index }), onContextMenu: (event) => openContextMenu(event, { rowIndex: pageStart + start + index }), children: pageStart + start + index + 1 }), fields.map((field) => {
+                                    })] }), (0, jsx_runtime_1.jsx)("div", { className: "grid-body", style: { height: pageRows.length * ROW_HEIGHT }, children: (0, jsx_runtime_1.jsx)("div", { style: { transform: `translateY(${start * ROW_HEIGHT}px)` }, children: slice.map((row, index) => ((0, jsx_runtime_1.jsxs)("div", { className: `grid-row ${selectedRow === pageStart + start + index ? 'selected-row' : ''}`, style: gridColumnStyle, role: "row", children: [(0, jsx_runtime_1.jsx)("div", { className: "cell rownum", role: "rowheader", onClick: () => setSelection({ type: 'row', rowIndex: pageStart + start + index }), onContextMenu: (event) => openContextMenu(event, { rowIndex: pageStart + start + index }), children: pageStart + start + index + 1 }), fields.map((field) => {
                                                 const rowIndex = pageStart + start + index;
                                                 const value = row[field.name];
                                                 const isSelected = selectedCell?.rowIndex === rowIndex && selectedCell.column === field.name;
@@ -210,13 +232,140 @@ function ResultGrid({ tab, resultSet }) {
                         }, children: [(0, jsx_runtime_1.jsx)("span", { children: "\u25A5" }), (0, jsx_runtime_1.jsx)("span", { children: "Copy Column" })] }), (0, jsx_runtime_1.jsxs)("button", { role: "menuitem", onClick: () => {
                             vscode_1.vscode.postMessage({ type: 'copy', text: (0, format_2.rowsToCsv)(visibleRows) });
                             setContextMenu(undefined);
-                        }, children: [(0, jsx_runtime_1.jsx)("span", { children: "\u21E9" }), (0, jsx_runtime_1.jsx)("span", { children: "Copy Visible as CSV" })] })] })), (0, jsx_runtime_1.jsx)("div", { className: "result-pager", children: (0, jsx_runtime_1.jsxs)("span", { className: "pager-group", children: [(0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: pageStart === 0, onClick: () => setPageOffset(0), children: "|\u2039" }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: pageStart === 0, onClick: () => setPageOffset(Math.max(0, pageStart - pageLimit)), children: "\u2039" }), (0, jsx_runtime_1.jsx)("select", { value: String(pageLimit), onChange: (event) => setPageOffset(0), children: (0, jsx_runtime_1.jsx)("option", { value: String(pageLimit), children: pageRows.length ? `${(pageStart + 1).toLocaleString()}-${pageEnd.toLocaleString()}` : '0' }) }), (0, jsx_runtime_1.jsxs)("span", { children: ["of ", hasNextPage ? `${(pageEnd + 1).toLocaleString()}+` : pageEnd.toLocaleString()] }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: !hasNextPage, onClick: () => setPageOffset(pageStart + pageLimit), children: "\u203A" }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: true, children: "\u203A|" }), (0, jsx_runtime_1.jsx)("span", { className: "pager-separator" }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", onClick: () => setColumnFiltersVisible((visible) => !visible), children: "\u22EE" })] }) })] }));
+                        }, children: [(0, jsx_runtime_1.jsx)("span", { children: "\u21E9" }), (0, jsx_runtime_1.jsx)("span", { children: "Copy Visible as CSV" })] })] })), selection?.type === 'column' && ((0, jsx_runtime_1.jsxs)("div", { className: "selection-summary", title: selectedColumnStats ? `${selection.column}: sum ${formatNumber(selectedColumnStats.sum)}, average ${formatNumber(selectedColumnStats.average)}` : `${selection.column}: ${visibleRows.length.toLocaleString()} rows selected`, children: [(0, jsx_runtime_1.jsx)("span", { className: "summary-column", children: selection.column }), selectedColumnStats ? ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [(0, jsx_runtime_1.jsxs)("span", { children: [selectedColumnStats.numericCount.toLocaleString(), " values"] }), (0, jsx_runtime_1.jsxs)("span", { children: ["Sum ", formatNumber(selectedColumnStats.sum)] }), (0, jsx_runtime_1.jsxs)("span", { children: ["Avg ", formatNumber(selectedColumnStats.average)] })] })) : ((0, jsx_runtime_1.jsxs)("span", { children: [visibleRows.length.toLocaleString(), " rows selected"] }))] })), (0, jsx_runtime_1.jsx)("div", { className: "result-pager", children: (0, jsx_runtime_1.jsxs)("span", { className: "pager-group", children: [(0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: pageStart === 0, onClick: () => setPageOffset(0), children: "|\u2039" }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: pageStart === 0, onClick: () => setPageOffset(Math.max(0, pageStart - pageLimit)), children: "\u2039" }), (0, jsx_runtime_1.jsx)("select", { value: String(pageLimit), onChange: (event) => setPageOffset(0), children: (0, jsx_runtime_1.jsx)("option", { value: String(pageLimit), children: pageRows.length ? `${(pageStart + 1).toLocaleString()}-${pageEnd.toLocaleString()}` : '0' }) }), (0, jsx_runtime_1.jsxs)("span", { children: ["of ", hasNextPage ? `${(pageEnd + 1).toLocaleString()}+` : pageEnd.toLocaleString()] }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: !hasNextPage, onClick: () => setPageOffset(pageStart + pageLimit), children: "\u203A" }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: true, children: "\u203A|" }), (0, jsx_runtime_1.jsx)("span", { className: "pager-separator" }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", title: "Show or hide column filters", "aria-label": "Show or hide column filters", onClick: () => setColumnFiltersVisible((visible) => !visible), children: (0, jsx_runtime_1.jsx)(FilterIcon, {}) })] }) })] }));
 }
-function ColumnFilterPopover({ filter, onApply, onClear }) {
-    const [draft, setDraft] = (0, react_1.useState)(filter);
-    return ((0, jsx_runtime_1.jsxs)("div", { className: "filter-popover", children: [(0, jsx_runtime_1.jsx)("select", { value: draft.operator, onChange: (event) => setDraft({ ...draft, operator: event.target.value }), children: OPERATORS.map((operator) => (0, jsx_runtime_1.jsx)("option", { children: operator }, operator)) }), !draft.operator.includes('null') && ((0, jsx_runtime_1.jsx)("input", { value: draft.value, onChange: (event) => setDraft({ ...draft, value: event.target.value }), autoFocus: true })), (0, jsx_runtime_1.jsxs)("div", { className: "popover-actions", children: [(0, jsx_runtime_1.jsx)("button", { className: "tool primary", onClick: () => onApply(draft), children: "Apply" }), (0, jsx_runtime_1.jsx)("button", { className: "tool", onClick: onClear, children: "Clear" })] })] }));
+function FilterIcon() {
+    return ((0, jsx_runtime_1.jsx)("svg", { className: "filter-icon", viewBox: "0 0 16 16", "aria-hidden": "true", focusable: "false", children: (0, jsx_runtime_1.jsx)("path", { d: "M2.5 3.5h11l-4.4 5v3.6l-2.2 1.1V8.5l-4.4-5Z" }) }));
+}
+function calculateColumnStats(field, rows) {
+    if (!isNumericAggregateColumn(field)) {
+        return undefined;
+    }
+    const values = rows
+        .map((row) => numericValue(row[field.name]))
+        .filter((value) => value !== undefined);
+    if (!values.length) {
+        return undefined;
+    }
+    const sum = values.reduce((total, value) => total + value, 0);
+    return {
+        sum,
+        average: sum / values.length,
+        numericCount: values.length
+    };
+}
+function isNumericAggregateColumn(field) {
+    if (isIdentifierColumn(field.name)) {
+        return false;
+    }
+    if (typeof field.dataTypeId === 'number' && NUMERIC_TYPE_IDS.has(field.dataTypeId)) {
+        return true;
+    }
+    const typeName = field.dataTypeName?.toLowerCase().replace(/\s+/g, ' ').trim();
+    return Boolean(typeName && NUMERIC_TYPE_NAMES.some((numericType) => typeName === numericType || typeName.startsWith(`${numericType}(`) || typeName.startsWith(`${numericType} `)));
+}
+function isIdentifierColumn(column) {
+    return column.toLowerCase() === 'id'
+        || /^id[_\-\s]/i.test(column)
+        || /[_\-\s]id$/i.test(column)
+        || /Id$/.test(column)
+        || /ID$/.test(column);
+}
+function numericValue(value) {
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : undefined;
+    }
+    if (typeof value === 'bigint') {
+        const next = Number(value);
+        return Number.isFinite(next) ? next : undefined;
+    }
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (!trimmed || !/^-?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?$/i.test(trimmed)) {
+            return undefined;
+        }
+        const next = Number(trimmed);
+        return Number.isFinite(next) ? next : undefined;
+    }
+    return undefined;
+}
+function formatNumber(value) {
+    return new Intl.NumberFormat(undefined, { maximumFractionDigits: 6 }).format(value);
+}
+function ColumnFilterPopover({ column, rows, filter, onApply, onClear }) {
+    const options = (0, react_1.useMemo)(() => columnFilterOptions(rows, column), [rows, column]);
+    const allKeys = (0, react_1.useMemo)(() => options.map((option) => option.key), [options]);
+    const initialSelection = filter?.operator === 'values' && filter.values ? filter.values : allKeys;
+    const [search, setSearch] = (0, react_1.useState)('');
+    const [selectedValues, setSelectedValues] = (0, react_1.useState)(() => new Set(initialSelection));
+    const visibleOptions = options
+        .filter((option) => option.label.toLowerCase().includes(search.trim().toLowerCase()))
+        .slice(0, MAX_FILTER_OPTIONS);
+    const visibleKeys = visibleOptions.map((option) => option.key);
+    const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selectedValues.has(key));
+    const activeCount = selectedValues.size;
+    const commitSelection = (next) => {
+        if (next.size === allKeys.length) {
+            onClear();
+            return;
+        }
+        onApply({ column, operator: 'values', value: '', values: [...next] });
+    };
+    const toggleVisible = () => {
+        const next = new Set(selectedValues);
+        if (allVisibleSelected) {
+            visibleKeys.forEach((key) => next.delete(key));
+        }
+        else {
+            visibleKeys.forEach((key) => next.add(key));
+        }
+        setSelectedValues(next);
+        commitSelection(next);
+    };
+    const toggleValue = (key) => {
+        const next = new Set(selectedValues);
+        if (next.has(key)) {
+            next.delete(key);
+        }
+        else {
+            next.add(key);
+        }
+        setSelectedValues(next);
+        commitSelection(next);
+    };
+    return ((0, jsx_runtime_1.jsxs)("div", { className: "filter-popover value-filter-popover", children: [(0, jsx_runtime_1.jsxs)("div", { className: "filter-title", children: ["Local Filter For '", column, "'"] }), (0, jsx_runtime_1.jsxs)("label", { className: "filter-search", children: [(0, jsx_runtime_1.jsx)("span", { children: "\u2315" }), (0, jsx_runtime_1.jsx)("input", { value: search, onChange: (event) => setSearch(event.target.value), autoFocus: true })] }), (0, jsx_runtime_1.jsxs)("label", { className: "filter-option filter-option-heading", children: [(0, jsx_runtime_1.jsx)("input", { type: "checkbox", checked: allVisibleSelected, onChange: toggleVisible }), (0, jsx_runtime_1.jsx)("span", { children: "Value" }), (0, jsx_runtime_1.jsx)("span", { className: "filter-count", children: "Count" })] }), (0, jsx_runtime_1.jsx)("div", { className: "filter-option-list", children: visibleOptions.map((option) => ((0, jsx_runtime_1.jsxs)("label", { className: "filter-option", children: [(0, jsx_runtime_1.jsx)("input", { type: "checkbox", checked: selectedValues.has(option.key), onChange: () => toggleValue(option.key) }), (0, jsx_runtime_1.jsx)("span", { title: option.label, children: option.label }), (0, jsx_runtime_1.jsx)("span", { className: "filter-count", children: option.count.toLocaleString() })] }, option.key))) }), (0, jsx_runtime_1.jsxs)("div", { className: "filter-live-status", children: [activeCount.toLocaleString(), " selected"] })] }));
+}
+function columnFilterOptions(rows, column) {
+    const counts = new Map();
+    for (const row of rows) {
+        const key = filterKey(row[column]);
+        const existing = counts.get(key);
+        if (existing) {
+            existing.count += 1;
+        }
+        else {
+            counts.set(key, { key, label: filterLabel(row[column]), count: 1 });
+        }
+    }
+    return [...counts.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' }));
+}
+function filterKey(value) {
+    if (value === null || value === undefined) {
+        return '<NULL>';
+    }
+    return (0, format_1.formatValue)(value);
+}
+function filterLabel(value) {
+    if (value === null || value === undefined) {
+        return 'NULL';
+    }
+    const next = (0, format_1.formatValue)(value);
+    return next === '' ? '(empty)' : next;
 }
 function matchesFilter(value, filter) {
+    if (filter.operator === 'values') {
+        return filter.values ? filter.values.includes(filterKey(value)) : true;
+    }
     const text = (0, format_1.formatValue)(value).toLowerCase();
     const expected = filter.value.toLowerCase();
     if (filter.operator === 'is null') {

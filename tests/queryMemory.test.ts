@@ -17,6 +17,7 @@ import { connectAndRefreshSqlMetadata } from '../src/services/sqlMetadataWarmup'
 import { SqlSafetyClassifier } from '../src/services/sqlSafetyClassifier';
 import { SqlSectionService } from '../src/services/sqlSectionService';
 import { shouldRunSelectionForStatement } from '../src/services/sqlSelectionExecution';
+import { orphanedConnectionRecordIds } from '../src/persistence/orphanedConnectionRecords';
 import { partitionExistingConsoleRecords } from '../src/persistence/queryConsoleRecords';
 import { ResultsPanelProvider } from '../src/webviews/results/ResultsPanelProvider';
 import { ConnectionConfig, QueryConsoleRecord, QueryHistoryItem, QueryMemoryItem, QueryResultTab, SchemaCacheEntry } from '../src/types';
@@ -272,6 +273,49 @@ describe('ResultsPanelProvider', () => {
     expect(runActiveSelection).toHaveBeenCalledWith(1000);
     expect(executor.execute).not.toHaveBeenCalled();
   });
+
+  it('shows a running placeholder while rerunning a result tab', async () => {
+    const savedTabs: QueryResultTab[][] = [];
+    let resolveExecution: ((tab: QueryResultTab) => void) | undefined;
+    const executor = {
+      execute: vi.fn(() => new Promise<QueryResultTab>((resolve) => {
+        resolveExecution = resolve;
+      }))
+    };
+    const provider = new ResultsPanelProvider(
+      { extensionUri: {} } as never,
+      {
+        getTabs: () => [resultTab({ id: 'tab-adjust', queryText: 'select * from public.adjust_offer', rowCount: 7 })],
+        saveTabs: async (tabs: QueryResultTab[]) => {
+          savedTabs.push(tabs);
+        }
+      } as never,
+      executor as never
+    );
+
+    const rerun = (provider as never as { onMessage(message: unknown): Promise<void> }).onMessage({
+      type: 'rerunTab',
+      tabId: 'tab-adjust',
+      maxRows: 1000
+    });
+    await vi.waitFor(() => expect(executor.execute).toHaveBeenCalledTimes(1));
+
+    expect(provider.getTab('tab-adjust')?.executionStatus).toBe('running');
+    expect(provider.getTab('tab-adjust')?.resultSets).toEqual([]);
+    expect(savedTabs.at(-1)?.[0].executionStatus).toBe('running');
+
+    resolveExecution?.(resultTab({
+      id: 'tab-next',
+      queryText: 'select * from public.adjust_offer',
+      rowCount: 42,
+      executionStatus: 'completed'
+    }));
+    await rerun;
+
+    expect(provider.getTab('tab-adjust')?.executionStatus).toBe('completed');
+    expect(provider.getTab('tab-adjust')?.rowCount).toBe(42);
+    expect(provider.getTab('tab-next')).toBeUndefined();
+  });
 });
 
 describe('query memory metadata', () => {
@@ -410,6 +454,35 @@ describe('partitionExistingConsoleRecords', () => {
 
     expect(result.existing.map((record) => record.documentUri)).toEqual(['file:///workspace/.vscode-data-grip/live.sql']);
     expect(result.missing.map((record) => record.documentUri)).toEqual(['file:///workspace/.vscode-data-grip/missing.sql']);
+  });
+
+  it('finds query session records tied to deleted connections', () => {
+    const result = orphanedConnectionRecordIds({
+      consoles: [
+        consoleFor('file:///workspace/.vscode-data-grip/live.sql', 'local'),
+        consoleFor('file:///workspace/.vscode-data-grip/orphan.sql', 'deleted')
+      ],
+      sqlDocuments: [
+        { documentUri: 'file:///workspace/report.sql', connectionId: 'local', updatedAt: 1 },
+        { documentUri: 'file:///workspace/old.sql', connectionId: 'deleted', updatedAt: 1 }
+      ],
+      history: [
+        historyFor({ id: 'history-live', connectionId: 'local' }),
+        historyFor({ id: 'history-orphan', connectionId: 'deleted' })
+      ],
+      memory: [
+        memory({ id: 'memory-live', connectionId: 'local', latestHistoryId: 'history-live' }),
+        memory({ id: 'memory-orphan-connection', connectionId: 'deleted' }),
+        memory({ id: 'memory-orphan-history', connectionId: 'local', historyIds: ['history-orphan'] })
+      ]
+    }, ['local']);
+
+    expect(result).toEqual({
+      consoleIds: ['console-deleted'],
+      sqlDocumentUris: ['file:///workspace/old.sql'],
+      historyIds: ['history-orphan'],
+      memoryIds: ['memory-orphan-connection', 'memory-orphan-history']
+    });
   });
 });
 
@@ -759,6 +832,7 @@ function memory(overrides: Partial<QueryMemoryItem>): QueryMemoryItem {
     id: overrides.id ?? 'memory',
     sourceKind: 'history',
     sourceId: overrides.sourceId ?? overrides.id ?? 'history',
+    connectionId: overrides.connectionId,
     sql: overrides.sql ?? 'select * from invoices',
     title: overrides.title,
     summary: overrides.summary,
@@ -768,6 +842,8 @@ function memory(overrides: Partial<QueryMemoryItem>): QueryMemoryItem {
     outputColumns: overrides.outputColumns ?? [],
     documentUri: overrides.documentUri,
     status: overrides.status ?? 'completed',
+    historyIds: overrides.historyIds,
+    latestHistoryId: overrides.latestHistoryId,
     indexedAt: overrides.indexedAt ?? Date.now(),
     updatedAt: overrides.updatedAt ?? Date.now(),
     executedAt: overrides.executedAt

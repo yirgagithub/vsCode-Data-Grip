@@ -1,37 +1,84 @@
 # Data Grip
 
-An AI-native VS Code database client for PostgreSQL and Redshift.
+Data Grip is a VS Code database workbench for PostgreSQL and Redshift. It is built for the everyday database workflow inside an editor:
 
-## Why I Built This
+```text
+connect -> browse schema -> write SQL -> run queries -> inspect results -> reuse history
+```
 
-This project started when my company moved away from IntelliJ IDEA and I lost the DataGrip workflow I relied on every day. I tried to find a VS Code extension that felt like a real replacement, but nothing I found came close to the mix of schema browsing, SQL editing, and database introspection that made DataGrip so practical.
+The extension is not intended to replace VS Code with a separate database IDE. It brings the core DataGrip-style workflow into VS Code: durable query consoles, schema-aware SQL editing, table browsing, query sessions, result grids, and local query history.
 
-That gap is what pushed me to build this extension. The goal was to bring a DataGrip-style experience into VS Code instead of forcing a context switch back to a separate IDE.
+## Features
 
-The AI-native layer is there to make repeated database work faster, not to replace the core editor experience. It helps with things like:
+| Area | What it does |
+| --- | --- |
+| Connections | Save PostgreSQL and Redshift connections, connect/disconnect, and keep the selected connection available to SQL files. |
+| Schema explorer | Browse databases, schemas, tables, views, columns, keys, indexes, and object metadata from the Database activity view. |
+| Query consoles | Open persistent SQL consoles per connection. Consoles are stored under `.vscode-data-grip` when a workspace is open, or in VS Code extension storage when no workspace is open. |
+| SQL execution | Run the current query, a selected range, or a full SQL file. Multi-statement selections execute as one batch so temp tables and transactions share a session. |
+| Results | Inspect query results in a VS Code panel with tabs, row limits, paging controls, copy/export actions, and execution status. |
+| Autocomplete | Use cached schema metadata for table, view, schema, alias, and column suggestions. |
+| Query sessions | Track active consoles and older query history so useful SQL can be found and reopened later. |
+| AI assistance | Use VS Code language models to explain SQL, fix SQL, and summarize query memory without storing database passwords in prompts. |
 
-- executing queries and keeping them in durable, searchable history
-- finding an old query later when you remember the intent, not the exact SQL
-- using semantic search over query history to recover work you forgot to save
-- explaining schema context, table structure, and query behavior
-- suggesting Redshift table improvements, including candidate distribution keys and other storage choices
-- combining database metadata with history so AI responses stay grounded in the real database
+## Quick Start
 
-The result is a database client that feels native to VS Code, but still aims for the depth I missed from DataGrip.
+1. Open the Database activity view in VS Code.
+2. Run `Database: Add Database Connection`.
+3. Choose PostgreSQL or Redshift and enter the connection details.
+4. Run `Database: Add Query Console`.
+5. Type SQL and run it with `Ctrl+Enter` on Windows/Linux or `Cmd+Enter` on macOS.
+6. Open the Database panel to inspect result tabs and query sessions.
 
-## Quick Start: Schema-Aware SQL
+For schema-aware autocomplete, connect to a database and open a query console or bind a `.sql` file with `Database: Set SQL File Connection`. Metadata warms in the background. After the cache is ready, table and column completions appear from the active connection.
 
-1. Run `Database: Add Database Connection` or pick an existing connection from the Database view.
-2. Open a query console with `Database: Add Query Console`, or open a `.sql` file and run `Database: Set SQL File Connection`.
-3. Start typing SQL. After the metadata cache warms, `from ` suggests schemas, tables, and views. `alias.` suggests cached columns.
+## Run Locally
 
-Opening a query console connects the selected database and starts metadata warm-up. If no VS Code workspace is open, the console file is stored in extension storage; that storage message is informational and does not disable autocomplete.
+### Prerequisites
 
-The editor uses cached metadata first. It does not query the database on every keystroke. If metadata is stale or incomplete, completions may use the last cached snapshot, but red diagnostics stay quiet until the extension has fresh enough metadata to verify the object.
+- VS Code 1.90 or newer
+- Node.js 20 or newer
+- npm
+- A PostgreSQL or Redshift database for manual testing
 
-The first time schema-backed completions are ready for a connection, VS Code shows a one-time confirmation. If suggestions or diagnostics look confusing, run `Database: Show SQL Metadata Status` from the Command Palette. It reports the active connection, schema, cache age, freshness, refresh state, and the next action to take.
+### Start the Extension Development Host
 
-## Development Checks
+1. Install dependencies:
+
+   ```bash
+   npm install
+   ```
+
+2. Build the extension and webview assets:
+
+   ```bash
+   npm run build
+   ```
+
+3. Open this repository in VS Code:
+
+   ```bash
+   code .
+   ```
+
+4. Press `F5`, or open Run and Debug and choose `Run Extension`.
+
+VS Code starts a new Extension Development Host window with this extension loaded from the local repository.
+
+### Use the Local Extension
+
+In the Extension Development Host window:
+
+1. Open the Database activity view.
+2. Add a PostgreSQL or Redshift connection.
+3. Click `Test Connection`.
+4. Open a query console with `Database: Add Query Console`.
+5. Run a query with `Ctrl+Enter` or `Cmd+Enter`.
+6. Open a table from the explorer to preview table data.
+
+### Local Development Loop
+
+Use these commands while developing:
 
 ```bash
 npm run lint
@@ -39,49 +86,105 @@ npm test
 npm run build
 ```
 
-Real database metadata behavior should be verified with a seeded PostgreSQL database before shipping cache changes. Use a simple table such as:
+Use `npm run lint` for TypeScript checks, `npm test` for Vitest tests, and `npm run build` before launching or packaging the extension.
+
+For TypeScript-only iteration, run:
+
+```bash
+npm run watch
+```
+
+If you change React result-panel code or CSS under `src/webviews/results/app`, rebuild the webview bundle:
+
+```bash
+npm run bundle:webview
+```
+
+## Manual Database Check
+
+Use a small PostgreSQL database to verify schema metadata, autocomplete, query execution, and result rendering.
+
+Create a basic table:
 
 ```sql
 create schema if not exists public;
+
 create table if not exists public.users (
   id integer primary key,
   email text not null
 );
 ```
 
-Then connect the extension, open a query console, type:
+Then, in a query console connected to that database, type:
 
 ```sql
 select u.
 from public.users u
 ```
 
-Expected result: `email` and `id` are offered from cached column metadata, and incomplete SQL does not produce schema diagnostics until the cache is fresh enough to verify it.
+Expected behavior:
 
-### Timed TTHW Check
+- `id` and `email` appear as column suggestions after metadata warms.
+- Incomplete SQL does not produce schema diagnostics until metadata is fresh enough to verify it.
+- Running a query shows a loading state, then a populated result tab.
 
-Use this check after metadata-cache changes to measure time to hello world.
+## Tests
 
-1. Start a timer from a clean VS Code window with the extension loaded.
-2. Select or add a PostgreSQL connection.
-3. Open a query console or bind a `.sql` file to that connection.
-4. Type `select u.` followed by `from public.users u`.
-5. Stop the timer when real cached column completions appear.
+Run all tests:
 
-Record:
-
-```text
-Connection selected at:
-Editor ready at:
-First schema-backed completion at:
-Total time:
-Notes:
+```bash
+npm test
 ```
 
-Target: 2-5 minutes from connection selection to first useful schema-backed completion. Diagnostics should stay quiet while the query is incomplete or metadata is stale.
+Run TypeScript checks:
 
-An opt-in integration test is available when a PostgreSQL URL is provided:
+```bash
+npm run lint
+```
+
+Run the full build:
+
+```bash
+npm run build
+```
+
+The PostgreSQL metadata integration test is opt-in. Provide a database URL when you want to run it:
 
 ```bash
 DATABASE_INTEGRATION_URL=postgres://postgres:postgres@localhost:5432/postgres npm test
 ```
+
+## Troubleshooting
+
+### No Workspace Is Open
+
+If no VS Code workspace is open, query console files are stored in VS Code extension storage instead of `.vscode-data-grip`. This is expected. SQL autocomplete still works after schema metadata warms.
+
+### Autocomplete Only Shows SQL Keywords
+
+Check that the SQL file or console is bound to a connection. Run `Database: Show SQL Metadata Status` to see whether the schema cache is empty, stale, loading, or ready.
+
+### Table Preview Looks Empty
+
+The table preview should show a loading state while data is being fetched. If it stays empty, check the connection state and run `Database: Refresh Database Explorer`.
+
+### Changes Do Not Appear in the Extension Host
+
+Run `npm run build`, then reload the Extension Development Host window. For result-panel UI changes, make sure `npm run bundle:webview` has run.
+
+## Project Structure
+
+```text
+src/database/       Connection manager, query executor, and database drivers
+src/explorer/       Database tree nodes and explorer provider
+src/persistence/    Connection, console, history, memory, and result stores
+src/services/       SQL parsing, metadata cache, diagnostics, and query memory
+src/webviews/       Connection editor, query sessions, table preview, and results UI
+tests/              Unit and integration tests
+media/              Built webview assets and extension icons
+dist/               Compiled extension output
+```
+
+## Status
+
+This project is in active development. PostgreSQL and Redshift are the supported database engines. The core workflow is available, but local testing against real databases is still important before shipping driver, schema-cache, or query-execution changes.

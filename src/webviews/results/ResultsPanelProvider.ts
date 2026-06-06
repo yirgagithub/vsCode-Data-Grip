@@ -6,6 +6,7 @@ import { ResultsFromWebviewMessage, ResultsToWebviewMessage } from './messages';
 
 export interface AddResultTabOptions {
   forceNew?: boolean;
+  replaceTabId?: string;
 }
 
 export class ResultsPanelProvider implements vscode.WebviewViewProvider {
@@ -51,19 +52,31 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
     this.postHydrate();
   }
 
-  async addTab(tab: QueryResultTab, options: AddResultTabOptions = {}): Promise<void> {
+  async addTab(tab: QueryResultTab, options: AddResultTabOptions = {}): Promise<QueryResultTab> {
     this.activeConnectionId = tab.connectionId;
-    const active = options.forceNew ? undefined : this.reusableTabFor(tab);
-    if (active && !active.pinned) {
-      this.tabs = this.tabs.map((item) => item.id === active.id ? { ...tab, id: active.id } : item);
-      this.activeTabId = active.id;
+    let storedTab = tab;
+    if (options.replaceTabId) {
+      const existing = this.tabs.find((item) => item.id === options.replaceTabId);
+      storedTab = { ...tab, id: existing?.id ?? options.replaceTabId };
+      this.tabs = existing
+        ? this.tabs.map((item) => item.id === storedTab.id ? storedTab : item)
+        : [...this.tabs, storedTab];
+      this.activeTabId = storedTab.id;
     } else {
-      this.tabs.push(tab);
-      this.activeTabId = tab.id;
+      const active = options.forceNew ? undefined : this.reusableTabFor(tab);
+      if (active && !active.pinned) {
+        storedTab = { ...tab, id: active.id };
+        this.tabs = this.tabs.map((item) => item.id === active.id ? storedTab : item);
+        this.activeTabId = active.id;
+      } else {
+        this.tabs.push(tab);
+        this.activeTabId = tab.id;
+      }
     }
     await this.sessionStore.saveTabs(this.tabs);
     this.onTabsChanged?.(this.tabs);
     await this.show();
+    return storedTab;
   }
 
   getTabs(): QueryResultTab[] {
@@ -116,6 +129,20 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
         if (await this.runActiveEditorSelection?.(maxRows)) {
           return;
         }
+        const started = Date.now();
+        await this.addTab({
+          ...tab,
+          executionStatus: 'running',
+          executionStartedAt: started,
+          executionFinishedAt: undefined,
+          executionTimeMs: undefined,
+          rowCount: undefined,
+          maxRows,
+          error: undefined,
+          resultSets: [],
+          activeResultSetIndex: 0,
+          updatedAt: started
+        }, { replaceTabId: tab.id });
         const next = await this.executor.execute({
           connectionId: tab.connectionId,
           sql: tab.queryText,
@@ -128,7 +155,7 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
             range: tab.sourceRange
           }
         });
-        await this.addTab({ ...next, pinned: tab.pinned, customTitle: tab.customTitle });
+        await this.addTab({ ...next, id: tab.id, pinned: tab.pinned, customTitle: tab.customTitle }, { replaceTabId: tab.id });
       }
       return;
     }

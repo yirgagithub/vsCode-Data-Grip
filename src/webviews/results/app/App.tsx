@@ -40,6 +40,7 @@ export function App() {
   }
 
   const resultSet = active.resultSets[activeResultSetIndex] ?? active.resultSets[active.activeResultSetIndex] ?? active.resultSets[0];
+  const isRunning = active.executionStatus === 'queued' || active.executionStatus === 'running';
 
   return (
     <main className="app">
@@ -57,10 +58,19 @@ export function App() {
             <span>{set.command ?? 'Result'}</span>
             <span className="resultset-count">{set.rowCount.toLocaleString()} rows</span>
           </button>
-        )) : <span className="muted resultset-empty-label">Messages</span>}
+        )) : <span className="muted resultset-empty-label">{isRunning ? 'Running' : 'Messages'}</span>}
       </div>
-      {active.executionStatus === 'failed' ? <MessagesPanel tab={active} /> : <ResultGrid tab={active} resultSet={resultSet} />}
+      {isRunning ? <RunningPanel /> : active.executionStatus === 'failed' ? <MessagesPanel tab={active} /> : <ResultGrid tab={active} resultSet={resultSet} />}
       <StatusBar tab={active} resultSet={resultSet} />
     </main>
+  );
+}
+
+function RunningPanel() {
+  return (
+    <section className="grid-empty result-loading" aria-live="polite">
+      <span className="loading-spinner" aria-hidden="true" />
+      <span>Running query...</span>
+    </section>
   );
 }

@@ -43,6 +43,13 @@ class SqlDocumentConnectionStore {
     async delete(documentUri) {
         await this.context.workspaceState.update(SQL_DOCUMENT_CONNECTIONS_KEY, this.getAll().filter((record) => record.documentUri !== documentUri));
     }
+    async deleteMany(documentUris) {
+        const uriSet = new Set(documentUris);
+        if (!uriSet.size) {
+            return;
+        }
+        await this.context.workspaceState.update(SQL_DOCUMENT_CONNECTIONS_KEY, this.getAll().filter((record) => !uriSet.has(record.documentUri)));
+    }
 }
 exports.SqlDocumentConnectionStore = SqlDocumentConnectionStore;
 //# sourceMappingURL=sqlDocumentConnectionStore.js.map

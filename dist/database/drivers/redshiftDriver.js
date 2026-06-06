@@ -65,6 +65,9 @@ class RedshiftDriver extends postgresDriver_1.PostgresDriver {
        order by ordinal_position`, [schema, table]);
         return result.rows;
     }
+    shouldRetryWithoutSsl(_config, _error) {
+        return false;
+    }
     toPoolConfig(config, max) {
         return {
             ...super.toPoolConfig({ ...config, sslMode: config.sslMode === 'disable' ? 'prefer' : config.sslMode }, max),
