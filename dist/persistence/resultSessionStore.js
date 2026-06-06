@@ -47,7 +47,7 @@ class ResultSessionStore {
     async saveTabs(tabs) {
         const persistPinned = vscode.workspace.getConfiguration('database').get('resultTabs.persistPinned', true);
         const persisted = persistPinned
-            ? tabs.filter((tab) => tab.pinned).map((tab) => ({
+            ? tabs.filter((tab) => tab.pinned && !['queued', 'running'].includes(tab.executionStatus)).map((tab) => ({
                 ...tab,
                 resultSets: tab.resultSets.map((set) => set.rows.length <= 1000 ? set : { ...set, rows: [], rowCount: set.rowCount })
             }))

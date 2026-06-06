@@ -33,21 +33,23 @@ export class PostgresDriver implements DatabaseDriver {
   protected readonly activeExecutions = new Map<string, ActiveExecution>();
 
   async testConnection(config: ConnectionConfigWithPassword): Promise<TestConnectionResult> {
-    const pool = new Pool(this.toPoolConfig(config, 1));
+    let pool: Pool | undefined;
     try {
+      pool = await this.createVerifiedPool(config, 1);
       const result = await pool.query('select version() as version');
       return { ok: true, message: 'Connection successful', serverVersion: result.rows[0]?.version };
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     } finally {
-      await pool.end();
+      if (pool) {
+        await this.endPool(pool);
+      }
     }
   }
 
   async connect(config: ConnectionConfigWithPassword): Promise<DbConnection> {
     await this.disconnect(config.id);
-    const pool = new Pool(this.toPoolConfig(config, 8));
-    await pool.query('select 1');
+    const pool = await this.createVerifiedPool(config, 8);
     this.pools.set(config.id, pool);
     this.configs.set(config.id, config);
     return { id: config.id, config, connectedAt: Date.now() };
@@ -306,6 +308,41 @@ export class PostgresDriver implements DatabaseDriver {
       query_timeout: config.queryTimeoutMs,
       ssl: config.sslMode === 'disable' ? false : { rejectUnauthorized: false }
     };
+  }
+
+  protected shouldRetryWithoutSsl(config: ConnectionConfigWithPassword, error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return config.sslMode === 'prefer' && /server does not support ssl connections/i.test(message);
+  }
+
+  private async createVerifiedPool(config: ConnectionConfigWithPassword, max: number): Promise<Pool> {
+    const pool = new Pool(this.toPoolConfig(config, max));
+    try {
+      await pool.query('select 1');
+      return pool;
+    } catch (error) {
+      await this.endPool(pool);
+      if (!this.shouldRetryWithoutSsl(config, error)) {
+        throw error;
+      }
+
+      const fallbackPool = new Pool(this.toPoolConfig({ ...config, sslMode: 'disable' }, max));
+      try {
+        await fallbackPool.query('select 1');
+        return fallbackPool;
+      } catch (fallbackError) {
+        await this.endPool(fallbackPool);
+        throw fallbackError;
+      }
+    }
+  }
+
+  private async endPool(pool: Pool): Promise<void> {
+    try {
+      await pool.end();
+    } catch {
+      // The original connection error is more useful than cleanup failure.
+    }
   }
 
   private columnsFromIndexDefinition(definition: string): string[] {

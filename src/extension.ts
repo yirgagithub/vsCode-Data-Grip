@@ -10,6 +10,7 @@ import { SqlDocumentConnectionStore } from './persistence/sqlDocumentConnectionS
 import { QueryHistoryStore } from './persistence/queryHistoryStore';
 import { QueryMemoryStore } from './persistence/queryMemoryStore';
 import { ResultSessionStore } from './persistence/resultSessionStore';
+import { orphanedConnectionRecordIds } from './persistence/orphanedConnectionRecords';
 import { QueryMemoryService } from './services/queryMemoryService';
 import { executionOriginForDocument, isQueryConsoleHistoryItem, queryConsoleDocumentUris } from './services/queryConsoleHistory';
 import { SchemaContextService } from './services/schemaContextService';
@@ -30,7 +31,8 @@ import { ResultsPanelProvider } from './webviews/results/ResultsPanelProvider';
 import { TableDataPanel } from './webviews/table/TableDataPanel';
 import { Logger } from './utils/logger';
 import { qualifiedName, quoteIdentifier } from './utils/identifiers';
-import { ConnectionConfig, QueryConsoleRecord, QueryExecutionProgress } from './types';
+import { createId } from './utils/id';
+import { ConnectionConfig, QueryConsoleRecord, QueryExecutionProgress, QueryResultTab } from './types';
 
 const PROJECT_SQL_SESSION_PREFIX = 'project-sql:';
 
@@ -70,6 +72,7 @@ export function activate(context: vscode.ExtensionContext): void {
     before: { contentText: '✗ ', color: new vscode.ThemeColor('testing.iconFailed') }
   });
   let pruningMissingConsoles = false;
+  let pruningUnknownConnections = false;
   let queryMap: QueryMapProvider;
   const results = new ResultsPanelProvider(
     context,
@@ -220,19 +223,23 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   function refreshQueryMap(): void {
+    const connections = connectionManager.getConnections();
+    const knownConnectionIds = new Set(connections.map((connection) => connection.id));
     queryMap.updateConsoles(
-      activeSessionRecords(),
-      connectionManager.getConnections(),
+      activeSessionRecords(knownConnectionIds),
+      connections,
       connectionManager.getActiveConnections().map((connection) => connection.config.id)
     );
     void pruneMissingConsoleRecords();
+    void pruneUnknownConnectionRecords();
   }
 
-  function activeSessionRecords(): QueryConsoleRecord[] {
+  function activeSessionRecords(knownConnectionIds = currentConnectionIds()): QueryConsoleRecord[] {
     const consoles = consoleStore.getAll();
-    const consoleUris = new Set(consoles.map((record) => record.documentUri));
+    const knownConsoles = consoles.filter((record) => knownConnectionIds.has(record.connectionId));
+    const consoleUris = new Set(knownConsoles.map((record) => record.documentUri));
     const projectSessions = sqlDocumentConnections.getAll()
-      .filter((record) => !!record.lastTouchedAt && !consoleUris.has(record.documentUri))
+      .filter((record) => knownConnectionIds.has(record.connectionId) && !!record.lastTouchedAt && !consoleUris.has(record.documentUri))
       .map((record) => ({
         id: projectSqlSessionId(record.documentUri),
         connectionId: record.connectionId,
@@ -242,7 +249,10 @@ export function activate(context: vscode.ExtensionContext): void {
         createdAt: record.updatedAt,
         updatedAt: record.updatedAt
       }));
-    return [...consoles, ...projectSessions];
+    return [
+      ...knownConsoles,
+      ...projectSessions
+    ];
   }
 
   function projectSqlSessionId(documentUri: string): string {
@@ -329,9 +339,9 @@ export function activate(context: vscode.ExtensionContext): void {
     };
   }
 
-  function queryConsoleHistoryItems(): import('./types').QueryHistoryItem[] {
-    const consoleUris = queryConsoleDocumentUris(consoleStore.getAll());
-    return historyStore.getAll().filter((item) => isQueryConsoleHistoryItem(item, consoleUris));
+  function queryConsoleHistoryItems(knownConnectionIds = currentConnectionIds()): import('./types').QueryHistoryItem[] {
+    const consoleUris = queryConsoleDocumentUris(consoleStore.getAll().filter((record) => knownConnectionIds.has(record.connectionId)));
+    return historyStore.getAll().filter((item) => knownConnectionIds.has(item.connectionId) && isQueryConsoleHistoryItem(item, consoleUris));
   }
 
   async function markActiveSessionExecuted(
@@ -362,6 +372,43 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     } finally {
       pruningMissingConsoles = false;
+    }
+  }
+
+  function currentConnectionIds(): Set<string> {
+    return new Set(connectionManager.getConnections().map((connection) => connection.id));
+  }
+
+  async function pruneUnknownConnectionRecords(): Promise<void> {
+    if (pruningUnknownConnections) {
+      return;
+    }
+    pruningUnknownConnections = true;
+    try {
+      const knownConnectionIds = currentConnectionIds();
+      const orphaned = orphanedConnectionRecordIds({
+        consoles: consoleStore.getAll(),
+        sqlDocuments: sqlDocumentConnections.getAll(),
+        history: historyStore.getAll(),
+        memory: memoryStore.getAll()
+      }, knownConnectionIds);
+      const removedCount = orphaned.consoleIds.length + orphaned.sqlDocumentUris.length + orphaned.historyIds.length + orphaned.memoryIds.length;
+      if (!removedCount) {
+        return;
+      }
+      await Promise.all([
+        consoleStore.deleteMany(orphaned.consoleIds),
+        sqlDocumentConnections.deleteMany(orphaned.sqlDocumentUris),
+        historyStore.deleteMany(orphaned.historyIds),
+        memoryStore.deleteMany(orphaned.memoryIds)
+      ]);
+      queryMap.updateConsoles(
+        activeSessionRecords(currentConnectionIds()),
+        connectionManager.getConnections(),
+        connectionManager.getActiveConnections().map((connection) => connection.config.id)
+      );
+    } finally {
+      pruningUnknownConnections = false;
     }
   }
 
@@ -1028,6 +1075,15 @@ export function activate(context: vscode.ExtensionContext): void {
       const statementCount = splitSqlStatements(detected.sql).length || 1;
       const updateStatementStatus = createStatementStatusUpdater(editor, detected.range, detected.sql);
       queryOutput.recordExecutionStarted(connection, editor.document.fileName, statementCount);
+      const runningTab = await results.addTab(createRunningResultTab(connection, detected.sql, maxRows, {
+        origin: sourceOrigin,
+        fileName: editor.document.fileName,
+        documentUri,
+        queryId: detected.id,
+        sectionIndex: detected.index,
+        range: executedRange
+      }), { forceNew: options.forceNewResultTab });
+      queryMap.updateResults(results.getTabs());
       const tab = await executor.execute({
         connectionId: connection.id,
         sql: detected.sql,
@@ -1050,7 +1106,7 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         }
       });
-      await results.addTab(tab, { forceNew: options.forceNewResultTab });
+      await results.addTab({ ...tab, id: runningTab.id, pinned: runningTab.pinned, customTitle: runningTab.customTitle }, { replaceTabId: runningTab.id });
       recordQueryOutput(tab);
       await highlighter.reveal(documentUri, rangeToPlain(detected.range), detected.sql);
       queryMap.updateResults(results.getTabs());
@@ -1061,6 +1117,61 @@ export function activate(context: vscode.ExtensionContext): void {
       endDocumentExecution?.();
       decoration.dispose();
     }
+  }
+
+  function createRunningResultTab(
+    connection: ConnectionConfig,
+    sql: string,
+    maxRows: number | undefined,
+    source: {
+      origin: QueryResultTab['sourceOrigin'];
+      fileName?: string;
+      documentUri?: string;
+      queryId?: string;
+      sectionIndex?: number;
+      range?: QueryResultTab['sourceRange'];
+    }
+  ): QueryResultTab {
+    const now = Date.now();
+    return {
+      id: createId('tab'),
+      title: resultTitle(sql, source.fileName),
+      pinned: false,
+      connectionId: connection.id,
+      databaseType: connection.type,
+      databaseName: connection.database,
+      schemaName: connection.defaultSchema,
+      queryText: sql,
+      sourceOrigin: source.origin,
+      sourceFile: source.fileName,
+      sourceDocumentUri: source.documentUri,
+      sourceQueryId: source.queryId,
+      sourceSectionIndex: source.sectionIndex,
+      sourceRange: source.range,
+      executionStatus: 'running',
+      executionStartedAt: now,
+      maxRows,
+      resultSets: [],
+      activeResultSetIndex: 0,
+      filters: [],
+      sort: [],
+      columnState: [],
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  function resultTitle(sql: string, fileName?: string): string {
+    const normalized = sql.replace(/\s+/g, ' ').trim();
+    const from = normalized.match(/\bfrom\s+("?[\w.]+"?)/i)?.[1];
+    const keyword = normalized.match(/^\w+/)?.[0]?.toUpperCase() ?? 'SQL';
+    if (from) {
+      return `${keyword} ${from.replace(/"/g, '')}`;
+    }
+    if (normalized) {
+      return keyword;
+    }
+    return fileName?.split(/[\\/]/).pop() ?? 'SQL';
   }
 
   async function runAi(action: 'fix' | 'explain'): Promise<void> {

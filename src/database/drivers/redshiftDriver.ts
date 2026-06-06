@@ -83,6 +83,10 @@ export class RedshiftDriver extends PostgresDriver {
     return result.rows;
   }
 
+  protected override shouldRetryWithoutSsl(_config: ConnectionConfigWithPassword, _error: unknown): boolean {
+    return false;
+  }
+
   protected override toPoolConfig(config: ConnectionConfigWithPassword, max: number) {
     return {
       ...super.toPoolConfig({ ...config, sslMode: config.sslMode === 'disable' ? 'prefer' : config.sslMode }, max),

@@ -70,4 +70,15 @@ export class SqlDocumentConnectionStore {
       this.getAll().filter((record) => record.documentUri !== documentUri)
     );
   }
+
+  async deleteMany(documentUris: string[]): Promise<void> {
+    const uriSet = new Set(documentUris);
+    if (!uriSet.size) {
+      return;
+    }
+    await this.context.workspaceState.update(
+      SQL_DOCUMENT_CONNECTIONS_KEY,
+      this.getAll().filter((record) => !uriSet.has(record.documentUri))
+    );
+  }
 }
