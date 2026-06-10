@@ -15,7 +15,7 @@ import { QueryMemoryService } from './services/queryMemoryService';
 import { executionOriginForDocument, isQueryConsoleHistoryItem, queryConsoleDocumentUris } from './services/queryConsoleHistory';
 import { SchemaContextService } from './services/schemaContextService';
 import { SchemaMetadataCacheStore } from './services/schemaMetadataCacheStore';
-import { relationCompletionCandidates, relationCompletionContext, selectListColumnCompletionContext } from './services/sqlMetadataCompletion';
+import { relationCompletionCandidates, relationCompletionContext, unqualifiedColumnCompletionContext } from './services/sqlMetadataCompletion';
 import { connectAndRefreshSqlMetadata } from './services/sqlMetadataWarmup';
 import { SqlDiagnosticsService } from './services/sqlDiagnosticsService';
 import { rangeFromPlain as rangeFromSource, SqlSectionHighlighter } from './services/sqlSectionHighlighter';
@@ -50,6 +50,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const sqlDiagnostics = vscode.languages.createDiagnosticCollection('database-sql');
   const diagnosticsService = new SqlDiagnosticsService(connectionManager, schemaContext, sectionService);
   const aiAdapter = new VsCodeLanguageModelSqlAdapter();
+  void vscode.commands.executeCommand('setContext', 'database.aiAvailable', false);
+  void aiAdapter.isAvailable().then((available) => {
+    void vscode.commands.executeCommand('setContext', 'database.aiAvailable', available);
+  });
   const memoryStore = new QueryMemoryStore(context);
   const memoryService = new QueryMemoryService(historyStore, memoryStore, consoleStore, connectionManager, aiAdapter);
   const executor = new QueryExecutor(connectionManager, historyStore, memoryService);
@@ -176,7 +180,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const sqlCodeLensRefresh = new vscode.EventEmitter<void>();
   context.subscriptions.push(sqlCodeLensRefresh);
   context.subscriptions.push(registerSqlCompletions(connectionManager, schemaContext, sectionService, connectionForDocument, context));
-  context.subscriptions.push(registerSqlConnectionCodeLens(sqlConnectionLensTitle, sqlCodeLensRefresh.event));
+  context.subscriptions.push(registerSqlConnectionCodeLens(sqlConnectionLensTitle, sectionService, sqlCodeLensRefresh.event));
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
     queryMap.updateFromEditor(editor);
     syncResultsToEditor(editor);
@@ -500,28 +504,6 @@ export function activate(context: vscode.ExtensionContext): void {
     queryMap.updateResults(results.getTabs());
   }).register(register);
 
-  register('database.testQueryMemorySummary', async () => {
-    const sql = await vscode.window.showInputBox({
-      prompt: 'SQL to summarize with VS Code Language Model',
-      value: 'select sum(install) from public.adjust_offer'
-    });
-    if (!sql) {
-      return;
-    }
-    const summary = await aiAdapter.summarizeQueryMemory({
-      sql,
-      connectionName: 'Test connection',
-      databaseType: 'postgres',
-      databaseName: 'test',
-      outputColumns: ['sum']
-    });
-    const doc = await vscode.workspace.openTextDocument({
-      language: 'json',
-      content: `${JSON.stringify(summary, null, 2)}\n`
-    });
-    await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
-  });
-
   register('database.addConnection', async () => {
     const config = await ConnectionEditorPanel.open(context, connectionManager);
     if (!config) {
@@ -677,25 +659,11 @@ export function activate(context: vscode.ExtensionContext): void {
       id: section?.id
     });
   });
-  register('database.cancelCurrentQuery', () => vscode.window.showInformationMessage('Cancellation is available from running result tabs.'));
-
-  register('database.previewTableMetadata', async (node?: unknown) => {
-    if (node instanceof TableNode) {
-      void vscode.window.showInformationMessage(`${qualifiedName(node.table.schema, node.table.name)} ${node.table.comment ?? ''}`.trim());
-    }
-  });
-
   register('database.openTableData', async (node?: unknown) => {
     if (!(node instanceof TableNode)) {
       return;
     }
     await TableDataPanel.open(context, connectionManager, node);
-  });
-
-  register('database.editTableData', async (node?: unknown) => {
-    if (node instanceof TableNode) {
-      await TableDataPanel.open(context, connectionManager, node);
-    }
   });
 
   register('database.copyName', async (node?: unknown) => {
@@ -712,17 +680,30 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  async function openSqlScript(title: string, content: string, connection?: ConnectionConfig): Promise<void> {
+    const doc = await openSqlEditor(connectionManager, title, content, connection);
+    if (!connection) {
+      return;
+    }
+    await sqlDocumentConnections.set(doc.uri.toString(), connection.id);
+    await connectionManager.setSelectedConnection(connection.id);
+    results.setActiveConnection(connection.id);
+    updateSqlConnectionStatus(vscode.window.activeTextEditor);
+    refreshQueryMap();
+    sqlCodeLensRefresh.fire();
+  }
+
   register('database.showObjectDdl', async (node?: unknown) => {
     const sql = await objectDdl(connectionManager, node);
     if (sql) {
-      await openSqlEditor(connectionManager, `${objectName(node) ?? 'Object'} DDL`, `${sql}\n`);
+      await openSqlScript(`${objectName(node) ?? 'Object'} DDL`, `${sql}\n`, schemaFromNode(node).connection);
     }
   });
 
   register('database.generateSelect', async (node?: unknown) => {
     const target = tableLikeTarget(node);
     if (target) {
-      await openSqlEditor(connectionManager, `SELECT ${target.name}`, `select *\nfrom ${qualifiedName(target.schema, target.name)}\nlimit 100;\n`);
+      await openSqlScript(`SELECT ${target.name}`, `select *\nfrom ${qualifiedName(target.schema, target.name)}\nlimit 100;\n`, target.connection);
     }
   });
 
@@ -733,7 +714,10 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     const columns = await connectionManager.getDriver(target.connection.type).getColumns(target.connection.id, target.schema, target.name);
     const writable = columns.filter((column) => !column.defaultValue).map((column) => quoteIdentifier(column.name));
-    await openSqlEditor(connectionManager, `INSERT ${target.name}`, `insert into ${qualifiedName(target.schema, target.name)} (${writable.join(', ')})\nvalues (${writable.map(() => '?').join(', ')});\n`);
+    const sql = writable.length
+      ? `insert into ${qualifiedName(target.schema, target.name)} (${writable.join(', ')})\nvalues (${writable.map(() => 'null').join(', ')});\n`
+      : `insert into ${qualifiedName(target.schema, target.name)}\ndefault values;\n`;
+    await openSqlScript(`INSERT ${target.name}`, sql, target.connection);
   });
 
   register('database.generateUpdate', async (node?: unknown) => {
@@ -741,67 +725,67 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!target) {
       return;
     }
-    await openSqlEditor(connectionManager, `UPDATE ${target.name}`, `update ${qualifiedName(target.schema, target.name)}\nset ${quoteIdentifier('column_name')} = ?\nwhere ${quoteIdentifier('id')} = ?;\n`);
+    await openSqlScript(`UPDATE ${target.name}`, `update ${qualifiedName(target.schema, target.name)}\nset ${quoteIdentifier('column_name')} = null\nwhere ${quoteIdentifier('id')} = '<id>';\n`, target.connection);
   });
 
   register('database.generateDelete', async (node?: unknown) => {
     const target = tableLikeTarget(node);
     if (target) {
-      await openSqlEditor(connectionManager, `DELETE ${target.name}`, `delete from ${qualifiedName(target.schema, target.name)}\nwhere ${quoteIdentifier('id')} = ?;\n`);
+      await openSqlScript(`DELETE ${target.name}`, `delete from ${qualifiedName(target.schema, target.name)}\nwhere ${quoteIdentifier('id')} = '<id>';\n`, target.connection);
     }
   });
 
   register('database.modifyTable', async (node?: unknown) => {
     const target = tableLikeTarget(node);
     if (target) {
-      await openSqlEditor(connectionManager, `ALTER ${target.name}`, `alter table ${qualifiedName(target.schema, target.name)}\n  add column ${quoteIdentifier('new_column')} text;\n`);
+      await openSqlScript(`ALTER ${target.name}`, `alter table ${qualifiedName(target.schema, target.name)}\n  add column ${quoteIdentifier('new_column')} text;\n`, target.connection);
     }
   });
 
   register('database.renameObject', async (node?: unknown) => {
     const sql = renameTemplate(node);
     if (sql) {
-      await openSqlEditor(connectionManager, `Rename ${objectName(node)}`, sql);
+      await openSqlScript(`Rename ${objectName(node)}`, sql, schemaFromNode(node).connection);
     }
   });
 
   register('database.dropObject', async (node?: unknown) => {
     const sql = dropTemplate(node);
     if (sql) {
-      await openSqlEditor(connectionManager, `Drop ${objectName(node)}`, sql);
+      await openSqlScript(`Drop ${objectName(node)}`, sql, schemaFromNode(node).connection);
     }
   });
 
   register('database.newObject', async (node?: unknown) => {
     const picked = await vscode.window.showQuickPick([
       { label: 'Query Console', command: 'database.openSqlConsole' },
-      { label: 'Query File...', command: 'database.openQueryFile' },
-      { label: 'Table', command: 'database.newTable' },
-      { label: 'View', command: 'database.newView' },
-      { label: 'Materialized View', command: 'database.newMaterializedView' },
-      { label: 'Column', command: 'database.newColumn' },
-      { label: 'Index', command: 'database.newIndex' },
-      { label: 'Unique Key', command: 'database.newUniqueKey' },
-      { label: 'Foreign Key', command: 'database.newForeignKey' },
-      { label: 'Check', command: 'database.newCheck' },
-      { label: 'Schema', command: 'database.newSchema' },
-      { label: 'Sequence', command: 'database.newSequence' }
-    ], { placeHolder: 'New database object' });
+      { label: 'Query File', command: 'database.openQueryFile' },
+      { label: 'CREATE TABLE script', command: 'database.newTable' },
+      { label: 'CREATE VIEW script', command: 'database.newView' },
+      { label: 'CREATE MATERIALIZED VIEW script', command: 'database.newMaterializedView' },
+      { label: 'ADD COLUMN script', command: 'database.newColumn' },
+      { label: 'CREATE INDEX script', command: 'database.newIndex' },
+      { label: 'UNIQUE KEY script', command: 'database.newUniqueKey' },
+      { label: 'FOREIGN KEY script', command: 'database.newForeignKey' },
+      { label: 'CHECK script', command: 'database.newCheck' },
+      { label: 'CREATE SCHEMA script', command: 'database.newSchema' },
+      { label: 'CREATE SEQUENCE script', command: 'database.newSequence' }
+    ], { placeHolder: 'Generate database SQL script' });
     if (picked) {
       await vscode.commands.executeCommand(picked.command, node);
     }
   });
 
-  register('database.newTable', async (node?: unknown) => openSqlEditor(connectionManager, 'New Table', newObjectTemplate(node, 'table')));
-  register('database.newView', async (node?: unknown) => openSqlEditor(connectionManager, 'New View', newObjectTemplate(node, 'view')));
-  register('database.newMaterializedView', async (node?: unknown) => openSqlEditor(connectionManager, 'New Materialized View', newObjectTemplate(node, 'materialized_view')));
-  register('database.newColumn', async (node?: unknown) => openSqlEditor(connectionManager, 'New Column', newObjectTemplate(node, 'column')));
-  register('database.newIndex', async (node?: unknown) => openSqlEditor(connectionManager, 'New Index', newObjectTemplate(node, 'index')));
-  register('database.newUniqueKey', async (node?: unknown) => openSqlEditor(connectionManager, 'New Unique Key', newObjectTemplate(node, 'unique_key')));
-  register('database.newForeignKey', async (node?: unknown) => openSqlEditor(connectionManager, 'New Foreign Key', newObjectTemplate(node, 'foreign_key')));
-  register('database.newCheck', async (node?: unknown) => openSqlEditor(connectionManager, 'New Check', newObjectTemplate(node, 'check')));
-  register('database.newSchema', async (node?: unknown) => openSqlEditor(connectionManager, 'New Schema', newObjectTemplate(node, 'schema')));
-  register('database.newSequence', async (node?: unknown) => openSqlEditor(connectionManager, 'New Sequence', newObjectTemplate(node, 'sequence')));
+  register('database.newTable', async (node?: unknown) => openSqlScript('New Table', newObjectTemplate(node, 'table'), schemaFromNode(node).connection));
+  register('database.newView', async (node?: unknown) => openSqlScript('New View', newObjectTemplate(node, 'view'), schemaFromNode(node).connection));
+  register('database.newMaterializedView', async (node?: unknown) => openSqlScript('New Materialized View', newObjectTemplate(node, 'materialized_view'), schemaFromNode(node).connection));
+  register('database.newColumn', async (node?: unknown) => openSqlScript('New Column', newObjectTemplate(node, 'column'), schemaFromNode(node).connection));
+  register('database.newIndex', async (node?: unknown) => openSqlScript('New Index', newObjectTemplate(node, 'index'), schemaFromNode(node).connection));
+  register('database.newUniqueKey', async (node?: unknown) => openSqlScript('New Unique Key', newObjectTemplate(node, 'unique_key'), schemaFromNode(node).connection));
+  register('database.newForeignKey', async (node?: unknown) => openSqlScript('New Foreign Key', newObjectTemplate(node, 'foreign_key'), schemaFromNode(node).connection));
+  register('database.newCheck', async (node?: unknown) => openSqlScript('New Check', newObjectTemplate(node, 'check'), schemaFromNode(node).connection));
+  register('database.newSchema', async (node?: unknown) => openSqlScript('New Schema', newObjectTemplate(node, 'schema'), schemaFromNode(node).connection));
+  register('database.newSequence', async (node?: unknown) => openSqlScript('New Sequence', newObjectTemplate(node, 'sequence'), schemaFromNode(node).connection));
 
   register('database.quickDocumentation', async (node?: unknown) => {
     const docs = await quickDocumentation(connectionManager, node);
@@ -1175,6 +1159,10 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   async function runAi(action: 'fix' | 'explain'): Promise<void> {
+    if (!await aiAdapter.isAvailable()) {
+      void vscode.window.showInformationMessage('AI SQL actions require an available VS Code language model.');
+      return;
+    }
     const editor = vscode.window.activeTextEditor;
     const connection = editor ? connectionForDocument(editor.document) : undefined;
     if (!editor || !connection) {
@@ -1207,10 +1195,14 @@ export function activate(context: vscode.ExtensionContext): void {
       try {
         const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(item.documentUri));
         const editor = await vscode.window.showTextDocument(doc, { preview: false });
-        if (item.sourceRange) {
+        const currentText = doc.getText();
+        if (item.sourceRange && currentText.includes(item.sql.trim())) {
           const range = rangeFromPlain(item.sourceRange);
           editor.selection = new vscode.Selection(range.start, range.end);
           editor.revealRange(range);
+        } else {
+          const fullRange = new vscode.Range(doc.positionAt(0), doc.positionAt(currentText.length));
+          await editor.edit((edit) => edit.replace(fullRange, `${item.sql}\n`));
         }
         results.setActiveConnection(item.connectionId);
         refreshQueryMap();
@@ -1219,11 +1211,8 @@ export function activate(context: vscode.ExtensionContext): void {
         // Fall back to opening the SQL in a durable console below.
       }
     }
-    const doc = await consoleStore.openOrCreate(connectionManager.getConnection(item.connectionId), `${item.sql}\n`);
+    const doc = await consoleStore.openOrCreate(connectionManager.getConnection(item.connectionId), `${item.sql}\n`, { reuse: false });
     const editor = await vscode.window.showTextDocument(doc, { preview: false });
-    if (doc.getText().trim().length === 0) {
-      await editor.edit((edit) => edit.insert(new vscode.Position(0, 0), `${item.sql}\n`));
-    }
     results.setActiveConnection(item.connectionId);
     refreshQueryMap();
   }
@@ -1385,6 +1374,7 @@ async function getMetadataCompletionItems(
   }
 
   const section = sectionService.detect(document, new vscode.Selection(position, position));
+  const statementPrefix = section ? document.getText(new vscode.Range(section.range.start, position)) : linePrefix;
   const relationContext = relationCompletionContext(linePrefix);
   if (relationContext?.schema) {
     const entry = await schemaContext.getCachedForConnection(config, defaultSchema);
@@ -1417,7 +1407,7 @@ async function getMetadataCompletionItems(
     });
   }
 
-  if (section && selectListColumnCompletionContext(document.getText(new vscode.Range(section.range.start, position)))) {
+  if (section && unqualifiedColumnCompletionContext(statementPrefix)) {
     return getSectionColumnCompletionItems(schemaContext, config, section.tables, defaultSchema);
   }
 
@@ -1436,10 +1426,6 @@ async function getMetadataCompletionItems(
     items.push(tableItem);
   }
 
-  if (/\bwhere\s+[\w"]*$/i.test(linePrefix) && section) {
-    items.push(...await getSectionColumnCompletionItems(schemaContext, config, section.tables, defaultSchema));
-  }
-
   return filterMetadataItems(items, linePrefix);
 }
 
@@ -1453,8 +1439,11 @@ async function getSectionColumnCompletionItems(
   for (const table of tables.slice(0, 8)) {
     const columns = await schemaContext.getCachedColumns(config, table.schema ?? defaultSchema, table.table) ?? [];
     for (const column of columns) {
+      if (items.some((item) => item.label === column.name)) {
+        continue;
+      }
       const item = new vscode.CompletionItem(column.name, vscode.CompletionItemKind.Field);
-      item.detail = column.dataType;
+      item.detail = `${table.schema ?? defaultSchema}.${table.table} ${column.dataType}`;
       item.insertText = column.name;
       items.push(item);
     }
@@ -1480,6 +1469,7 @@ function filterMetadataItems(items: vscode.CompletionItem[], linePrefix: string)
 
 function registerSqlConnectionCodeLens(
   connectionLensTitle: (document: vscode.TextDocument) => string,
+  sectionService: SqlSectionService,
   refreshEvent?: vscode.Event<void>
 ): vscode.Disposable {
   const emitter = new vscode.EventEmitter<void>();
@@ -1494,12 +1484,7 @@ function registerSqlConnectionCodeLens(
     onDidChangeCodeLenses: emitter.event,
     provideCodeLenses(document) {
       const top = new vscode.Range(0, 0, 0, 0);
-      return [
-        new vscode.CodeLens(top, {
-          title: '$(run-all) EXECUTE FILE / SELECTION',
-          tooltip: 'Run the active selection, the SQL block under the cursor, or the whole file.',
-          command: 'database.executeFile'
-        }),
+      const lenses = [
         new vscode.CodeLens(top, {
           title: connectionLensTitle(document),
           tooltip: 'Select the database connection for this SQL file',
@@ -1507,6 +1492,25 @@ function registerSqlConnectionCodeLens(
           arguments: [document.uri]
         })
       ];
+      for (const section of sectionService.getSections(document)) {
+        if (!section.sql.trim()) {
+          continue;
+        }
+        const range = new vscode.Range(section.range.start, section.range.start);
+        lenses.push(new vscode.CodeLens(range, {
+          title: '$(play) Execute SQL Section',
+          tooltip: 'Run this SQL section.',
+          command: 'database.executeStatementRange',
+          arguments: [
+            document.uri.toString(),
+            section.range.start.line,
+            section.range.start.character,
+            section.range.end.line,
+            section.range.end.character
+          ]
+        }));
+      }
+      return lenses;
     }
   });
 
@@ -1532,8 +1536,12 @@ function rangeToPlain(range: vscode.Range): NonNullable<import('./types').QueryH
   };
 }
 
-async function openSqlEditor(connectionManager: ConnectionManager, title: string, content = ''): Promise<void> {
-  const connection = connectionManager.getPreferredConnection();
+async function openSqlEditor(
+  connectionManager: ConnectionManager,
+  title: string,
+  content = '',
+  connection = connectionManager.getPreferredConnection()
+): Promise<vscode.TextDocument> {
   const uri = vscode.Uri.parse(`untitled:${title}${connection ? ` - ${connection.name}` : ''}.sql`);
   const doc = await vscode.workspace.openTextDocument(uri);
   const editor = await vscode.window.showTextDocument(doc, {
@@ -1544,6 +1552,7 @@ async function openSqlEditor(connectionManager: ConnectionManager, title: string
   if (content && doc.getText().length === 0) {
     await editor.edit((edit) => edit.insert(new vscode.Position(0, 0), content));
   }
+  return doc;
 }
 
 function configuredDefaultMaxRows(): number | undefined {
@@ -1620,9 +1629,6 @@ async function objectDdl(connectionManager: ConnectionManager, node: unknown): P
       await connectionManager.connect(node.connection.id);
     }
     return connectionManager.getDriver(node.connection.type).getTableDDL(node.connection.id, node.table.schema, node.table.name);
-  }
-  if (node instanceof ViewNode) {
-    return `-- View DDL template\ncreate or replace view ${qualifiedName(node.view.schema, node.view.name)} as\nselect ...;\n`;
   }
   if (node instanceof SchemaNode) {
     return `create schema if not exists ${quoteIdentifier(node.schema.name)};\n`;

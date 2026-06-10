@@ -57,11 +57,12 @@ export class QueryMemoryController {
   private async handleAction(result: QueryMemorySearchResult): Promise<void> {
     const item = result.item;
     const safety = this.safety.classify(item.sql, { production: this.connectionManager.getConnection(item.connectionId ?? '')?.production });
+    const aiAvailable = await this.ai.isAvailable();
     const actions = [
       { label: 'Open SQL', action: 'open' as const },
       { label: 'Copy SQL', action: 'copy' as const },
-      { label: 'Explain', action: 'explain' as const },
-      { label: 'Modify...', action: 'modify' as const },
+      aiAvailable ? { label: 'Explain', action: 'explain' as const } : undefined,
+      aiAvailable ? { label: 'Modify...', action: 'modify' as const } : undefined,
       safety.previewAvailable ? { label: 'Preview Safety SQL', action: 'preview' as const } : undefined,
       { label: safety.requiresConfirmation ? 'Run with Safety Check' : 'Run', action: 'run' as const }
     ].filter((action): action is Exclude<typeof action, undefined> => action !== undefined);
@@ -103,6 +104,10 @@ export class QueryMemoryController {
   }
 
   private async backfillSummaries(): Promise<void> {
+    if (!await this.ai.isAvailable()) {
+      void vscode.window.showInformationMessage('Query memory summaries require an available VS Code language model.');
+      return;
+    }
     await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
       title: 'Summarizing query memory',

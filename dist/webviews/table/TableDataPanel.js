@@ -238,6 +238,51 @@ class TableDataPanel {
       background: var(--vscode-input-background);
       box-shadow: inset 0 -1px 0 var(--vscode-focusBorder);
     }
+    .column-suggest {
+      position: fixed;
+      z-index: 30;
+      width: min(26rem, calc(100vw - 1rem));
+      max-height: min(18rem, 46vh);
+      overflow: auto;
+      padding: var(--space-xxs) 0;
+      border: 1px solid var(--accent);
+      border-radius: var(--radius-sm);
+      background: var(--vscode-dropdown-background);
+      color: var(--vscode-dropdown-foreground);
+      box-shadow: 0 10px 26px rgba(0, 0, 0, .34);
+      scrollbar-width: thin;
+    }
+    .column-suggest[hidden] {
+      display: none;
+    }
+    .column-suggest button {
+      width: 100%;
+      min-height: 1.8rem;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: 0 var(--space-sm);
+      border: 0;
+      border-radius: 0;
+      color: inherit;
+      text-align: left;
+    }
+    .column-suggest button:hover,
+    .column-suggest button.active {
+      background: var(--vscode-list-hoverBackground);
+    }
+    .column-suggest-name {
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font-family: var(--vscode-editor-font-family);
+    }
+    .column-suggest-type {
+      color: var(--text-muted);
+      font-size: .9em;
+    }
     button,
     select {
       height: var(--toolbar-button-size);
@@ -556,9 +601,10 @@ class TableDataPanel {
       display: none;
     }
     .filter-popover {
-      position: absolute;
-      z-index: 8;
-      display: grid;
+      position: fixed;
+      z-index: 30;
+      display: flex;
+      flex-direction: column;
       gap: var(--space-sm);
       width: min(28rem, 82vw);
       max-height: min(34rem, 72vh);
@@ -567,6 +613,8 @@ class TableDataPanel {
       background: var(--vscode-dropdown-background);
       border-radius: var(--radius-sm);
       box-shadow: 0 10px 26px rgba(0, 0, 0, .34);
+      overflow: hidden;
+      box-sizing: border-box;
     }
     .filter-popover[hidden] {
       display: none;
@@ -602,9 +650,11 @@ class TableDataPanel {
       font: inherit;
     }
     .filter-option-list {
+      flex: 1 1 auto;
       min-height: 0;
-      max-height: min(22rem, 48vh);
+      max-height: none;
       overflow: auto;
+      overscroll-behavior: contain;
       scrollbar-width: thin;
     }
     .filter-option {
@@ -730,10 +780,6 @@ class TableDataPanel {
       <button class="icon-button" id="generateSelect" data-tone="green" title="Generate SELECT">＋</button>
       <button class="icon-button" id="clearCriteria" data-tone="red" title="Clear WHERE, ORDER BY, and column filters">−</button>
       <button class="icon-button" id="resetRows" data-tone="orange" title="Reset to 500 rows">↶</button>
-      <span class="toolbar-separator"></span>
-      <select class="tool-select" title="Transaction mode">
-        <option>Tx: Auto</option>
-      </select>
       <button id="showDdl" title="Show DDL">DDL</button>
       <button class="icon-button" id="applyWhere" data-tone="green" title="Apply WHERE">▶</button>
       <button class="icon-button" id="toggleFilters" data-tone="blue" title="Show or hide per-column filters"><svg class="filter-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.5 3.5h11l-4.4 5v3.6l-2.2 1.1V8.5l-4.4-5Z"></path></svg></button>
@@ -758,6 +804,7 @@ class TableDataPanel {
         <input id="orderBy" aria-label="Order rows">
       </div>
     </div>
+    <div id="columnSuggest" class="column-suggest" hidden></div>
     <div id="gridWrap" class="grid-wrap">
       <div class="grid">
         <table id="table">
@@ -778,9 +825,6 @@ class TableDataPanel {
           </select>
           <span id="rowCount">of 0</span>
           <button id="nextPage" class="pager-button" title="Next page">›</button>
-          <button id="lastPage" class="pager-button" title="Last loaded page">›|</button>
-          <span class="pager-separator"></span>
-          <button class="pager-button" id="pagerMenu" title="More">⋮</button>
           <span id="fetchInfo" class="muted"></span>
         </span>
       </div>
@@ -818,6 +862,10 @@ class TableDataPanel {
     let activeFilterColumn = null;
     let filterDraft = new Set();
     let filterSearch = '';
+    let suggestInput = null;
+    let suggestContext = null;
+    let suggestItems = [];
+    let suggestIndex = 0;
     const NUMERIC_TYPE_IDS = new Set([20, 21, 23, 700, 701, 790, 1700]);
     const NUMERIC_TYPE_NAMES = [
       'bigint',
@@ -848,12 +896,12 @@ class TableDataPanel {
     const rowCount = document.getElementById('rowCount');
     const fetchInfo = document.getElementById('fetchInfo');
     const orderBy = document.getElementById('orderBy');
+    const columnSuggest = document.getElementById('columnSuggest');
     const pageSize = document.getElementById('pageSize');
     const toggleFilters = document.getElementById('toggleFilters');
     const firstPage = document.getElementById('firstPage');
     const prevPage = document.getElementById('prevPage');
     const nextPage = document.getElementById('nextPage');
-    const lastPage = document.getElementById('lastPage');
     const gridWrap = document.getElementById('gridWrap');
     const filterPopover = document.getElementById('filterPopover');
     const loadingOverlay = document.getElementById('loadingOverlay');
@@ -885,6 +933,115 @@ class TableDataPanel {
       if (value === null || value === undefined) return 'NULL';
       const next = cell(value);
       return next === '' ? '(empty)' : next;
+    }
+    function sqlIdentifier(column) {
+      return /^[A-Za-z_][A-Za-z0-9_]*$/.test(column)
+        ? column
+        : '"' + column.replaceAll('"', '""') + '"';
+    }
+    function suggestColumnContext(input) {
+      const cursor = input.selectionStart ?? input.value.length;
+      const before = input.value.slice(0, cursor);
+      const match = before.match(/[A-Za-z_][A-Za-z0-9_]*$/);
+      const partial = match ? match[0] : '';
+      return {
+        start: cursor - partial.length,
+        end: cursor,
+        partial
+      };
+    }
+    function matchingColumns(partial) {
+      const lower = partial.toLowerCase();
+      return columns
+        .filter((column) => !lower || column.toLowerCase().startsWith(lower))
+        .slice(0, 30);
+    }
+    function positionColumnSuggest(input) {
+      const rect = input.getBoundingClientRect();
+      const width = Math.min(Math.max(rect.width, 260), window.innerWidth - 16);
+      columnSuggest.style.width = width + 'px';
+      columnSuggest.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)) + 'px';
+      columnSuggest.style.top = Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 80)) + 'px';
+    }
+    function renderColumnSuggest(input) {
+      if (!columns.length) {
+        closeColumnSuggest();
+        return;
+      }
+      suggestInput = input;
+      suggestContext = suggestColumnContext(input);
+      suggestItems = matchingColumns(suggestContext.partial);
+      suggestIndex = Math.min(suggestIndex, Math.max(0, suggestItems.length - 1));
+      if (!suggestItems.length) {
+        closeColumnSuggest();
+        return;
+      }
+      positionColumnSuggest(input);
+      columnSuggest.hidden = false;
+      columnSuggest.innerHTML = suggestItems.map((column, index) => {
+        const type = columnTypes[column]?.dataTypeName || '';
+        return '<button type="button" class="' + (index === suggestIndex ? 'active' : '') + '" data-suggest-index="' + index + '"><span class="column-suggest-name">' + html(column) + '</span><span class="column-suggest-type">' + html(type) + '</span></button>';
+      }).join('');
+      columnSuggest.querySelectorAll('[data-suggest-index]').forEach((button) => {
+        button.addEventListener('mousedown', (event) => {
+          event.preventDefault();
+          applyColumnSuggest(Number(button.getAttribute('data-suggest-index')));
+        });
+      });
+    }
+    function closeColumnSuggest() {
+      suggestInput = null;
+      suggestContext = null;
+      suggestItems = [];
+      suggestIndex = 0;
+      columnSuggest.hidden = true;
+      columnSuggest.innerHTML = '';
+    }
+    function applyColumnSuggest(index = suggestIndex) {
+      if (!suggestInput || !suggestContext || !suggestItems[index]) return;
+      const column = sqlIdentifier(suggestItems[index]);
+      const before = suggestInput.value.slice(0, suggestContext.start);
+      const after = suggestInput.value.slice(suggestContext.end);
+      suggestInput.value = before + column + after;
+      const nextCursor = before.length + column.length;
+      suggestInput.focus();
+      suggestInput.setSelectionRange(nextCursor, nextCursor);
+      closeColumnSuggest();
+    }
+    function moveColumnSuggest(delta) {
+      if (columnSuggest.hidden || !suggestItems.length) return;
+      suggestIndex = (suggestIndex + delta + suggestItems.length) % suggestItems.length;
+      renderColumnSuggest(suggestInput);
+    }
+    function handleCriteriaSuggestKeydown(event, input, onSubmit, onClear) {
+      if (!columnSuggest.hidden && suggestInput === input) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          moveColumnSuggest(1);
+          return;
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          moveColumnSuggest(-1);
+          return;
+        }
+        if (event.key === 'Tab' || event.key === 'Enter') {
+          event.preventDefault();
+          applyColumnSuggest();
+          return;
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closeColumnSuggest();
+          return;
+        }
+      }
+      if (event.key === 'Enter') {
+        onSubmit();
+      }
+      if (event.key === 'Escape') {
+        onClear();
+      }
     }
     function columnFilterOptions(column) {
       const counts = new Map();
@@ -985,13 +1142,21 @@ class TableDataPanel {
       );
     }
     function positionFilterPopover(anchor) {
-      const root = gridWrap.getBoundingClientRect();
       const rect = anchor.getBoundingClientRect();
-      const width = Math.min(448, Math.max(260, gridWrap.clientWidth - 16));
-      const left = Math.max(8, Math.min(rect.left - root.left, gridWrap.clientWidth - width - 8));
+      const viewportPadding = 8;
+      const width = Math.min(448, Math.max(260, window.innerWidth - viewportPadding * 2));
+      const below = window.innerHeight - rect.bottom - viewportPadding;
+      const above = rect.top - viewportPadding;
+      const openBelow = below >= 240 || below >= above;
+      const availableHeight = Math.max(96, openBelow ? below - 4 : above - 4);
+      const maxHeight = Math.min(544, availableHeight);
+      const top = openBelow
+        ? rect.bottom + 4
+        : Math.max(viewportPadding, rect.top - maxHeight - 4);
       filterPopover.style.width = width + 'px';
-      filterPopover.style.left = left + 'px';
-      filterPopover.style.top = Math.max(8, rect.bottom - root.top + 4) + 'px';
+      filterPopover.style.maxHeight = maxHeight + 'px';
+      filterPopover.style.left = Math.max(viewportPadding, Math.min(rect.right - width, window.innerWidth - width - viewportPadding)) + 'px';
+      filterPopover.style.top = top + 'px';
     }
     function openColumnFilter(column, anchor) {
       activeFilterColumn = column;
@@ -1085,7 +1250,6 @@ class TableDataPanel {
       firstPage.disabled = loading || currentOffset === 0;
       prevPage.disabled = loading || currentOffset === 0 || !currentLimit;
       nextPage.disabled = loading || !hasMore || !currentLimit;
-      lastPage.disabled = true;
     }
     function updateLoadingOverlay() {
       const visible = loading || errorMessage;
@@ -1190,27 +1354,27 @@ class TableDataPanel {
       });
     }
     where.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        fetchRows(0);
-      }
-      if (event.key === 'Escape') {
+      handleCriteriaSuggestKeydown(event, where, () => fetchRows(0), () => {
         where.value = '';
         fetchRows(0);
-      }
+      });
     });
+    where.addEventListener('input', () => renderColumnSuggest(where));
+    where.addEventListener('focus', () => renderColumnSuggest(where));
     orderBy.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
+      handleCriteriaSuggestKeydown(event, orderBy, () => {
         sort = null;
         selectedColumn = null;
         fetchRows(0);
-      }
-      if (event.key === 'Escape') {
+      }, () => {
         orderBy.value = '';
         sort = null;
         selectedColumn = null;
         fetchRows(0);
-      }
+      });
     });
+    orderBy.addEventListener('input', () => renderColumnSuggest(orderBy));
+    orderBy.addEventListener('focus', () => renderColumnSuggest(orderBy));
     toggleFilters.addEventListener('click', () => {
       columnFiltersVisible = !columnFiltersVisible;
       if (!columnFiltersVisible) {
@@ -1224,6 +1388,9 @@ class TableDataPanel {
     document.addEventListener('click', (event) => {
       if (activeFilterColumn && !filterPopover.contains(event.target) && !event.target.closest('[data-filter-button]')) {
         closeColumnFilter();
+      }
+      if (!columnSuggest.contains(event.target) && event.target !== where && event.target !== orderBy) {
+        closeColumnSuggest();
       }
     });
     document.getElementById('export').addEventListener('click', () => {

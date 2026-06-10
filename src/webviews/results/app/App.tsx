@@ -12,6 +12,7 @@ export function App() {
   const { tabs, activeTabId, setTabs, upsertTab } = useResultsStore();
   const active = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const [activeResultSetIndex, setActiveResultSetIndex] = useState(0);
+  const [columnFiltersVisible, setColumnFiltersVisible] = useState(true);
 
   useEffect(() => {
     const listener = (event: MessageEvent) => {
@@ -43,24 +44,31 @@ export function App() {
   const isRunning = active.executionStatus === 'queued' || active.executionStatus === 'running';
 
   return (
-    <main className="app">
+    <main className={`app ${active.resultSets.length > 1 ? 'with-resultset-tabs' : ''}`}>
       <ResultsTabs tabs={tabs} activeTabId={active.id} />
-      <ResultToolbar tab={active} resultSet={resultSet} />
-      <div className="resultset-tabs">
-        {active.resultSets.length > 0 ? active.resultSets.map((set, index) => (
-          <button
-            key={set.id}
-            className={index === activeResultSetIndex ? 'active' : ''}
-            onClick={() => setActiveResultSetIndex(index)}
-            title={`${set.command ?? 'Result'} - ${set.rowCount} rows`}
-          >
-            <span className="resultset-icon">▦</span>
-            <span>{set.command ?? 'Result'}</span>
-            <span className="resultset-count">{set.rowCount.toLocaleString()} rows</span>
-          </button>
-        )) : <span className="muted resultset-empty-label">{isRunning ? 'Running' : 'Messages'}</span>}
-      </div>
-      {isRunning ? <RunningPanel /> : active.executionStatus === 'failed' ? <MessagesPanel tab={active} /> : <ResultGrid tab={active} resultSet={resultSet} />}
+      <ResultToolbar
+        tab={active}
+        resultSet={resultSet}
+        columnFiltersVisible={columnFiltersVisible}
+        onToggleColumnFilters={() => setColumnFiltersVisible((visible) => !visible)}
+      />
+      {active.resultSets.length > 1 && (
+        <div className="resultset-tabs">
+          {active.resultSets.map((set, index) => (
+            <button
+              key={set.id}
+              className={index === activeResultSetIndex ? 'active' : ''}
+              onClick={() => setActiveResultSetIndex(index)}
+              title={`${set.command ?? 'Result'} - ${set.rowCount} rows`}
+            >
+              <span className="resultset-icon">▦</span>
+              <span>{set.command ?? 'Result'}</span>
+              <span className="resultset-count">{set.rowCount.toLocaleString()} rows</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {isRunning ? <RunningPanel /> : active.executionStatus === 'failed' ? <MessagesPanel tab={active} /> : <ResultGrid tab={active} resultSet={resultSet} columnFiltersVisible={columnFiltersVisible} />}
       <StatusBar tab={active} resultSet={resultSet} />
     </main>
   );
