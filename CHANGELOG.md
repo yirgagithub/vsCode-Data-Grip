@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.3
+
+- Excluded local `.vscode-data-grip/` workspace query files from the packaged extension.
+
 ## 0.0.2
 
 - Moved Execute File / Selection from a top-of-file CodeLens to an always-visible editor title bar button, so it no longer scrolls out of view in long files.
