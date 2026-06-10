@@ -37,8 +37,21 @@ exports.VsCodeLanguageModelSqlAdapter = void 0;
 const vscode = __importStar(require("vscode"));
 const queryMemorySummaryParser_1 = require("./queryMemorySummaryParser");
 class VsCodeLanguageModelSqlAdapter {
+    async isAvailable() {
+        const lm = this.languageModelNamespace();
+        if (!lm?.selectChatModels) {
+            return false;
+        }
+        try {
+            const models = await lm.selectChatModels({ vendor: 'copilot' });
+            return models.length > 0;
+        }
+        catch {
+            return false;
+        }
+    }
     async send(request) {
-        const lm = vscode.lm;
+        const lm = this.languageModelNamespace();
         if (!lm?.selectChatModels) {
             throw new Error('VS Code Language Model API is not available.');
         }
@@ -82,7 +95,7 @@ class VsCodeLanguageModelSqlAdapter {
         ].filter(Boolean).join('\n\n');
     }
     async sendRaw(prompt) {
-        const lm = vscode.lm;
+        const lm = this.languageModelNamespace();
         if (!lm?.selectChatModels) {
             throw new Error('VS Code Language Model API is not available.');
         }
@@ -114,6 +127,9 @@ class VsCodeLanguageModelSqlAdapter {
     }
     parseSummary(text) {
         return (0, queryMemorySummaryParser_1.parseQueryMemorySummaryText)(text);
+    }
+    languageModelNamespace() {
+        return vscode.lm;
     }
     extractSql(text) {
         const fenced = text.match(/```(?:sql)?\s*([\s\S]*?)```/i);

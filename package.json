@@ -2,8 +2,14 @@
   "name": "vscode-data-grip",
   "displayName": "Data Grip",
   "description": "An AI-native VS Code database client for PostgreSQL and Redshift.",
-  "version": "0.0.1",
-  "publisher": "avow",
+  "version": "0.0.2",
+  "publisher": "vs-code-database-client",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yirgagithub/vsCode-Data-Grip.git"
+  },
+  "license": "MIT",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -32,7 +38,6 @@
     "onCommand:database.showResults",
     "onCommand:database.findPastQuery",
     "onCommand:database.backfillQueryMemorySummaries",
-    "onCommand:database.testQueryMemorySummary",
     "onCommand:database.aiFixSql",
     "onCommand:database.aiExplainSql"
   ],
@@ -77,14 +82,12 @@
       },
       {
         "command": "database.executeFile",
-        "title": "Execute File",
+        "title": "Execute File / Selection",
         "category": "Database",
-        "icon": "$(run-all)"
-      },
-      {
-        "command": "database.cancelCurrentQuery",
-        "title": "Cancel Query",
-        "category": "Database"
+        "icon": {
+          "dark": "media/run-file-dark.svg",
+          "light": "media/run-file-light.svg"
+        }
       },
       {
         "command": "database.openSqlConsole",
@@ -94,7 +97,7 @@
       },
       {
         "command": "database.openQueryFile",
-        "title": "Query File...",
+        "title": "Add Query File",
         "category": "Database"
       },
       {
@@ -132,33 +135,26 @@
       {
         "command": "database.backfillQueryMemorySummaries",
         "title": "Backfill Query Memory Summaries",
-        "category": "Database"
-      },
-      {
-        "command": "database.testQueryMemorySummary",
-        "title": "Developer: Test Query Memory Summary",
-        "category": "Database"
+        "category": "Database",
+        "enablement": "database.aiAvailable"
       },
       {
         "command": "database.aiFixSql",
         "title": "AI: Fix SQL",
         "category": "Database",
-        "icon": "$(sparkle)"
+        "icon": "$(sparkle)",
+        "enablement": "database.aiAvailable"
       },
       {
         "command": "database.aiExplainSql",
         "title": "AI: Explain SQL",
         "category": "Database",
-        "icon": "$(comment-discussion)"
+        "icon": "$(comment-discussion)",
+        "enablement": "database.aiAvailable"
       },
       {
         "command": "database.openTableData",
         "title": "Open Table",
-        "category": "Database"
-      },
-      {
-        "command": "database.editTableData",
-        "title": "Edit Data",
         "category": "Database"
       },
       {
@@ -169,67 +165,67 @@
       },
       {
         "command": "database.newTable",
-        "title": "Table",
+        "title": "Generate CREATE TABLE",
         "category": "Database"
       },
       {
         "command": "database.newView",
-        "title": "View",
+        "title": "Generate CREATE VIEW",
         "category": "Database"
       },
       {
         "command": "database.newMaterializedView",
-        "title": "Materialized View",
+        "title": "Generate CREATE MATERIALIZED VIEW",
         "category": "Database"
       },
       {
         "command": "database.newColumn",
-        "title": "Column",
+        "title": "Generate ADD COLUMN",
         "category": "Database"
       },
       {
         "command": "database.newIndex",
-        "title": "Index",
+        "title": "Generate CREATE INDEX",
         "category": "Database"
       },
       {
         "command": "database.newUniqueKey",
-        "title": "Unique Key",
+        "title": "Generate UNIQUE KEY",
         "category": "Database"
       },
       {
         "command": "database.newForeignKey",
-        "title": "Foreign Key",
+        "title": "Generate FOREIGN KEY",
         "category": "Database"
       },
       {
         "command": "database.newCheck",
-        "title": "Check",
+        "title": "Generate CHECK",
         "category": "Database"
       },
       {
         "command": "database.newSchema",
-        "title": "Schema",
+        "title": "Generate CREATE SCHEMA",
         "category": "Database"
       },
       {
         "command": "database.newSequence",
-        "title": "Sequence",
+        "title": "Generate CREATE SEQUENCE",
         "category": "Database"
       },
       {
         "command": "database.modifyTable",
-        "title": "Modify Table...",
+        "title": "Generate ALTER TABLE",
         "category": "Database"
       },
       {
         "command": "database.renameObject",
-        "title": "Rename...",
+        "title": "Generate RENAME",
         "category": "Database"
       },
       {
         "command": "database.dropObject",
-        "title": "Drop...",
+        "title": "Generate DROP",
         "category": "Database"
       },
       {
@@ -244,7 +240,7 @@
       },
       {
         "command": "database.showObjectDdl",
-        "title": "DDL",
+        "title": "Generate DDL",
         "category": "Database"
       },
       {
@@ -382,11 +378,6 @@
           "group": "navigation@3"
         },
         {
-          "command": "database.editTableData",
-          "when": "view == databaseExplorer && viewItem == table",
-          "group": "navigation@4"
-        },
-        {
           "command": "database.refreshExplorer",
           "when": "view == databaseExplorer",
           "group": "navigation@5"
@@ -522,13 +513,14 @@
         },
         {
           "command": "database.showObjectDdl",
-          "when": "viewItem == table || viewItem == view || viewItem == schema",
+          "when": "viewItem == table || viewItem == schema",
           "group": "copy@3"
         }
       ],
       "database.sqlScripts": [
         {
           "command": "database.showObjectDdl",
+          "when": "viewItem == table",
           "group": "ddl@1"
         },
         {
@@ -592,18 +584,21 @@
           "command": "database.findPastQuery",
           "group": "history@2"
         },
-        {
-          "command": "database.backfillQueryMemorySummaries",
-          "group": "history@3"
-        },
-        {
-          "command": "database.aiFixSql",
-          "group": "ai@1"
-        },
-        {
-          "command": "database.aiExplainSql",
-          "group": "ai@2"
-        }
+      {
+        "command": "database.backfillQueryMemorySummaries",
+        "when": "database.aiAvailable",
+        "group": "history@3"
+      },
+      {
+        "command": "database.aiFixSql",
+        "when": "database.aiAvailable",
+        "group": "ai@1"
+      },
+      {
+        "command": "database.aiExplainSql",
+        "when": "database.aiAvailable",
+        "group": "ai@2"
+      }
       ],
       "editor/context": [
         {
@@ -626,15 +621,22 @@
           "when": "editorLangId == sql",
           "group": "inspect@1"
         },
+      {
+        "command": "database.aiFixSql",
+        "when": "editorLangId == sql && database.aiAvailable",
+        "group": "ai@1"
+      },
+      {
+        "command": "database.aiExplainSql",
+        "when": "editorLangId == sql && database.aiAvailable",
+        "group": "ai@2"
+      }
+      ],
+      "editor/title": [
         {
-          "command": "database.aiFixSql",
+          "command": "database.executeFile",
           "when": "editorLangId == sql",
-          "group": "ai@1"
-        },
-        {
-          "command": "database.aiExplainSql",
-          "when": "editorLangId == sql",
-          "group": "ai@2"
+          "group": "navigation@1"
         }
       ],
       "editor/title/context": [
@@ -665,12 +667,6 @@
         "command": "database.executeFile",
         "key": "ctrl+enter",
         "mac": "cmd+enter",
-        "when": "editorTextFocus && editorLangId == sql"
-      },
-      {
-        "command": "database.cancelCurrentQuery",
-        "key": "ctrl+alt+backspace",
-        "mac": "cmd+alt+backspace",
         "when": "editorTextFocus && editorLangId == sql"
       },
       {
@@ -758,10 +754,13 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "bundle:extension": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --external:pg-native --sourcemap --outfile=dist/extension.js",
     "bundle:webview": "vite build --config vite.config.ts",
-    "build": "npm run compile && npm run bundle:webview",
+    "build": "npm run compile && npm run bundle:extension && npm run bundle:webview",
     "lint": "tsc -p ./ --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "package": "vsce package --no-dependencies",
+    "publish": "vsce publish --no-dependencies"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",
@@ -776,8 +775,9 @@
     "@types/react": "^19.1.9",
     "@types/react-dom": "^19.1.7",
     "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.9.2",
     "typescript": "^5.9.2",
-    "vitest": "^1.6.1",
-    "vite": "^5.4.14"
+    "vite": "^5.4.14",
+    "vitest": "^1.6.1"
   }
 }

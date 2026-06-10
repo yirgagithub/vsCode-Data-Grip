@@ -7,7 +7,6 @@ export type DatabaseNode =
   | SchemasNode
   | SchemaNode
   | FolderNode
-  | StaticFolderNode
   | TableNode
   | ViewNode
   | ColumnNode;
@@ -76,27 +75,13 @@ export class FolderNode extends vscode.TreeItem {
   constructor(
     public readonly connection: ConnectionConfig,
     public readonly schema: string,
-    public readonly folder: 'Tables' | 'Views' | 'Materialized Views' | 'Columns' | 'Indexes' | 'Keys',
+    public readonly folder: 'Tables' | 'Views' | 'Materialized Views' | 'Columns',
     public readonly tableName?: string
   ) {
     super(folder, vscode.TreeItemCollapsibleState.Collapsed);
     this.id = `folder:${connection.id}:${schema}:${folder}:${tableName ?? ''}`;
     this.contextValue = folder.toLowerCase().replace(/\s+/g, '-');
     this.iconPath = new vscode.ThemeIcon(folder === 'Materialized Views' ? 'symbol-structure' : 'folder');
-  }
-}
-
-export class StaticFolderNode extends vscode.TreeItem {
-  readonly kind = 'static-folder';
-  constructor(
-    public readonly connection: ConnectionConfig,
-    public readonly name: 'Server Objects' | 'Query Files' | 'groups' | 'users',
-    collapsibleState: vscode.TreeItemCollapsibleState = vscode.TreeItemCollapsibleState.Collapsed
-  ) {
-    super(name, collapsibleState);
-    this.id = `static-folder:${connection.id}:${name}`;
-    this.contextValue = name.toLowerCase().replace(/\s+/g, '-');
-    this.iconPath = new vscode.ThemeIcon(name === 'Query Files' ? 'files' : 'folder');
   }
 }
 

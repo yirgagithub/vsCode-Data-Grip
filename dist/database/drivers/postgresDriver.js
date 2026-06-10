@@ -233,7 +233,7 @@ class PostgresDriver {
         const lines = columns.map((column) => {
             const nullable = column.nullable ? '' : ' not null';
             const defaultValue = column.defaultValue ? ` default ${column.defaultValue}` : '';
-            return `  "${column.name}" ${column.dataType}${defaultValue}${nullable}`;
+            return `  ${(0, identifiers_1.quoteIdentifier)(column.name)} ${column.dataType}${defaultValue}${nullable}`;
         });
         return `create table ${(0, identifiers_1.qualifiedName)(schema, table)} (\n${lines.join(',\n')}\n);`;
     }

@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ColumnNode = exports.ViewNode = exports.TableNode = exports.StaticFolderNode = exports.FolderNode = exports.SchemaNode = exports.SchemasNode = exports.CatalogNode = exports.ConnectionNode = void 0;
+exports.ColumnNode = exports.ViewNode = exports.TableNode = exports.FolderNode = exports.SchemaNode = exports.SchemasNode = exports.CatalogNode = exports.ConnectionNode = void 0;
 const vscode = __importStar(require("vscode"));
 class ConnectionNode extends vscode.TreeItem {
     connection;
@@ -117,20 +117,6 @@ class FolderNode extends vscode.TreeItem {
     }
 }
 exports.FolderNode = FolderNode;
-class StaticFolderNode extends vscode.TreeItem {
-    connection;
-    name;
-    kind = 'static-folder';
-    constructor(connection, name, collapsibleState = vscode.TreeItemCollapsibleState.Collapsed) {
-        super(name, collapsibleState);
-        this.connection = connection;
-        this.name = name;
-        this.id = `static-folder:${connection.id}:${name}`;
-        this.contextValue = name.toLowerCase().replace(/\s+/g, '-');
-        this.iconPath = new vscode.ThemeIcon(name === 'Query Files' ? 'files' : 'folder');
-    }
-}
-exports.StaticFolderNode = StaticFolderNode;
 class TableNode extends vscode.TreeItem {
     connection;
     table;

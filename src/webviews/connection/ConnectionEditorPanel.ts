@@ -303,8 +303,7 @@ export class ConnectionEditorPanel {
       font-weight: 600;
       text-transform: uppercase;
     }
-    .rail-toolbar,
-    .dialog-toolbar {
+    .rail-toolbar {
       display: flex;
       align-items: center;
       gap: var(--space-xxs);
@@ -664,8 +663,6 @@ export class ConnectionEditorPanel {
             <div class="rail-toolbar" role="toolbar" aria-label="Data source actions">
               <button type="button" class="icon-button" title="Add data source" aria-label="Add data source">＋</button>
               <button type="button" class="icon-button" title="Remove data source" aria-label="Remove data source">−</button>
-              <button type="button" class="icon-button" title="Duplicate data source" aria-label="Duplicate data source">⧉</button>
-              <button type="button" class="icon-button" title="Settings" aria-label="Settings">⚙</button>
             </div>
           </div>
           <div class="data-source-list">
@@ -674,10 +671,6 @@ export class ConnectionEditorPanel {
               <span class="source-name" id="sourceName">Connection</span>
               <span class="status-dot" title="Configured"></span>
             </button>
-          </div>
-          <div class="problems">
-            <span class="section-label">Problems</span>
-            <span>No problems found</span>
           </div>
         </aside>
         <section class="content">
@@ -698,7 +691,6 @@ export class ConnectionEditorPanel {
               <option>red</option>
               <option>gray</option>
             </select>
-            <button type="button" class="comment-link">Add comment</button>
           </div>
           <div class="tabs" role="tablist" aria-label="Connection settings">
             <button type="button" class="tab active" data-tab="general" role="tab" aria-selected="true">General</button>
@@ -712,22 +704,17 @@ export class ConnectionEditorPanel {
               <div class="segment full-row" role="group" aria-label="Connection type">
                 <button type="button" data-db-type="postgres">default</button>
                 <button type="button" data-db-type="redshift">IAM cluster/region</button>
-                <button type="button">URL only</button>
               </div>
               <span class="field-label">Host:</span>
               <div class="inline-row full-row">
                 <input name="host" autocomplete="off" aria-label="Host">
                 <input name="port" inputmode="numeric" aria-label="Port">
               </div>
-              <span class="field-label">Authentication:</span>
-              <select class="full-row" aria-label="Authentication mode"><option>User & Password</option></select>
               <span class="field-label">User:</span>
               <input class="full-row" name="username" autocomplete="off" aria-label="Username">
               <span class="field-label">Password:</span>
               <div class="password-row full-row">
                 <input name="password" type="password" placeholder="${form.id ? 'Leave blank to keep existing password' : ''}" aria-label="Password">
-                <span class="field-label">Save:</span>
-                <select aria-label="Password save mode"><option>Forever</option><option>Until restart</option></select>
               </div>
               <span class="field-label">Database:</span>
               <input class="full-row" name="database" autocomplete="off" aria-label="Database">
@@ -754,33 +741,9 @@ export class ConnectionEditorPanel {
             </div>
           </div>
           <div class="tab-panel" data-panel="schemas">
-            <div class="schemas-layout">
-              <div class="schema-toolbar">
-                <div class="dialog-toolbar" role="toolbar" aria-label="Schema actions">
-                  <button type="button" class="icon-button" title="Refresh schemas">↻</button>
-                  <button type="button" class="icon-button" title="Expand all">▾</button>
-                  <button type="button" class="icon-button" title="Collapse all">▸</button>
-                  <button type="button" class="icon-button" title="Remove">−</button>
-                </div>
-                <input aria-label="Search schemas" placeholder="Search">
-              </div>
-              <div class="schema-tree" role="tree" aria-label="Schemas">
-                <button type="button" class="schema-row" data-schema-pattern="*"><span>▾</span><span>All databases</span></button>
-                <button type="button" class="schema-row" data-schema-pattern="external"><span>▸</span><span>All external databases</span></button>
-                <button type="button" class="schema-row" data-schema-pattern="default"><span>▾</span><span>Default database</span></button>
-                <button type="button" class="schema-row child" data-schema-pattern="database"><span>▾</span><span id="schemaDatabaseLabel">database</span></button>
-                <button type="button" class="schema-row child" data-schema-pattern="awsdatacatalog"><span>▸</span><span>awsdatacatalog</span></button>
-                <button type="button" class="schema-row child" data-schema-pattern="dev"><span>▸</span><span>dev</span></button>
-                <button type="button" class="schema-row child" data-schema-pattern="padb_harvest"><span>▸</span><span>padb_harvest</span></button>
-              </div>
-              <div class="schema-footer">
-                <label class="pattern"><span class="field-label">Schema pattern:</span><code id="schemaPattern">@:@|avow:public</code></label>
-                <label class="pattern"><span class="field-label">Default schema:</span><input name="defaultSchema" autocomplete="off" aria-label="Default schema"></label>
-                <div class="checks">
-                  <label class="check"><input type="checkbox">Show internal system schemas</label>
-                  <label class="check"><input type="checkbox">Show template databases</label>
-                </div>
-              </div>
+            <div class="advanced-grid">
+              <span class="field-label">Default schema:</span>
+              <input name="defaultSchema" autocomplete="off" aria-label="Default schema">
             </div>
           </div>
         </section>
@@ -804,8 +767,6 @@ export class ConnectionEditorPanel {
     const connectionList = allConnections.map((connection) => ({ ...connection }));
     let selectedId = formData.id ?? (connectionList[0]?.id || 'new');
     let draftActive = !formData.id;
-    const currentSchemaRows = Array.from(document.querySelectorAll('[data-schema-pattern]'));
-    const schemaSearch = form.querySelector('input[aria-label="Search schemas"]');
     for (const [key, value] of Object.entries(formData)) {
       const field = form.elements.namedItem(key);
       if (!field) continue;
@@ -816,8 +777,6 @@ export class ConnectionEditorPanel {
     const typeField = form.elements.namedItem('type');
     const sourceName = document.getElementById('sourceName');
     const urlPreview = document.getElementById('urlPreview');
-    const schemaPattern = document.getElementById('schemaPattern');
-    const schemaDatabaseLabel = document.getElementById('schemaDatabaseLabel');
     const typeButtons = Array.from(document.querySelectorAll('[data-db-type]'));
     const tabs = Array.from(document.querySelectorAll('[data-tab]'));
     const panels = Array.from(document.querySelectorAll('[data-panel]'));
@@ -903,10 +862,7 @@ export class ConnectionEditorPanel {
       const host = form.elements.namedItem('host').value || 'host';
       const port = form.elements.namedItem('port').value || '';
       const database = form.elements.namedItem('database').value || 'database';
-      const schema = form.elements.namedItem('defaultSchema').value || 'public';
       sourceName.textContent = name;
-      schemaDatabaseLabel.textContent = database + ' (Default database)';
-      schemaPattern.textContent = '@:@|' + database + ':' + schema;
       urlPreview.value = 'jdbc:' + (type === 'redshift' ? 'redshift' : 'postgresql') + '://' + host + (port ? ':' + port : '') + '/' + database;
       typeButtons.forEach((button) => button.classList.toggle('active', button.dataset.dbType === type));
       renderSourceList();
@@ -959,22 +915,6 @@ export class ConnectionEditorPanel {
       const id = selectedId;
       if (!id) return;
       vscode.postMessage({ type: 'delete', id });
-    });
-    schemaSearch?.addEventListener('input', () => {
-      const term = schemaSearch.value.trim().toLowerCase();
-      currentSchemaRows.forEach((row) => {
-        const label = row.textContent?.toLowerCase() || '';
-        row.hidden = !!term && !label.includes(term) && !(row.dataset.schemaPattern || '').includes(term);
-      });
-    });
-    currentSchemaRows.forEach((row) => {
-      row.addEventListener('click', () => {
-        const pattern = row.dataset.schemaPattern;
-        if (!pattern) return;
-        const defaultSchema = pattern === '*' ? 'public' : pattern === 'default' ? (form.elements.namedItem('defaultSchema').value || 'public') : pattern;
-        form.elements.namedItem('defaultSchema').value = defaultSchema;
-        syncDerivedFields();
-      });
     });
     function collect() {
       const data = {};

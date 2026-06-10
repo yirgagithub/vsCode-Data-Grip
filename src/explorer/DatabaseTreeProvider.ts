@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ConnectionManager } from '../database/connectionManager';
-import { CatalogNode, ColumnNode, ConnectionNode, DatabaseNode, FolderNode, SchemaNode, SchemasNode, StaticFolderNode, TableNode, ViewNode } from './nodes';
+import { CatalogNode, ColumnNode, ConnectionNode, DatabaseNode, FolderNode, SchemaNode, SchemasNode, TableNode, ViewNode } from './nodes';
 
 export class DatabaseTreeProvider implements vscode.TreeDataProvider<DatabaseNode> {
   private readonly emitter = new vscode.EventEmitter<DatabaseNode | undefined | null | void>();
@@ -28,11 +28,7 @@ export class DatabaseTreeProvider implements vscode.TreeDataProvider<DatabaseNod
     if (element instanceof CatalogNode) {
       await this.ensureConnected(element.connection.id);
       const schemas = await this.connectionManager.getDriver(element.connection.type).getSchemas(element.connection.id);
-      return [
-        ...schemas.map((schema) => new SchemaNode(element.connection, schema)),
-        new StaticFolderNode(element.connection, 'Server Objects'),
-        new StaticFolderNode(element.connection, 'Query Files')
-      ];
+      return schemas.map((schema) => new SchemaNode(element.connection, schema));
     }
 
     if (element instanceof SchemasNode) {
@@ -69,9 +65,7 @@ export class DatabaseTreeProvider implements vscode.TreeDataProvider<DatabaseNod
 
     if (element instanceof TableNode) {
       return [
-        new FolderNode(element.connection, element.table.schema, 'Columns', element.table.name),
-        new FolderNode(element.connection, element.table.schema, 'Indexes', element.table.name),
-        new FolderNode(element.connection, element.table.schema, 'Keys', element.table.name)
+        new FolderNode(element.connection, element.table.schema, 'Columns', element.table.name)
       ];
     }
 
@@ -82,13 +76,6 @@ export class DatabaseTreeProvider implements vscode.TreeDataProvider<DatabaseNod
       }
       const columns = await this.connectionManager.getDriver(element.connection.type).getColumns(element.connection.id, element.schema, table);
       return columns.map((column) => new ColumnNode(element.connection, column));
-    }
-
-    if (element instanceof StaticFolderNode && element.name === 'Server Objects') {
-      return [
-        new StaticFolderNode(element.connection, 'groups', vscode.TreeItemCollapsibleState.None),
-        new StaticFolderNode(element.connection, 'users', vscode.TreeItemCollapsibleState.None)
-      ];
     }
 
     return [];

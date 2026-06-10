@@ -59,11 +59,7 @@ class DatabaseTreeProvider {
         if (element instanceof nodes_1.CatalogNode) {
             await this.ensureConnected(element.connection.id);
             const schemas = await this.connectionManager.getDriver(element.connection.type).getSchemas(element.connection.id);
-            return [
-                ...schemas.map((schema) => new nodes_1.SchemaNode(element.connection, schema)),
-                new nodes_1.StaticFolderNode(element.connection, 'Server Objects'),
-                new nodes_1.StaticFolderNode(element.connection, 'Query Files')
-            ];
+            return schemas.map((schema) => new nodes_1.SchemaNode(element.connection, schema));
         }
         if (element instanceof nodes_1.SchemasNode) {
             await this.ensureConnected(element.connection.id);
@@ -94,9 +90,7 @@ class DatabaseTreeProvider {
         }
         if (element instanceof nodes_1.TableNode) {
             return [
-                new nodes_1.FolderNode(element.connection, element.table.schema, 'Columns', element.table.name),
-                new nodes_1.FolderNode(element.connection, element.table.schema, 'Indexes', element.table.name),
-                new nodes_1.FolderNode(element.connection, element.table.schema, 'Keys', element.table.name)
+                new nodes_1.FolderNode(element.connection, element.table.schema, 'Columns', element.table.name)
             ];
         }
         if (element instanceof nodes_1.FolderNode && element.folder === 'Columns') {
@@ -106,12 +100,6 @@ class DatabaseTreeProvider {
             }
             const columns = await this.connectionManager.getDriver(element.connection.type).getColumns(element.connection.id, element.schema, table);
             return columns.map((column) => new nodes_1.ColumnNode(element.connection, column));
-        }
-        if (element instanceof nodes_1.StaticFolderNode && element.name === 'Server Objects') {
-            return [
-                new nodes_1.StaticFolderNode(element.connection, 'groups', vscode.TreeItemCollapsibleState.None),
-                new nodes_1.StaticFolderNode(element.connection, 'users', vscode.TreeItemCollapsibleState.None)
-            ];
         }
         return [];
     }

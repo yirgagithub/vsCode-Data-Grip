@@ -12,7 +12,7 @@ import { QueryMemorySearch } from '../src/services/queryMemorySearch';
 import { SchemaContextService } from '../src/services/schemaContextService';
 import { connectionMetadataFingerprint, parseStoredSchemaCacheEntry, SCHEMA_METADATA_CACHE_VERSION, serializeSchemaCacheEntry } from '../src/services/schemaMetadataCacheStore';
 import { SqlDiagnosticsService } from '../src/services/sqlDiagnosticsService';
-import { relationCompletionCandidates, relationCompletionContext, selectListColumnCompletionContext } from '../src/services/sqlMetadataCompletion';
+import { relationCompletionCandidates, relationCompletionContext, selectListColumnCompletionContext, unqualifiedColumnCompletionContext } from '../src/services/sqlMetadataCompletion';
 import { connectAndRefreshSqlMetadata } from '../src/services/sqlMetadataWarmup';
 import { SqlSafetyClassifier } from '../src/services/sqlSafetyClassifier';
 import { SqlSectionService } from '../src/services/sqlSectionService';
@@ -315,6 +315,38 @@ describe('ResultsPanelProvider', () => {
     expect(provider.getTab('tab-adjust')?.executionStatus).toBe('completed');
     expect(provider.getTab('tab-adjust')?.rowCount).toBe(42);
     expect(provider.getTab('tab-next')).toBeUndefined();
+  });
+
+  it('reruns a result tab without the client row limit when All rows is requested', async () => {
+    const local = connection({ id: 'local' });
+    const executor = {
+      execute: vi.fn(async (params) => resultTab({
+        id: 'tab-next',
+        connectionId: params.connectionId,
+        queryText: params.sql,
+        maxRows: params.maxRows,
+        rowCount: 750,
+        executionStatus: 'completed'
+      }))
+    };
+    const provider = new ResultsPanelProvider(
+      { extensionUri: {} } as never,
+      {
+        getTabs: () => [resultTab({ id: 'tab-adjust', connectionId: local.id, queryText: 'select * from public.adjust_offer', maxRows: 500 })],
+        saveTabs: vi.fn()
+      } as never,
+      executor as never
+    );
+
+    await (provider as never as { onMessage(message: unknown): Promise<void> }).onMessage({
+      type: 'rerunTab',
+      tabId: 'tab-adjust',
+      maxRows: null
+    });
+
+    expect(executor.execute).toHaveBeenCalledWith(expect.objectContaining({ maxRows: undefined }));
+    expect(provider.getTab('tab-adjust')?.maxRows).toBeUndefined();
+    expect(provider.getTab('tab-adjust')?.rowCount).toBe(750);
   });
 });
 
@@ -735,6 +767,45 @@ from adjust_kpi_raw__keeper;`) as never, undefined, local);
       'Table or view "missing_relation" does not exist in public.'
     );
   });
+
+  it('flags an unqualified missing column on the column token for single-table queries', async () => {
+    const local = connection({ id: 'local' });
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => false)
+      } as never,
+      {
+        getCachedForConnection: vi.fn(async () => schemaEntry({
+          connectionId: local.id,
+          tables: [{ schema: 'public', name: 'event_fact', type: 'table' }],
+          columns: {
+            'public.event_fact': [
+              { schema: 'public', table: 'event_fact', name: 'revenue', ordinal: 1, dataType: 'numeric', nullable: true },
+              { schema: 'public', table: 'event_fact', name: 'event_datetime', ordinal: 2, dataType: 'timestamp', nullable: true }
+            ]
+          }
+        })),
+        getCachedColumns: vi.fn(async () => [
+          { schema: 'public', table: 'event_fact', name: 'revenue', ordinal: 1, dataType: 'numeric', nullable: true },
+          { schema: 'public', table: 'event_fact', name: 'event_datetime', ordinal: 2, dataType: 'timestamp', nullable: true }
+        ]),
+        refreshDefaultSchemaInBackground: vi.fn(),
+        refreshSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+    const sql = `select sum(revenue) as revenue, sum(cost)
+from public.event_fact
+where event_datetime::date between '2026-05-01' and '2026-05-31'`;
+
+    const diagnostics = await service.getDiagnostics(sqlDocument(sql) as never, undefined, local);
+    const missingColumn = diagnostics.find((diagnostic) => diagnostic.message === 'Column "cost" does not exist on public.event_fact.');
+
+    expect(missingColumn).toBeDefined();
+    expect(missingColumn?.range).toMatchObject(textRange(0, 36, 0, 40));
+    expect(diagnostics.map((diagnostic) => diagnostic.message)).not.toContain('Column "date" does not exist on public.event_fact.');
+  });
 });
 
 describe('SQL metadata warmup', () => {
@@ -787,6 +858,12 @@ from public.adjust_offer`;
   it('does not treat relation clauses as select-list column completion', () => {
     expect(selectListColumnCompletionContext('select network_offer from public.')).toBe(false);
     expect(selectListColumnCompletionContext('select network_offer from public.adjust_offer where network_')).toBe(false);
+  });
+
+  it('recognizes unqualified column completion in filter and ordering clauses', () => {
+    expect(unqualifiedColumnCompletionContext('select network_offer from public.adjust_offer where event_')).toBe(true);
+    expect(unqualifiedColumnCompletionContext('select network_offer from public.adjust_offer order by event_')).toBe(true);
+    expect(unqualifiedColumnCompletionContext('select network_offer from public.adjust_offer join public.')).toBe(false);
   });
 
   it('uses the nearest select before the cursor for select-list column completion', () => {

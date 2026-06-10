@@ -35,6 +35,38 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SqlDiagnosticsService = void 0;
 const vscode = __importStar(require("vscode"));
+const SQL_COLUMN_CONTEXT_KEYWORDS = new Set([
+    'all',
+    'and',
+    'as',
+    'asc',
+    'between',
+    'by',
+    'case',
+    'cast',
+    'date',
+    'desc',
+    'distinct',
+    'else',
+    'end',
+    'false',
+    'from',
+    'group',
+    'having',
+    'in',
+    'is',
+    'like',
+    'limit',
+    'not',
+    'null',
+    'or',
+    'order',
+    'select',
+    'then',
+    'true',
+    'when',
+    'where'
+]);
 class SqlDiagnosticsService {
     connectionManager;
     schemaContext;
@@ -122,6 +154,60 @@ class SqlDiagnosticsService {
                 diagnostics.push(new vscode.Diagnostic(new vscode.Range(document.positionAt(start), document.positionAt(start + column.length)), `Column "${column}" does not exist on ${alias.schema ? `${alias.schema}.` : ''}${alias.table}.`, vscode.DiagnosticSeverity.Error));
             }
         }
+        diagnostics.push(...await this.getUnqualifiedColumnDiagnostics(document, connection, section, cteNames, scriptRelations));
+        return diagnostics;
+    }
+    async getUnqualifiedColumnDiagnostics(document, connection, section, cteNames, scriptRelations) {
+        const defaultSchema = connection.defaultSchema ?? 'public';
+        const relationKeys = new Map();
+        for (const alias of section.aliases) {
+            if (cteNames.has(alias.table.toLowerCase()) || this.isScriptRelation(alias, scriptRelations)) {
+                continue;
+            }
+            const schema = alias.schema ?? defaultSchema;
+            relationKeys.set(this.relationKey(schema, alias.table), { schema, table: alias.table });
+        }
+        const [relation] = [...relationKeys.values()];
+        if (!relation || relationKeys.size !== 1) {
+            return [];
+        }
+        const columns = await this.schemaContext.getCachedColumns(connection, relation.schema, relation.table);
+        if (!columns) {
+            if (this.connectionManager.isConnected(connection.id)) {
+                this.schemaContext.refreshSchemaInBackground(connection, relation.schema);
+            }
+            return [];
+        }
+        const columnNames = new Set(columns.map((column) => column.name.toLowerCase()));
+        const ignored = this.unqualifiedColumnIgnoreSet(section, columns, defaultSchema);
+        const diagnostics = [];
+        const seen = new Set();
+        for (const [spanStart, spanEnd] of this.columnExpressionSpans(section.sql)) {
+            const text = section.sql.slice(spanStart, spanEnd);
+            const regex = /\b[A-Za-z_][A-Za-z0-9_]*\b/g;
+            let match;
+            while ((match = regex.exec(text)) !== null) {
+                const token = match[0];
+                const tokenStart = spanStart + match.index;
+                const lower = token.toLowerCase();
+                if (columnNames.has(lower)
+                    || ignored.has(lower)
+                    || this.isInsideSingleQuotedLiteral(section.sql, tokenStart)
+                    || this.isInLineComment(section.sql, tokenStart)
+                    || this.isQualifiedIdentifierPart(section.sql, tokenStart, token.length)
+                    || this.isTypeCastName(section.sql, tokenStart)
+                    || this.isFunctionName(section.sql, tokenStart + token.length)
+                    || this.isAliasDeclaration(section.sql, tokenStart)) {
+                    continue;
+                }
+                const key = `${lower}:${tokenStart}`;
+                if (seen.has(key)) {
+                    continue;
+                }
+                seen.add(key);
+                diagnostics.push(new vscode.Diagnostic(new vscode.Range(document.positionAt(section.start + tokenStart), document.positionAt(section.start + tokenStart + token.length)), `Column "${token}" does not exist on ${relation.schema}.${relation.table}.`, vscode.DiagnosticSeverity.Error));
+            }
+        }
         return diagnostics;
     }
     async getPlannerDiagnostic(document, connection, section, scriptRelations) {
@@ -173,14 +259,47 @@ class SqlDiagnosticsService {
         return parts.length > 1 ? [parts[0], parts[1]] : [undefined, parts[0]];
     }
     errorRange(document, section, error) {
+        const messageRange = this.errorIdentifierRange(document, section, error);
+        if (messageRange) {
+            return messageRange;
+        }
         const offset = Number(error.position);
         if (Number.isFinite(offset) && offset > 0) {
             const explainPrefixLength = 'explain '.length;
             const relative = Math.max(0, offset - 1 - explainPrefixLength);
             const start = Math.min(section.end, section.start + relative);
-            return new vscode.Range(document.positionAt(start), document.positionAt(Math.min(section.end, start + 1)));
+            return this.expandIdentifierRange(document, section, start);
         }
         return section.range;
+    }
+    errorIdentifierRange(document, section, error) {
+        const column = error.message.match(/\bcolumn\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\s+does not exist/i)?.[1];
+        if (!column) {
+            return undefined;
+        }
+        const regex = new RegExp(`\\b${escapeRegExp(column)}\\b`, 'i');
+        const match = regex.exec(section.sql);
+        if (!match) {
+            return undefined;
+        }
+        const start = section.start + match.index;
+        return new vscode.Range(document.positionAt(start), document.positionAt(start + column.length));
+    }
+    expandIdentifierRange(document, section, absoluteStart) {
+        const sql = section.sql;
+        const relative = Math.max(0, Math.min(sql.length, absoluteStart - section.start));
+        let start = relative;
+        let end = relative;
+        while (start > 0 && /[A-Za-z0-9_]/.test(sql[start - 1])) {
+            start -= 1;
+        }
+        while (end < sql.length && /[A-Za-z0-9_]/.test(sql[end])) {
+            end += 1;
+        }
+        if (start === end) {
+            end = Math.min(sql.length, end + 1);
+        }
+        return new vscode.Range(document.positionAt(section.start + start), document.positionAt(section.start + end));
     }
     errorMessage(error) {
         return [error.message, error.detail, error.hint].filter(Boolean).join('\n');
@@ -206,6 +325,87 @@ class SqlDiagnosticsService {
         }
         return names;
     }
+    unqualifiedColumnIgnoreSet(section, columns, defaultSchema) {
+        const ignored = new Set(SQL_COLUMN_CONTEXT_KEYWORDS);
+        for (const alias of section.aliases) {
+            ignored.add(alias.alias.toLowerCase());
+            ignored.add(alias.table.toLowerCase());
+            ignored.add((alias.schema ?? defaultSchema).toLowerCase());
+        }
+        for (const column of columns) {
+            ignored.add(column.dataType.toLowerCase());
+        }
+        for (const alias of this.outputAliases(section.sql)) {
+            ignored.add(alias.toLowerCase());
+        }
+        return ignored;
+    }
+    columnExpressionSpans(sql) {
+        const spans = [];
+        const select = /\bselect\b/i.exec(sql);
+        const from = /\bfrom\b/i.exec(sql);
+        if (select && from && from.index > select.index) {
+            spans.push([select.index + select[0].length, from.index]);
+        }
+        for (const regex of [/\bwhere\b/gi, /\bhaving\b/gi, /\bgroup\s+by\b/gi, /\border\s+by\b/gi]) {
+            for (const match of sql.matchAll(regex)) {
+                if (match.index === undefined) {
+                    continue;
+                }
+                const start = match.index + match[0].length;
+                spans.push([start, this.nextClauseIndex(sql, start)]);
+            }
+        }
+        return spans;
+    }
+    nextClauseIndex(sql, start) {
+        const match = /\b(?:where|group\s+by|order\s+by|having|limit|union|intersect|except)\b/i.exec(sql.slice(start));
+        return match?.index === undefined ? sql.length : start + match.index;
+    }
+    isQualifiedIdentifierPart(sql, start, length) {
+        return sql.slice(0, start).trimEnd().endsWith('.') || sql.slice(start + length).trimStart().startsWith('.');
+    }
+    isTypeCastName(sql, start) {
+        return sql.slice(0, start).trimEnd().endsWith('::');
+    }
+    isFunctionName(sql, end) {
+        return sql.slice(end).trimStart().startsWith('(');
+    }
+    isAliasDeclaration(sql, start) {
+        return /\bas\s+$/i.test(sql.slice(0, start));
+    }
+    outputAliases(sql) {
+        const select = /\bselect\b/i.exec(sql);
+        const from = /\bfrom\b/i.exec(sql);
+        if (!select || !from || from.index <= select.index) {
+            return [];
+        }
+        return [...sql.slice(select.index + select[0].length, from.index).matchAll(/\bas\s+(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/gi)]
+            .map((match) => match[1] ?? match[2])
+            .filter((alias) => Boolean(alias));
+    }
+    isInsideSingleQuotedLiteral(sql, start) {
+        let inside = false;
+        for (let index = 0; index < start; index += 1) {
+            if (sql[index] !== '\'') {
+                continue;
+            }
+            if (sql[index + 1] === '\'') {
+                index += 1;
+                continue;
+            }
+            inside = !inside;
+        }
+        return inside;
+    }
+    isInLineComment(sql, start) {
+        const lineStart = sql.lastIndexOf('\n', start - 1) + 1;
+        const commentStart = sql.indexOf('--', lineStart);
+        return commentStart >= 0 && commentStart < start;
+    }
 }
 exports.SqlDiagnosticsService = SqlDiagnosticsService;
+function escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 //# sourceMappingURL=sqlDiagnosticsService.js.map

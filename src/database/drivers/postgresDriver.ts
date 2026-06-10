@@ -283,7 +283,7 @@ export class PostgresDriver implements DatabaseDriver {
     const lines = columns.map((column) => {
       const nullable = column.nullable ? '' : ' not null';
       const defaultValue = column.defaultValue ? ` default ${column.defaultValue}` : '';
-      return `  "${column.name}" ${column.dataType}${defaultValue}${nullable}`;
+      return `  ${quoteIdentifier(column.name)} ${column.dataType}${defaultValue}${nullable}`;
     });
     return `create table ${qualifiedName(schema, table)} (\n${lines.join(',\n')}\n);`;
   }
