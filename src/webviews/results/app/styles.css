@@ -88,9 +88,13 @@ input:disabled {
   height: 100vh;
   min-width: 0;
   display: grid;
-  grid-template-rows: var(--tab-height) auto auto minmax(0, 1fr) auto;
+  grid-template-rows: var(--tab-height) auto minmax(0, 1fr) auto;
   overflow: hidden;
   background: var(--bg-main);
+}
+
+.app.with-resultset-tabs {
+  grid-template-rows: var(--tab-height) auto auto minmax(0, 1fr) auto;
 }
 
 .empty,
@@ -814,19 +818,18 @@ input:disabled {
 }
 
 .filter-popover {
-  position: absolute;
-  top: calc(var(--row-height) + 0.2rem);
-  right: var(--space-xs);
-  z-index: 8;
-  display: grid;
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-sm);
-  width: min(28rem, 82vw);
-  max-height: min(34rem, 72vh);
   padding: var(--space-md);
   border: 1px solid var(--accent);
   background: var(--bg-elevated);
   border-radius: var(--radius-sm);
   box-shadow: 0 0.6rem 1.6rem color-mix(in srgb, black 30%, transparent);
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .filter-title {
@@ -862,10 +865,24 @@ input:disabled {
 }
 
 .filter-option-list {
+  flex: 1 1 auto;
   min-height: 0;
-  max-height: min(22rem, 48vh);
+  max-height: none;
   overflow: auto;
+  overscroll-behavior: contain;
   scrollbar-width: thin;
+}
+
+.filter-empty,
+.filter-list-note {
+  color: var(--text-muted);
+  padding: var(--space-sm) 0;
+}
+
+.filter-list-note {
+  padding: 0;
+  text-align: right;
+  font-size: 0.9em;
 }
 
 .filter-option {
@@ -975,14 +992,14 @@ input:disabled {
 .selection-summary {
   position: absolute;
   right: var(--space-sm);
-  bottom: var(--space-sm);
+  bottom: calc(var(--space-sm) + 3.1rem);
   z-index: 6;
   max-width: min(48rem, calc(50vw - 2rem));
-  min-height: clamp(2.15rem, 1.9rem + 0.45vw, 2.65rem);
+  min-height: clamp(2.25rem, 2rem + 0.45vw, 2.8rem);
   display: inline-flex;
   align-items: center;
   gap: var(--space-sm);
-  padding: 0 var(--space-sm);
+  padding: 0 calc(var(--space-sm) + 0.1rem);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-header);
@@ -992,7 +1009,8 @@ input:disabled {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 0.98rem;
+  font-size: 1.03rem;
+  font-weight: 500;
 }
 
 .selection-summary span {
@@ -1032,11 +1050,13 @@ input:disabled {
 }
 
 .pager-group select {
-  min-width: 5.4rem;
+  min-width: 7.4rem;
   height: var(--toolbar-button-size);
-  border: 0;
-  background: transparent;
-  color: var(--text-main);
+  padding: 0 1.5rem 0 var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-dropdown-background);
+  color: var(--vscode-dropdown-foreground);
 }
 
 .pager-button {
@@ -1107,6 +1127,10 @@ input:disabled {
 
 @media (max-width: 520px) {
   .app {
+    grid-template-rows: var(--tab-height) auto minmax(0, 1fr) auto;
+  }
+
+  .app.with-resultset-tabs {
     grid-template-rows: var(--tab-height) auto auto minmax(0, 1fr) auto;
   }
 

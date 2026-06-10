@@ -3,10 +3,21 @@ import { AiSqlRequest, QueryMemorySummary, QueryMemorySummaryRequest } from '../
 import { parseQueryMemorySummaryText } from './queryMemorySummaryParser';
 
 export class VsCodeLanguageModelSqlAdapter {
+  async isAvailable(): Promise<boolean> {
+    const lm = this.languageModelNamespace();
+    if (!lm?.selectChatModels) {
+      return false;
+    }
+    try {
+      const models = await lm.selectChatModels({ vendor: 'copilot' });
+      return models.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   async send(request: AiSqlRequest): Promise<string> {
-    const lm = (vscode as unknown as { lm?: unknown }).lm as {
-      selectChatModels?: (selector?: Record<string, unknown>) => Promise<unknown[]>;
-    } | undefined;
+    const lm = this.languageModelNamespace();
     if (!lm?.selectChatModels) {
       throw new Error('VS Code Language Model API is not available.');
     }
@@ -57,9 +68,7 @@ export class VsCodeLanguageModelSqlAdapter {
   }
 
   private async sendRaw(prompt: string): Promise<string> {
-    const lm = (vscode as unknown as { lm?: unknown }).lm as {
-      selectChatModels?: (selector?: Record<string, unknown>) => Promise<unknown[]>;
-    } | undefined;
+    const lm = this.languageModelNamespace();
     if (!lm?.selectChatModels) {
       throw new Error('VS Code Language Model API is not available.');
     }
@@ -97,6 +106,12 @@ export class VsCodeLanguageModelSqlAdapter {
 
   private parseSummary(text: string): QueryMemorySummary {
     return parseQueryMemorySummaryText(text);
+  }
+
+  private languageModelNamespace(): { selectChatModels?: (selector?: Record<string, unknown>) => Promise<unknown[]> } | undefined {
+    return (vscode as unknown as { lm?: unknown }).lm as {
+      selectChatModels?: (selector?: Record<string, unknown>) => Promise<unknown[]>;
+    } | undefined;
   }
 
   private extractSql(text: string): string {

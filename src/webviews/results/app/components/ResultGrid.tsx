@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { QueryField, QueryResultTab, ResultSet } from '../../../../types';
 import { formatValue } from '../format';
@@ -10,6 +10,8 @@ const BUFFER = 12;
 const DEFAULT_COLUMN_WIDTH = 220;
 const MIN_COLUMN_WIDTH = 112;
 const MAX_FILTER_OPTIONS = 250;
+const FILTER_POPOVER_WIDTH = 448;
+const VIEWPORT_PADDING = 8;
 const NUMERIC_TYPE_IDS = new Set([20, 21, 23, 700, 701, 790, 1700]);
 const NUMERIC_TYPE_NAMES = [
   'bigint',
@@ -72,41 +74,50 @@ interface GridContextMenu {
   value?: unknown;
 }
 
-export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?: ResultSet }) {
+interface OpenColumnFilter {
+  column: string;
+  style: CSSProperties;
+}
+
+export function ResultGrid({
+  tab,
+  resultSet,
+  columnFiltersVisible
+}: {
+  tab: QueryResultTab;
+  resultSet?: ResultSet;
+  columnFiltersVisible: boolean;
+}) {
   const [scrollTop, setScrollTop] = useState(0);
   const [sort, setSort] = useState<{ column: string; direction: 'asc' | 'desc' } | undefined>(tab.sort[0]);
-  const [whereFilter, setWhereFilter] = useState('');
-  const [orderBy, setOrderBy] = useState(tab.sort[0] ? `${tab.sort[0].column} ${tab.sort[0].direction}` : '');
-  const [columnFiltersVisible, setColumnFiltersVisible] = useState(true);
   const [filters, setFilters] = useState<ColumnFilter[]>([]);
-  const [openFilterColumn, setOpenFilterColumn] = useState<string>();
+  const [openFilter, setOpenFilter] = useState<OpenColumnFilter>();
   const [selection, setSelection] = useState<Selection>();
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [pageOffset, setPageOffset] = useState(0);
+  const [pageSize, setPageSize] = useState<number | 'all'>(100);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const [contextMenu, setContextMenu] = useState<GridContextMenu>();
   const rows = resultSet?.rows ?? [];
   const fields = resultSet?.fields ?? [];
-  const pageLimit = tab.maxRows && tab.maxRows > 0 ? tab.maxRows : Math.max(rows.length, 1);
   const gridColumnStyle = {
     gridTemplateColumns: `var(--row-number-width) ${fields.map((field) => `${columnWidths[field.name] ?? DEFAULT_COLUMN_WIDTH}px`).join(' ')}`
   } as CSSProperties;
 
   const visibleRows = useMemo(() => {
-    let filtered = whereFilter
-      ? rows.filter((row) => Object.values(row).some((value) => formatValue(value).toLowerCase().includes(whereFilter.toLowerCase())))
-      : rows;
-    filtered = filtered.filter((row) => filters.every((filter) => matchesFilter(row[filter.column], filter)));
-    const order = parseOrderBy(orderBy, fields.map((field) => field.name)) ?? sort;
-    if (!order) {
+    const filtered = rows.filter((row) => filters.every((filter) => matchesFilter(row[filter.column], filter)));
+    if (!sort) {
       return filtered;
     }
     return [...filtered].sort((a, b) => {
-      const av = formatValue(a[order.column]);
-      const bv = formatValue(b[order.column]);
-      return order.direction === 'asc' ? av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' }) : bv.localeCompare(av, undefined, { numeric: true, sensitivity: 'base' });
+      const av = formatValue(a[sort.column]);
+      const bv = formatValue(b[sort.column]);
+      return sort.direction === 'asc'
+        ? av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' })
+        : bv.localeCompare(av, undefined, { numeric: true, sensitivity: 'base' });
     });
-  }, [rows, sort, whereFilter, filters, orderBy, fields]);
+  }, [rows, filters, sort]);
+  const pageLimit = pageSize === 'all' ? Math.max(visibleRows.length, 1) : pageSize;
 
   const selectedColumnStats = useMemo(() => {
     if (selection?.type !== 'column') {
@@ -127,6 +138,12 @@ export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?
   const pageEnd = pageStart + pageRows.length;
   const hasNextPage = pageEnd < visibleRows.length;
   const visibleColumnNames = fields.map((field) => field.name);
+
+  useEffect(() => {
+    if (!columnFiltersVisible) {
+      setOpenFilter(undefined);
+    }
+  }, [columnFiltersVisible]);
 
   if (!resultSet) {
     return <section className="grid-empty">No result set.</section>;
@@ -220,33 +237,48 @@ export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   };
+  const toggleColumnFilter = (event: ReactMouseEvent<HTMLButtonElement>, column: string) => {
+    event.stopPropagation();
+    if (openFilter?.column === column) {
+      setOpenFilter(undefined);
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const width = Math.min(FILTER_POPOVER_WIDTH, window.innerWidth * 0.82);
+    const below = window.innerHeight - rect.bottom - VIEWPORT_PADDING;
+    const above = rect.top - VIEWPORT_PADDING;
+    const openBelow = below >= 240 || below >= above;
+    const availableHeight = Math.max(96, openBelow ? below - 4 : above - 4);
+    const maxHeight = Math.min(544, availableHeight);
+    const left = Math.max(VIEWPORT_PADDING, Math.min(rect.right - width, window.innerWidth - width - VIEWPORT_PADDING));
+    const top = openBelow
+      ? rect.bottom + 4
+      : Math.max(VIEWPORT_PADDING, rect.top - maxHeight - 4);
+    setOpenFilter({
+      column,
+      style: {
+        left,
+        top,
+        width,
+        maxHeight
+      }
+    });
+  };
+  const changePageSize = (value: string) => {
+    if (value === 'all') {
+      setPageSize('all');
+      setPageOffset(0);
+      if ((tab.maxRows ?? resultSet?.maxRows ?? 0) > 0) {
+        vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: null });
+      }
+      return;
+    }
+    setPageSize(Number(value));
+    setPageOffset(0);
+  };
 
   return (
     <section className="grid-shell" onKeyDown={onGridKeyDown}>
-      <div className="criteria-row">
-        <label className="criteria">
-          <span className="criteria-icon"><FilterIcon /></span>
-          <strong>WHERE</strong>
-          <input
-            value={whereFilter}
-            onChange={(event) => {
-              setWhereFilter(event.target.value);
-              setPageOffset(0);
-            }}
-          />
-        </label>
-        <label className="criteria">
-          <span className="criteria-icon order">≡</span>
-          <strong>ORDER BY</strong>
-          <input
-            value={orderBy}
-            onChange={(event) => {
-              setOrderBy(event.target.value);
-              setPageOffset(0);
-            }}
-          />
-        </label>
-      </div>
       <div className={`grid-layout ${inspectorOpen ? 'with-inspector' : ''}`}>
         <div
           className="grid result-grid"
@@ -288,7 +320,6 @@ export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?
                       event.stopPropagation();
                       const nextSort = sort?.column === field.name && sort.direction === 'asc' ? { column: field.name, direction: 'desc' as const } : { column: field.name, direction: 'asc' as const };
                       setSort(nextSort);
-                      setOrderBy(`${nextSort.column} ${nextSort.direction}`);
                       setSelection({ type: 'column', column: field.name });
                       setPageOffset(0);
                     }}
@@ -296,28 +327,11 @@ export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?
                     {sort?.column === field.name ? (sort.direction === 'asc' ? '▲' : '▼') : '↕'}
                   </button>
                   {columnFiltersVisible && (
-                    <button className={`filter-button ${activeFilter ? 'active' : ''}`} title="Filter column" aria-label={`Filter ${field.name}`} onClick={() => {
-                      setOpenFilterColumn(openFilterColumn === field.name ? undefined : field.name);
-                    }}>
+                    <button className={`filter-button ${activeFilter ? 'active' : ''}`} title="Filter column" aria-label={`Filter ${field.name}`} onClick={(event) => toggleColumnFilter(event, field.name)}>
                       <FilterIcon />
                     </button>
                   )}
                   <span className="resize-handle" title="Resize column" onMouseDown={(event) => startColumnResize(event, field.name)} />
-                  {columnFiltersVisible && openFilterColumn === field.name && (
-                    <ColumnFilterPopover
-                      column={field.name}
-                      rows={rows}
-                      filter={activeFilter}
-                      onApply={(filter) => {
-                        setFilters((current) => [...current.filter((item) => item.column !== field.name), filter]);
-                        setPageOffset(0);
-                      }}
-                      onClear={() => {
-                        setFilters((current) => current.filter((item) => item.column !== field.name));
-                        setPageOffset(0);
-                      }}
-                    />
-                  )}
                 </div>
               );
             })}
@@ -412,6 +426,22 @@ export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?
           </button>
         </div>
       )}
+      {columnFiltersVisible && openFilter && (
+        <ColumnFilterPopover
+          column={openFilter.column}
+          rows={rows}
+          filter={filters.find((filter) => filter.column === openFilter.column)}
+          style={openFilter.style}
+          onApply={(filter) => {
+            setFilters((current) => [...current.filter((item) => item.column !== openFilter.column), filter]);
+            setPageOffset(0);
+          }}
+          onClear={() => {
+            setFilters((current) => current.filter((item) => item.column !== openFilter.column));
+            setPageOffset(0);
+          }}
+        />
+      )}
       {selection?.type === 'column' && (
         <div className="selection-summary" title={selectedColumnStats ? `${selection.column}: sum ${formatNumber(selectedColumnStats.sum)}, average ${formatNumber(selectedColumnStats.average)}` : `${selection.column}: ${visibleRows.length.toLocaleString()} rows selected`}>
           <span className="summary-column">{selection.column}</span>
@@ -430,14 +460,19 @@ export function ResultGrid({ tab, resultSet }: { tab: QueryResultTab; resultSet?
         <span className="pager-group">
           <button className="pager-button" disabled={pageStart === 0} onClick={() => setPageOffset(0)}>|‹</button>
           <button className="pager-button" disabled={pageStart === 0} onClick={() => setPageOffset(Math.max(0, pageStart - pageLimit))}>‹</button>
-          <select value={String(pageLimit)} onChange={(event) => setPageOffset(0)}>
-            <option value={String(pageLimit)}>{pageRows.length ? `${(pageStart + 1).toLocaleString()}-${pageEnd.toLocaleString()}` : '0'}</option>
+          <select
+            value={pageSize === 'all' ? 'all' : String(pageSize)}
+            onChange={(event) => changePageSize(event.target.value)}
+            aria-label="Rows per page"
+            title="Rows per page"
+          >
+            {[20, 50, 100, 250, 500].map((count) => (
+              <option key={count} value={String(count)}>{`${count} rows`}</option>
+            ))}
+            <option value="all">All rows</option>
           </select>
           <span>of {hasNextPage ? `${(pageEnd + 1).toLocaleString()}+` : pageEnd.toLocaleString()}</span>
           <button className="pager-button" disabled={!hasNextPage} onClick={() => setPageOffset(pageStart + pageLimit)}>›</button>
-          <button className="pager-button" disabled>›|</button>
-          <span className="pager-separator" />
-          <button className="pager-button" title="Show or hide column filters" aria-label="Show or hide column filters" onClick={() => setColumnFiltersVisible((visible) => !visible)}><FilterIcon /></button>
         </span>
       </div>
     </section>
@@ -516,12 +551,14 @@ function ColumnFilterPopover({
   column,
   rows,
   filter,
+  style,
   onApply,
   onClear
 }: {
   column: string;
   rows: Record<string, unknown>[];
   filter?: ColumnFilter;
+  style: CSSProperties;
   onApply: (filter: ColumnFilter) => void;
   onClear: () => void;
 }) {
@@ -530,11 +567,11 @@ function ColumnFilterPopover({
   const initialSelection = filter?.operator === 'values' && filter.values ? filter.values : allKeys;
   const [search, setSearch] = useState('');
   const [selectedValues, setSelectedValues] = useState(() => new Set(initialSelection));
-  const visibleOptions = options
-    .filter((option) => option.label.toLowerCase().includes(search.trim().toLowerCase()))
-    .slice(0, MAX_FILTER_OPTIONS);
-  const visibleKeys = visibleOptions.map((option) => option.key);
-  const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selectedValues.has(key));
+  const normalizedSearch = search.trim().toLowerCase();
+  const matchingOptions = options.filter((option) => option.label.toLowerCase().includes(normalizedSearch));
+  const visibleOptions = matchingOptions.slice(0, MAX_FILTER_OPTIONS);
+  const matchingKeys = matchingOptions.map((option) => option.key);
+  const allMatchingSelected = matchingKeys.length > 0 && matchingKeys.every((key) => selectedValues.has(key));
   const activeCount = selectedValues.size;
 
   const commitSelection = (next: Set<string>) => {
@@ -547,10 +584,10 @@ function ColumnFilterPopover({
 
   const toggleVisible = () => {
     const next = new Set(selectedValues);
-    if (allVisibleSelected) {
-      visibleKeys.forEach((key) => next.delete(key));
+    if (allMatchingSelected) {
+      matchingKeys.forEach((key) => next.delete(key));
     } else {
-      visibleKeys.forEach((key) => next.add(key));
+      matchingKeys.forEach((key) => next.add(key));
     }
     setSelectedValues(next);
     commitSelection(next);
@@ -568,26 +605,29 @@ function ColumnFilterPopover({
   };
 
   return (
-    <div className="filter-popover value-filter-popover">
+    <div className="filter-popover value-filter-popover" style={style} onClick={(event) => event.stopPropagation()}>
       <div className="filter-title">Local Filter For '{column}'</div>
       <label className="filter-search">
         <span>⌕</span>
         <input value={search} onChange={(event) => setSearch(event.target.value)} autoFocus />
       </label>
       <label className="filter-option filter-option-heading">
-        <input type="checkbox" checked={allVisibleSelected} onChange={toggleVisible} />
+        <input type="checkbox" checked={allMatchingSelected} onChange={toggleVisible} disabled={matchingKeys.length === 0} />
         <span>Value</span>
         <span className="filter-count">Count</span>
       </label>
       <div className="filter-option-list">
-        {visibleOptions.map((option) => (
+        {visibleOptions.length > 0 ? visibleOptions.map((option) => (
           <label className="filter-option" key={option.key}>
             <input type="checkbox" checked={selectedValues.has(option.key)} onChange={() => toggleValue(option.key)} />
             <span title={option.label}>{option.label}</span>
             <span className="filter-count">{option.count.toLocaleString()}</span>
           </label>
-        ))}
+        )) : <div className="filter-empty">No values in fetched rows.</div>}
       </div>
+      {matchingOptions.length > visibleOptions.length && (
+        <div className="filter-list-note">Showing {visibleOptions.length.toLocaleString()} of {matchingOptions.length.toLocaleString()} values</div>
+      )}
       <div className="filter-live-status">{activeCount.toLocaleString()} selected</div>
     </div>
   );

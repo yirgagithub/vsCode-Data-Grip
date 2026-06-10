@@ -38,3 +38,26 @@ export function selectListColumnCompletionContext(statementPrefix: string): bool
   const afterSelect = statementPrefix.slice(lastSelect.index + lastSelect[0].length);
   return !/\b(?:from|where|join|left|right|inner|outer|full|cross|on|using|group|order|having|limit|union|intersect|except)\b/i.test(afterSelect);
 }
+
+export function unqualifiedColumnCompletionContext(statementPrefix: string): boolean {
+  if (/\.\s*(?:"[^"]*|[A-Za-z_][A-Za-z0-9_]*)?$/.test(statementPrefix) || relationCompletionContext(statementPrefix)) {
+    return false;
+  }
+  if (selectListColumnCompletionContext(statementPrefix)) {
+    return true;
+  }
+
+  const relationIndex = lastKeywordIndex(statementPrefix, /\b(?:from|join|update|into)\b/gi);
+  const columnIndex = lastKeywordIndex(statementPrefix, /\bwhere\b|\bhaving\b|\bon\b|\band\b|\bor\b|\bgroup\s+by\b|\border\s+by\b/gi);
+  return columnIndex >= 0 && columnIndex > relationIndex;
+}
+
+function lastKeywordIndex(value: string, regex: RegExp): number {
+  let index = -1;
+  for (const match of value.matchAll(regex)) {
+    if (match.index !== undefined) {
+      index = match.index;
+    }
+  }
+  return index;
+}

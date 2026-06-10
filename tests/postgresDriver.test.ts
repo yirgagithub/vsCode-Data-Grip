@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ConnectionConfigWithPassword } from '../src/types';
+import { ColumnInfo, ConnectionConfigWithPassword } from '../src/types';
 
 const pgMock = vi.hoisted(() => ({
   failSsl: false,
@@ -63,6 +63,24 @@ describe('PostgresDriver SSL mode', () => {
     expect(pgMock.pools).toHaveLength(1);
     expect(pgMock.pools[0].config.ssl).toEqual({ rejectUnauthorized: false });
     expect(pgMock.pools[0].end).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PostgresDriver DDL generation', () => {
+  it('quotes column identifiers with the shared identifier rules', async () => {
+    class DdlDriver extends PostgresDriver {
+      override async getColumns(): Promise<ColumnInfo[]> {
+        return [
+          { schema: 'public', table: 'users', name: 'select', ordinal: 1, dataType: 'text', nullable: false },
+          { schema: 'public', table: 'users', name: 'has"quote', ordinal: 2, dataType: 'integer', nullable: true }
+        ];
+      }
+    }
+
+    const ddl = await new DdlDriver().getTableDDL('local', 'public', 'users');
+
+    expect(ddl).toContain('"select" text not null');
+    expect(ddl).toContain('"has""quote" integer');
   });
 });
 
