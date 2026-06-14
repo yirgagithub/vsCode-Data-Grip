@@ -2,17 +2,25 @@ import { useState } from 'react';
 import { QueryResultTab, ResultSet } from '../../../../types';
 import { vscode } from '../vscode';
 import { rowsToCsv, rowsToTsv } from '../format';
-import { useResultsStore } from '../store';
+import { ResultViewMode, useResultsStore } from '../store';
 
 export function ResultToolbar({
   tab,
   resultSet,
+  viewMode,
+  canChart,
+  isPlanTab,
   columnFiltersVisible,
+  onSetViewMode,
   onToggleColumnFilters
 }: {
   tab: QueryResultTab;
   resultSet?: ResultSet;
+  viewMode: ResultViewMode;
+  canChart: boolean;
+  isPlanTab: boolean;
   columnFiltersVisible: boolean;
+  onSetViewMode: (mode: ResultViewMode) => void;
   onToggleColumnFilters: () => void;
 }) {
   const { pinTab } = useResultsStore();
@@ -30,17 +38,38 @@ export function ResultToolbar({
   return (
     <div className="toolbar result-toolbar" role="toolbar" aria-label="Result actions">
       <div className="toolbar-group">
-        <button className="tool icon-tool tone-green" title="Rerun query" aria-label="Rerun query" onClick={rerun} disabled={isRunning}>▶</button>
+        <button className="tool icon-tool tone-green" title={isPlanTab ? 'Plan tabs are rerun from the editor' : 'Rerun query'} aria-label="Rerun query" onClick={rerun} disabled={isRunning || isPlanTab}>▶</button>
         <button className={`tool icon-tool ${tab.pinned ? 'tone-orange active' : ''}`} title={tab.pinned ? 'Unpin tab' : 'Pin tab'} aria-label={tab.pinned ? 'Unpin tab' : 'Pin tab'} onClick={() => pinTab(tab.id, !tab.pinned)}>⌖</button>
       </div>
       <span className="separator" />
       <div className="toolbar-group">
+        <button
+          className={`tool icon-tool ${viewMode === 'grid' ? 'active' : ''}`}
+          title="Grid view"
+          aria-label="Grid view"
+          aria-pressed={viewMode === 'grid'}
+          onClick={() => onSetViewMode('grid')}
+          disabled={isRunning || isPlanTab}
+        >
+          ▦
+        </button>
+        <button
+          className={`tool icon-tool tone-purple ${viewMode === 'chart' ? 'active' : ''}`}
+          title="Chart view"
+          aria-label="Chart view"
+          aria-pressed={viewMode === 'chart'}
+          onClick={() => onSetViewMode('chart')}
+          disabled={isRunning || !canChart || isPlanTab}
+        >
+          ⌁
+        </button>
         <button
           className={`tool icon-tool ${columnFiltersVisible ? 'active' : ''}`}
           title="Show or hide column filters"
           aria-label="Show or hide column filters"
           aria-pressed={columnFiltersVisible}
           onClick={onToggleColumnFilters}
+          disabled={viewMode !== 'grid' || isPlanTab}
         >
           <FilterIcon />
         </button>

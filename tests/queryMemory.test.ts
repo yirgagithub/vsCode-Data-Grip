@@ -1,26 +1,34 @@
 import { describe, expect, it, vi } from 'vitest';
+import * as vscode from 'vscode';
 import { parseQueryMemorySummaryText } from '../src/ai/queryMemorySummaryParser';
 import { ConnectionManager } from '../src/database/connectionManager';
 import { QueryExecutor } from '../src/database/queryExecutor';
 import { splitSqlStatements } from '../src/database/sqlSplitter';
 import { PostgresDriver } from '../src/database/drivers/postgresDriver';
+import { VsCodeLanguageModelSqlAdapter } from '../src/ai/vsCodeLanguageModelSqlAdapter';
 import { resolveDocumentConnection } from '../src/services/documentConnectionResolver';
 import { connectionDefaultsForType } from '../src/services/connectionDefaults';
 import { executionOriginForDocument, isQueryConsoleHistoryItem, isQueryConsoleMemoryItem, queryConsoleDocumentUris } from '../src/services/queryConsoleHistory';
 import { extractQualifiedColumns, extractQueryTables, outputColumnNames } from '../src/services/queryMemoryMetadata';
 import { QueryMemorySearch } from '../src/services/queryMemorySearch';
+import { QueryMemoryService } from '../src/services/queryMemoryService';
+import { normalizeExplainJsonPlan } from '../src/services/queryPlanService';
 import { SchemaContextService } from '../src/services/schemaContextService';
 import { connectionMetadataFingerprint, parseStoredSchemaCacheEntry, SCHEMA_METADATA_CACHE_VERSION, serializeSchemaCacheEntry } from '../src/services/schemaMetadataCacheStore';
 import { SqlDiagnosticsService } from '../src/services/sqlDiagnosticsService';
 import { relationCompletionCandidates, relationCompletionContext, selectListColumnCompletionContext, unqualifiedColumnCompletionContext } from '../src/services/sqlMetadataCompletion';
 import { connectAndRefreshSqlMetadata } from '../src/services/sqlMetadataWarmup';
+import { SqlParameterPrompt } from '../src/services/sqlParameterPrompt';
+import { applySqlParameterValues, findSqlParameters, uniqueSqlParameterNames } from '../src/services/sqlParameters';
 import { SqlSafetyClassifier } from '../src/services/sqlSafetyClassifier';
 import { SqlSectionService } from '../src/services/sqlSectionService';
 import { shouldRunSelectionForStatement } from '../src/services/sqlSelectionExecution';
+import { buildTablePerformancePrepassFlags } from '../src/services/tablePerformanceAdvisorService';
 import { orphanedConnectionRecordIds } from '../src/persistence/orphanedConnectionRecords';
 import { partitionExistingConsoleRecords } from '../src/persistence/queryConsoleRecords';
 import { ResultsPanelProvider } from '../src/webviews/results/ResultsPanelProvider';
-import { ConnectionConfig, QueryConsoleRecord, QueryHistoryItem, QueryMemoryItem, QueryResultTab, SchemaCacheEntry } from '../src/types';
+import { ConnectionConfig, QueryConsoleRecord, QueryHistoryItem, QueryMemoryItem, QueryResultTab, SchemaCacheEntry, TablePerformanceAdviceRequest, TableStatsInfo, TableWorkloadSummary } from '../src/types';
+import { profileColumn } from '../src/services/dataProfileService';
 
 vi.mock('vscode', () => ({
   commands: {
@@ -30,6 +38,11 @@ vi.mock('vscode', () => ({
     getConfiguration: vi.fn(() => ({
       get: vi.fn((_key: string, fallback: unknown) => fallback)
     }))
+  },
+  window: {
+    showQuickPick: vi.fn(),
+    showInputBox: vi.fn(),
+    createWebviewPanel: vi.fn()
   },
   Diagnostic: class {
     constructor(public range: unknown, public message: string, public severity: number) {}
@@ -378,6 +391,205 @@ describe('QueryMemorySearch', () => {
   });
 });
 
+describe('table performance advisor data', () => {
+  it('aggregates target-table workload from query memory by duration-weighted runs', async () => {
+    const items = [
+      memory({
+        id: 'slow',
+        connectionId: 'local',
+        tables: ['public.event_fact'],
+        sql: `select e.user_id, count(*)
+from public.event_fact e
+join public.users u on e.user_id = u.id
+where e.created_at >= current_date - interval '30 days'
+group by e.user_id
+order by e.created_at desc`,
+        runCount: 3,
+        durationMs: 1200,
+        executedAt: 20
+      }),
+      memory({
+        id: 'other-connection',
+        connectionId: 'prod',
+        tables: ['public.event_fact'],
+        sql: 'select * from public.event_fact e where e.created_at > current_date',
+        runCount: 99,
+        durationMs: 9999
+      })
+    ];
+    const service = new QueryMemoryService(
+      { getAll: vi.fn(() => []) } as never,
+      { getAll: vi.fn(() => items), get: vi.fn(), upsert: vi.fn(), delete: vi.fn() } as never,
+      { getAll: vi.fn(() => []) } as never,
+      { getConnection: vi.fn() } as never
+    );
+
+    const workload = await service.getTableWorkload('local', 'public.event_fact');
+
+    expect(workload.queryCount).toBe(1);
+    expect(workload.totalRunCount).toBe(3);
+    expect(workload.totalDurationMs).toBe(1200);
+    expect(workload.topQueries[0]).toMatchObject({ score: 3600, runCount: 3, durationMs: 1200 });
+    expect(workload.columns).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'join', column: 'user_id', queryCount: 1, runCount: 3 }),
+      expect.objectContaining({ role: 'filter', column: 'created_at', queryCount: 1, runCount: 3 }),
+      expect.objectContaining({ role: 'groupBy', column: 'user_id', queryCount: 1, runCount: 3 }),
+      expect.objectContaining({ role: 'orderBy', column: 'created_at', queryCount: 1, runCount: 3 })
+    ]));
+  });
+
+  it('builds deterministic Redshift flags and ready-to-run maintenance DDL', () => {
+    const flags = buildTablePerformancePrepassFlags(redshiftStats({
+      skewRows: 5.4,
+      unsortedPct: 28,
+      statsOffPct: 17,
+      sortKey1: undefined
+    }), workloadSummary([
+      { role: 'join', column: 'user_id', runCount: 8, durationMs: 9000 },
+      { role: 'filter', column: 'created_at', runCount: 12, durationMs: 14000 }
+    ]));
+
+    expect(flags.map((flag) => flag.kind)).toEqual([
+      'redshift_distribution_skew',
+      'redshift_unsorted_rows',
+      'redshift_stale_stats',
+      'redshift_missing_sortkey_candidate'
+    ]);
+    expect(flags.map((flag) => flag.ddl)).toEqual(expect.arrayContaining([
+      'alter table "public"."event_fact" alter distkey "user_id";',
+      'vacuum sort only "public"."event_fact";',
+      'analyze "public"."event_fact";',
+      'alter table "public"."event_fact" alter sortkey ("created_at");'
+    ]));
+  });
+});
+
+describe('AI provider settings', () => {
+  it('routes table performance advice through a configured OpenAI-compatible endpoint', async () => {
+    const workspaceMock = vscode.workspace as unknown as { getConfiguration: ReturnType<typeof vi.fn> };
+    workspaceMock.getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback: unknown) => ({
+        'ai.provider': 'openAiCompatible',
+        'ai.openAiCompatible.baseUrl': 'http://localhost:11434/v1',
+        'ai.openAiCompatible.model': 'local-sql-advisor',
+        'ai.openAiCompatible.apiKey': 'test-key'
+      } as Record<string, unknown>)[key] ?? fallback)
+    });
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            findings: ['Statistics are stale.'],
+            recommendations: [{
+              kind: 'analyze',
+              impact: 'medium',
+              rationale: 'stats_off is above the threshold.',
+              ddl: 'analyze "public"."event_fact";'
+            }]
+          })
+        }
+      }]
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const adapter = new VsCodeLanguageModelSqlAdapter();
+      const advice = await adapter.adviseTablePerformance(tableAdviceRequest());
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:11434/v1/chat/completions');
+      const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+      expect(body.model).toBe('local-sql-advisor');
+      expect(body.messages[0].content).toContain('Deterministic flags JSON');
+      expect(advice.recommendations).toEqual([{
+        kind: 'analyze',
+        impact: 'medium',
+        rationale: 'stats_off is above the threshold.',
+        ddl: 'analyze "public"."event_fact";'
+      }]);
+    } finally {
+      vi.unstubAllGlobals();
+      workspaceMock.getConfiguration.mockReset();
+      workspaceMock.getConfiguration.mockImplementation(() => ({
+        get: vi.fn((_key: string, fallback: unknown) => fallback)
+      }));
+    }
+  });
+});
+
+describe('Visual Explain plans', () => {
+  it('normalizes EXPLAIN FORMAT JSON into a tree with deterministic hot-node annotations', () => {
+    const plan = normalizeExplainJsonPlan([{
+      Plan: {
+        'Node Type': 'Nested Loop',
+        'Startup Cost': 0.4,
+        'Total Cost': 98123.45,
+        'Plan Rows': 25000,
+        Plans: [
+          {
+            'Node Type': 'Seq Scan',
+            'Relation Name': 'event_fact',
+            'Total Cost': 88000,
+            'Plan Rows': 150000,
+            Filter: '(created_at >= current_date)'
+          },
+          {
+            'Node Type': 'Sort',
+            'Total Cost': 40000,
+            'Plan Rows': 25000,
+            'Sort Key': ['created_at']
+          }
+        ]
+      },
+      'Planning Time': 2.5,
+      'Execution Time': 120.75
+    }], false);
+
+    expect(plan.format).toBe('json');
+    expect(plan.root?.nodeType).toBe('Nested Loop');
+    expect(plan.root?.children.map((child) => child.nodeType)).toEqual(['Seq Scan', 'Sort']);
+    expect(plan.planningTimeMs).toBe(2.5);
+    expect(plan.executionTimeMs).toBe(120.75);
+    expect(plan.annotations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ nodeId: 'plan', severity: 'medium', message: expect.stringContaining('Nested loop') }),
+      expect.objectContaining({ nodeId: 'plan.1', severity: 'high', message: expect.stringContaining('Sequential scan') }),
+      expect.objectContaining({ nodeId: 'plan.2', severity: 'medium', message: expect.stringContaining('Sort') })
+    ]));
+  });
+});
+
+describe('data profiling', () => {
+  it('computes sampled column nulls, distinct values, top values, min/max, and histogram buckets', () => {
+    const profile = profileColumn('status', 'text', true, ['paid', 'paid', 'open', null, 'paid']);
+
+    expect(profile).toMatchObject({
+      name: 'status',
+      rowCount: 5,
+      nullCount: 1,
+      nullPct: 20,
+      distinctCount: 2,
+      min: 'open',
+      max: 'paid'
+    });
+    expect(profile.topValues).toEqual([
+      { value: 'paid', count: 3 },
+      { value: 'open', count: 1 }
+    ]);
+    expect(profile.histogram).toEqual([
+      { label: 'paid', count: 3 },
+      { label: 'open', count: 1 }
+    ]);
+  });
+
+  it('builds numeric histograms for numeric-looking values', () => {
+    const profile = profileColumn('amount', 'numeric', false, [1, 2, 2, 5, 10, null]);
+
+    expect(profile.nullPct).toBeCloseTo(16.7);
+    expect(profile.min).toBe('1');
+    expect(profile.max).toBe('10');
+    expect(profile.histogram.reduce((total, bucket) => total + bucket.count, 0)).toBe(5);
+  });
+});
+
 describe('parseQueryMemorySummaryText', () => {
   it('parses fenced JSON and filters invalid arrays', () => {
     const parsed = parseQueryMemorySummaryText('```json\n{"title":" Duplicate invoice check ","summary":" Finds duplicate invoices. ","tables":["invoices",1],"columns":["i.id",false]}\n```');
@@ -715,6 +927,77 @@ describe('schema metadata cache', () => {
 });
 
 describe('SQL diagnostics', () => {
+  it('does not treat FROM inside EXTRACT casts as a table reference', async () => {
+    const local = connection({ id: 'local' });
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => false)
+      } as never,
+      {
+        getCachedForConnection: vi.fn(async () => schemaEntry({
+          connectionId: local.id,
+          tables: [{ schema: 'public', name: 'event_fact', type: 'table' }],
+          columns: {
+            'public.event_fact': [
+              { schema: 'public', table: 'event_fact', name: 'event_datetime', ordinal: 1, dataType: 'timestamp', nullable: true },
+              { schema: 'public', table: 'event_fact', name: 'network_offer_id', ordinal: 2, dataType: 'integer', nullable: true }
+            ]
+          }
+        })),
+        getCachedColumns: vi.fn(async () => [
+          { schema: 'public', table: 'event_fact', name: 'event_datetime', ordinal: 1, dataType: 'timestamp', nullable: true },
+          { schema: 'public', table: 'event_fact', name: 'network_offer_id', ordinal: 2, dataType: 'integer', nullable: true }
+        ]),
+        refreshDefaultSchemaInBackground: vi.fn(),
+        refreshSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+    const sql = `select extract(day from event_datetime::date) as source_name
+from public.event_fact
+where event_datetime::date between '2026-06-01' and '2026-06-01'`;
+
+    const diagnostics = await service.getDiagnostics(sqlDocument(sql) as never, undefined, local);
+
+    expect(diagnostics.map((diagnostic) => diagnostic.message)).not.toContain(
+      'Table or view "event_datetime" does not exist in public.'
+    );
+  });
+
+  it('skips planner validation and missing-column checks while SQL parameters still need values', async () => {
+    const local = connection({ id: 'local' });
+    const validateQuery = vi.fn();
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => true),
+        getDriver: vi.fn(() => ({ validateQuery }))
+      } as never,
+      {
+        getCachedForConnection: vi.fn(async () => schemaEntry({
+          connectionId: local.id,
+          tables: [{ schema: 'public', name: 'event_fact', type: 'table' }]
+        })),
+        getCachedColumns: vi.fn(async () => [
+          { schema: 'public', table: 'event_fact', name: 'event_datetime', ordinal: 1, dataType: 'timestamp', nullable: true }
+        ]),
+        refreshDefaultSchemaInBackground: vi.fn(),
+        refreshSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+    const sql = `select event_datetime
+from public.event_fact
+where event_datetime::date between '{startDate}' and :endDate`;
+
+    const diagnostics = await service.getDiagnostics(sqlDocument(sql) as never, undefined, local);
+
+    expect(validateQuery).not.toHaveBeenCalled();
+    expect(diagnostics.map((diagnostic) => diagnostic.message)).not.toContain('Column "startDate" does not exist on public.event_fact.');
+    expect(diagnostics.map((diagnostic) => diagnostic.message)).not.toContain('Column "endDate" does not exist on public.event_fact.');
+  });
+
   it('does not flag tables created earlier in the same script as missing schema objects', async () => {
     const local = connection({ id: 'local' });
     const service = new SqlDiagnosticsService(
@@ -805,6 +1088,80 @@ where event_datetime::date between '2026-05-01' and '2026-05-31'`;
     expect(missingColumn).toBeDefined();
     expect(missingColumn?.range).toMatchObject(textRange(0, 36, 0, 40));
     expect(diagnostics.map((diagnostic) => diagnostic.message)).not.toContain('Column "date" does not exist on public.event_fact.');
+  });
+});
+
+describe('SQL parameters', () => {
+  it('collects values in current-editor popups without opening a webview editor tab', async () => {
+    const windowMock = vscode.window as unknown as {
+      showQuickPick: ReturnType<typeof vi.fn>;
+      showInputBox: ReturnType<typeof vi.fn>;
+      createWebviewPanel: ReturnType<typeof vi.fn>;
+    };
+    windowMock.showQuickPick.mockReset();
+    windowMock.showInputBox.mockReset();
+    windowMock.createWebviewPanel.mockReset();
+    windowMock.showQuickPick
+      .mockResolvedValueOnce({ action: 'parameter', name: 'startDate' })
+      .mockResolvedValueOnce({ action: 'run' });
+    windowMock.showInputBox.mockResolvedValueOnce('2026-06-01');
+    const prompt = new SqlParameterPrompt();
+    const sql = `select *
+from public.event_fact
+where event_datetime::date = '{startDate}'`;
+
+    const resolved = await prompt.resolve(sql);
+
+    expect(windowMock.createWebviewPanel).not.toHaveBeenCalled();
+    expect(windowMock.showQuickPick).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({
+      title: 'SQL Parameters',
+      placeHolder: expect.stringContaining('Current SQL query: select * from public.event_fact')
+    }));
+    expect(windowMock.showQuickPick.mock.calls[0][0][0]).toMatchObject({
+      label: '$(code) Current SQL query',
+      detail: expect.stringContaining('select * from public.event_fact')
+    });
+    expect(windowMock.showInputBox).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'SQL Parameter: startDate',
+      prompt: expect.stringContaining('Current SQL query: select * from public.event_fact')
+    }));
+    expect(resolved).toContain("event_datetime::date = '2026-06-01'");
+  });
+
+  it('finds brace and named placeholders without treating PostgreSQL casts as parameters', () => {
+    const sql = `select event_datetime::date
+from public.event_fact
+where event_datetime::date between '{startDate}' and :endDate
+  and status = :status
+-- :commented_out`;
+
+    const parameters = findSqlParameters(sql);
+
+    expect(uniqueSqlParameterNames(parameters)).toEqual(['startDate', 'endDate', 'status']);
+    expect(parameters.map((parameter) => parameter.placeholder)).not.toContain(':date');
+  });
+
+  it('applies parameter values as escaped SQL literals unless the placeholder is already quoted', () => {
+    const sql = `select *
+from public.event_fact
+where event_datetime::date between '{startDate}' and :endDate
+  and network_affiliate_id = :affiliateId
+  and source = :source`;
+
+    expect(applySqlParameterValues(sql, {
+      startDate: '2026-06-01',
+      endDate: '2026-06-30',
+      affiliateId: '343',
+      source: "Bob's Ads"
+    })).toContain("between '2026-06-01' and '2026-06-30'\n  and network_affiliate_id = 343\n  and source = 'Bob''s Ads'");
+  });
+
+  it('allows raw SQL expressions with an explicit sql prefix', () => {
+    const sql = 'select * from public.event_fact where event_datetime::date >= :month_ago';
+
+    expect(applySqlParameterValues(sql, {
+      month_ago: "sql:current_date - interval '1 month'"
+    })).toContain("event_datetime::date >= current_date - interval '1 month'");
   });
 });
 
@@ -910,6 +1267,9 @@ function memory(overrides: Partial<QueryMemoryItem>): QueryMemoryItem {
     sourceKind: 'history',
     sourceId: overrides.sourceId ?? overrides.id ?? 'history',
     connectionId: overrides.connectionId,
+    databaseType: overrides.databaseType,
+    databaseName: overrides.databaseName,
+    connectionName: overrides.connectionName,
     sql: overrides.sql ?? 'select * from invoices',
     title: overrides.title,
     summary: overrides.summary,
@@ -921,9 +1281,64 @@ function memory(overrides: Partial<QueryMemoryItem>): QueryMemoryItem {
     status: overrides.status ?? 'completed',
     historyIds: overrides.historyIds,
     latestHistoryId: overrides.latestHistoryId,
+    durationMs: overrides.durationMs,
+    runCount: overrides.runCount,
+    lastExecutedAt: overrides.lastExecutedAt,
     indexedAt: overrides.indexedAt ?? Date.now(),
     updatedAt: overrides.updatedAt ?? Date.now(),
     executedAt: overrides.executedAt
+  };
+}
+
+function redshiftStats(overrides: NonNullable<TableStatsInfo['redshift']>): TableStatsInfo {
+  return {
+    schema: 'public',
+    table: 'event_fact',
+    databaseType: 'redshift',
+    rowEstimate: overrides.rowCount,
+    columns: [],
+    redshift: {
+      rowCount: 100000,
+      ...overrides
+    }
+  };
+}
+
+function workloadSummary(columns: Array<{ role: TableWorkloadSummary['columns'][number]['role']; column: string; runCount: number; durationMs: number }>): TableWorkloadSummary {
+  return {
+    connectionId: 'local',
+    table: 'public.event_fact',
+    queryCount: 1,
+    totalRunCount: columns.reduce((total, item) => total + item.runCount, 0),
+    totalDurationMs: columns.reduce((total, item) => total + item.durationMs, 0),
+    topQueries: [],
+    columns: columns.map((item) => ({
+      ...item,
+      queryCount: 1
+    }))
+  };
+}
+
+function tableAdviceRequest(): TablePerformanceAdviceRequest {
+  return {
+    connectionName: 'Local DWH',
+    databaseType: 'redshift',
+    databaseName: 'analytics',
+    schema: 'public',
+    table: 'event_fact',
+    tableDdl: 'create table "public"."event_fact" ("user_id" int, "created_at" timestamp);',
+    stats: redshiftStats({ statsOffPct: 20 }),
+    prepassFlags: [{
+      kind: 'redshift_stale_stats',
+      impact: 'medium',
+      message: 'Redshift statistics are stale enough to affect plan quality.',
+      evidence: 'stats_off=20%',
+      recommendationKind: 'analyze',
+      ddl: 'analyze "public"."event_fact";'
+    }],
+    workload: workloadSummary([
+      { role: 'filter', column: 'created_at', runCount: 4, durationMs: 2000 }
+    ])
   };
 }
 

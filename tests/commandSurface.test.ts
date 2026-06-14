@@ -83,7 +83,8 @@ describe('command surface', () => {
     const aiCommands = [
       'database.aiFixSql',
       'database.aiExplainSql',
-      'database.backfillQueryMemorySummaries'
+      'database.backfillQueryMemorySummaries',
+      'database.analyzeTablePerformance'
     ];
     const menuJson = JSON.stringify(pkg.contributes?.menus ?? {});
 
@@ -112,7 +113,6 @@ describe('command surface', () => {
       'database.testQueryMemorySummary',
       'database.previewTableMetadata',
       'Query File...',
-      'Chart view',
       'Stop query',
       'Search in result',
       'Transaction mode',

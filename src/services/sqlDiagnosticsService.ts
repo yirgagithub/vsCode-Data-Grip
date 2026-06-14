@@ -3,6 +3,7 @@ import { ConnectionManager } from '../database/connectionManager';
 import { ColumnInfo, ConnectionConfig, QueryError } from '../types';
 import { SchemaContextService } from './schemaContextService';
 import { SqlSection, SqlSectionService } from './sqlSectionService';
+import { findSqlParameters, hasSqlParameters, sqlParameterSpansContain } from './sqlParameters';
 
 const SQL_COLUMN_CONTEXT_KEYWORDS = new Set([
   'all',
@@ -57,7 +58,7 @@ export class SqlDiagnosticsService {
       const executable = selection
         ? this.sectionService.detectExecutable(document, selection)
         : this.sectionService.getSections(document)[0];
-      if (executable?.sql.trim()) {
+      if (executable?.sql.trim() && !hasSqlParameters(executable.sql)) {
         const plannerDiagnostic = await this.getPlannerDiagnostic(document, connection, executable, scriptRelations);
         if (plannerDiagnostic) {
           diagnostics.push(plannerDiagnostic);
@@ -180,6 +181,7 @@ export class SqlDiagnosticsService {
 
     const columnNames = new Set(columns.map((column) => column.name.toLowerCase()));
     const ignored = this.unqualifiedColumnIgnoreSet(section, columns, defaultSchema);
+    const parameters = findSqlParameters(section.sql);
     const diagnostics: vscode.Diagnostic[] = [];
     const seen = new Set<string>();
 
@@ -196,6 +198,7 @@ export class SqlDiagnosticsService {
           || ignored.has(lower)
           || this.isInsideSingleQuotedLiteral(section.sql, tokenStart)
           || this.isInLineComment(section.sql, tokenStart)
+          || sqlParameterSpansContain(parameters, tokenStart, tokenStart + token.length)
           || this.isQualifiedIdentifierPart(section.sql, tokenStart, token.length)
           || this.isTypeCastName(section.sql, tokenStart)
           || this.isFunctionName(section.sql, tokenStart + token.length)

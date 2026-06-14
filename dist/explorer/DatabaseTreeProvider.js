@@ -35,15 +35,30 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DatabaseTreeProvider = void 0;
 const vscode = __importStar(require("vscode"));
+const tablePerformanceAdvisorService_1 = require("../services/tablePerformanceAdvisorService");
 const nodes_1 = require("./nodes");
+const EMPTY_WORKLOAD = {
+    connectionId: '',
+    table: '',
+    queryCount: 0,
+    totalRunCount: 0,
+    totalDurationMs: 0,
+    topQueries: [],
+    columns: []
+};
 class DatabaseTreeProvider {
     connectionManager;
     emitter = new vscode.EventEmitter();
     onDidChangeTreeData = this.emitter.event;
+    tableStatsCache = new Map();
+    inflightTableStats = new Map();
     constructor(connectionManager) {
         this.connectionManager = connectionManager;
     }
     refresh(node) {
+        if (!node) {
+            this.tableStatsCache.clear();
+        }
         this.emitter.fire(node);
     }
     getTreeItem(element) {
@@ -76,12 +91,20 @@ class DatabaseTreeProvider {
         if (element instanceof nodes_1.FolderNode && element.folder === 'Tables') {
             await this.ensureConnected(element.connection.id);
             const tables = await this.connectionManager.getDriver(element.connection.type).getTables(element.connection.id, element.schema);
-            return tables.filter((table) => table.type !== 'materialized_view').map((table) => new nodes_1.TableNode(element.connection, table));
+            return tables.filter((table) => table.type !== 'materialized_view').map((table) => {
+                const node = new nodes_1.TableNode(element.connection, table);
+                void this.decorateTableNode(node);
+                return node;
+            });
         }
         if (element instanceof nodes_1.FolderNode && element.folder === 'Materialized Views') {
             await this.ensureConnected(element.connection.id);
             const tables = await this.connectionManager.getDriver(element.connection.type).getTables(element.connection.id, element.schema);
-            return tables.filter((table) => table.type === 'materialized_view').map((table) => new nodes_1.TableNode(element.connection, table));
+            return tables.filter((table) => table.type === 'materialized_view').map((table) => {
+                const node = new nodes_1.TableNode(element.connection, table);
+                void this.decorateTableNode(node);
+                return node;
+            });
         }
         if (element instanceof nodes_1.FolderNode && element.folder === 'Views') {
             await this.ensureConnected(element.connection.id);
@@ -107,6 +130,45 @@ class DatabaseTreeProvider {
         if (!this.connectionManager.isConnected(connectionId)) {
             await this.connectionManager.connect(connectionId);
         }
+    }
+    async decorateTableNode(node) {
+        const key = this.tableKey(node.connection.id, node.table.schema, node.table.name);
+        const cached = this.tableStatsCache.get(key);
+        if (cached) {
+            node.applyMaintenanceFlags(this.maintenanceFlags(cached));
+            this.refresh(node);
+            return;
+        }
+        if (this.inflightTableStats.has(key)) {
+            return this.inflightTableStats.get(key);
+        }
+        const task = (async () => {
+            try {
+                await this.ensureConnected(node.connection.id);
+                const stats = await this.connectionManager.getDriver(node.connection.type).getTableStats(node.connection.id, node.table.schema, node.table.name);
+                this.tableStatsCache.set(key, stats);
+                node.applyMaintenanceFlags(this.maintenanceFlags(stats));
+                this.refresh(node);
+            }
+            catch {
+                node.applyMaintenanceFlags([]);
+                this.refresh(node);
+            }
+            finally {
+                this.inflightTableStats.delete(key);
+            }
+        })();
+        this.inflightTableStats.set(key, task);
+        return task;
+    }
+    maintenanceFlags(stats) {
+        if (stats.databaseType !== 'redshift') {
+            return [];
+        }
+        return (0, tablePerformanceAdvisorService_1.buildTablePerformancePrepassFlags)(stats, EMPTY_WORKLOAD).filter((flag) => flag.kind === 'redshift_unsorted_rows' || flag.kind === 'redshift_stale_stats');
+    }
+    tableKey(connectionId, schema, table) {
+        return `${connectionId}:${schema}:${table}`;
     }
 }
 exports.DatabaseTreeProvider = DatabaseTreeProvider;

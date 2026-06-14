@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SqlSectionService = void 0;
 const vscode = __importStar(require("vscode"));
+const sqlRelationParser_1 = require("./sqlRelationParser");
 const sqlQueryTreeService_1 = require("./sqlQueryTreeService");
 class SqlSectionService {
     treeService = new sqlQueryTreeService_1.SqlQueryTreeService();
@@ -59,15 +60,7 @@ class SqlSectionService {
         return this.getSections(document).map((section) => new vscode.SymbolInformation(section.kind === 'cte' && section.name ? `CTE ${section.name}` : `SQL section ${section.index + 1}`, vscode.SymbolKind.Function, section.sql.replace(/\s+/g, ' ').slice(0, 80), new vscode.Location(document.uri, section.range)));
     }
     extractAliases(sql) {
-        const aliases = [];
-        const regex = /\b(?:from|join|update|into)\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)\s*(?:as\s+)?(?!(?:where|join|left|right|inner|outer|full|cross|on|using|group|order|limit|set)\b)(?:"([^"]+)"|(\w+))?/gi;
-        let match;
-        while ((match = regex.exec(sql)) !== null) {
-            const [schema, table] = splitQualified(match[1]);
-            const alias = stripQuotes(match[2] ?? match[3] ?? table);
-            aliases.push({ alias, schema, table });
-        }
-        return aliases;
+        return (0, sqlRelationParser_1.extractSqlAliases)(sql);
     }
     extractTables(sql) {
         return this.extractAliases(sql).map(({ schema, table }) => ({ schema, table }));
@@ -81,11 +74,4 @@ class SqlSectionService {
     }
 }
 exports.SqlSectionService = SqlSectionService;
-function splitQualified(value) {
-    const parts = value.split('.').map(stripQuotes);
-    return parts.length > 1 ? [parts[0], parts[1]] : [undefined, parts[0]];
-}
-function stripQuotes(value) {
-    return value.replace(/^"|"$/g, '');
-}
 //# sourceMappingURL=sqlSectionService.js.map
