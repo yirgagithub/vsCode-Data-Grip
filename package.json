@@ -39,7 +39,12 @@
     "onCommand:database.findPastQuery",
     "onCommand:database.backfillQueryMemorySummaries",
     "onCommand:database.aiFixSql",
-    "onCommand:database.aiExplainSql"
+    "onCommand:database.aiExplainSql",
+    "onCommand:database.analyzeTablePerformance",
+    "onCommand:database.visualExplainSql",
+    "onCommand:database.visualExplainAnalyzeSql",
+    "onCommand:database.profileTableData",
+    "onCommand:database.generateTableMaintenanceSql"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -151,6 +156,37 @@
         "category": "Database",
         "icon": "$(comment-discussion)",
         "enablement": "database.aiAvailable"
+      },
+      {
+        "command": "database.visualExplainSql",
+        "title": "Visual Explain SQL",
+        "category": "Database",
+        "icon": "$(type-hierarchy-sub)"
+      },
+      {
+        "command": "database.visualExplainAnalyzeSql",
+        "title": "Visual Explain ANALYZE SQL",
+        "category": "Database",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "database.analyzeTablePerformance",
+        "title": "AI: Analyze Table Performance",
+        "category": "Database",
+        "icon": "$(graph-line)",
+        "enablement": "database.aiAvailable"
+      },
+      {
+        "command": "database.profileTableData",
+        "title": "Profile Table Data",
+        "category": "Database",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "database.generateTableMaintenanceSql",
+        "title": "Generate Maintenance SQL",
+        "category": "Database",
+        "icon": "$(warning)"
       },
       {
         "command": "database.openTableData",
@@ -438,6 +474,21 @@
           "group": "inline@1"
         },
         {
+          "command": "database.analyzeTablePerformance",
+          "when": "view == databaseExplorer && viewItem == table && database.aiAvailable",
+          "group": "inline@2"
+        },
+        {
+          "command": "database.profileTableData",
+          "when": "view == databaseExplorer && viewItem == table",
+          "group": "inline@3"
+        },
+        {
+          "command": "database.generateTableMaintenanceSql",
+          "when": "view == databaseExplorer && viewItem == table",
+          "group": "inline@4"
+        },
+        {
           "command": "database.dropObject",
           "when": "view == databaseExplorer && (viewItem == schema || viewItem == table || viewItem == view || viewItem == column)",
           "group": "danger@99"
@@ -550,9 +601,24 @@
           "group": "data@1"
         },
         {
+          "command": "database.analyzeTablePerformance",
+          "when": "viewItem == table && database.aiAvailable",
+          "group": "data@2"
+        },
+        {
+          "command": "database.profileTableData",
+          "when": "viewItem == table",
+          "group": "data@3"
+        },
+        {
+          "command": "database.generateTableMaintenanceSql",
+          "when": "viewItem == table",
+          "group": "data@4"
+        },
+        {
           "command": "database.modifyTable",
           "when": "viewItem == table",
-          "group": "data@2"
+          "group": "data@5"
         },
         {
           "command": "database.renameObject",
@@ -584,21 +650,21 @@
           "command": "database.findPastQuery",
           "group": "history@2"
         },
-      {
-        "command": "database.backfillQueryMemorySummaries",
-        "when": "database.aiAvailable",
-        "group": "history@3"
-      },
-      {
-        "command": "database.aiFixSql",
-        "when": "database.aiAvailable",
-        "group": "ai@1"
-      },
-      {
-        "command": "database.aiExplainSql",
-        "when": "database.aiAvailable",
-        "group": "ai@2"
-      }
+        {
+          "command": "database.backfillQueryMemorySummaries",
+          "when": "database.aiAvailable",
+          "group": "history@3"
+        },
+        {
+          "command": "database.aiFixSql",
+          "when": "database.aiAvailable",
+          "group": "ai@1"
+        },
+        {
+          "command": "database.aiExplainSql",
+          "when": "database.aiAvailable",
+          "group": "ai@2"
+        }
       ],
       "editor/context": [
         {
@@ -621,16 +687,26 @@
           "when": "editorLangId == sql",
           "group": "inspect@1"
         },
-      {
-        "command": "database.aiFixSql",
-        "when": "editorLangId == sql && database.aiAvailable",
-        "group": "ai@1"
-      },
-      {
-        "command": "database.aiExplainSql",
-        "when": "editorLangId == sql && database.aiAvailable",
-        "group": "ai@2"
-      }
+        {
+          "command": "database.visualExplainSql",
+          "when": "editorLangId == sql",
+          "group": "inspect@2"
+        },
+        {
+          "command": "database.visualExplainAnalyzeSql",
+          "when": "editorLangId == sql",
+          "group": "inspect@3"
+        },
+        {
+          "command": "database.aiFixSql",
+          "when": "editorLangId == sql && database.aiAvailable",
+          "group": "ai@1"
+        },
+        {
+          "command": "database.aiExplainSql",
+          "when": "editorLangId == sql && database.aiAvailable",
+          "group": "ai@2"
+        }
       ],
       "editor/title": [
         {
@@ -659,6 +735,11 @@
           "command": "database.showSqlMetadataStatus",
           "when": "editorLangId == sql",
           "group": "inspect@1"
+        },
+        {
+          "command": "database.visualExplainSql",
+          "when": "editorLangId == sql",
+          "group": "inspect@2"
         }
       ]
     },
@@ -747,6 +828,46 @@
           "default": 2000,
           "minimum": 100,
           "description": "Maximum local query memory records retained for semantic-style search."
+        },
+        "database.dataProfile.sampleRows": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 100,
+          "description": "Maximum table rows sampled for one-click data profiling."
+        },
+        "database.ai.provider": {
+          "type": "string",
+          "enum": [
+            "copilot",
+            "openAiCompatible"
+          ],
+          "default": "copilot",
+          "description": "AI provider used by SQL AI features."
+        },
+        "database.ai.copilot.vendor": {
+          "type": "string",
+          "default": "copilot",
+          "description": "VS Code Language Model vendor selector used when database.ai.provider is copilot."
+        },
+        "database.ai.openAiCompatible.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Base URL for an OpenAI-compatible Chat Completions API, for example a self-hosted gateway ending in /v1."
+        },
+        "database.ai.openAiCompatible.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model name sent to the OpenAI-compatible Chat Completions API."
+        },
+        "database.ai.openAiCompatible.apiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "API key for the OpenAI-compatible provider. This is stored in VS Code settings; use `database.ai.openAiCompatible.apiKeyEnvVar` if you prefer environment-based secrets."
+        },
+        "database.ai.openAiCompatible.apiKeyEnvVar": {
+          "type": "string",
+          "default": "DATABASE_AI_API_KEY",
+          "description": "Environment variable read for the OpenAI-compatible API key when database.ai.openAiCompatible.apiKey is empty."
         }
       }
     }
@@ -759,10 +880,13 @@
     "build": "npm run compile && npm run bundle:extension && npm run bundle:webview",
     "lint": "tsc -p ./ --noEmit",
     "test": "vitest run",
+    "compile:e2e": "tsc -p e2e",
+    "test:e2e": "npm run compile && npm run compile:e2e && vscode-test",
     "package": "vsce package --no-dependencies",
     "publish": "vsce publish --no-dependencies"
   },
   "dependencies": {
+    "@observablehq/plot": "^0.6.17",
     "@vitejs/plugin-react": "^4.3.4",
     "pg": "^8.16.3",
     "react": "^19.1.1",
@@ -770,11 +894,14 @@
     "zustand": "^5.0.7"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^20.19.9",
     "@types/pg": "^8.15.5",
     "@types/react": "^19.1.9",
     "@types/react-dom": "^19.1.7",
     "@types/vscode": "^1.90.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^3.0.0",
     "@vscode/vsce": "^3.9.2",
     "typescript": "^5.9.2",
     "vite": "^5.4.14",

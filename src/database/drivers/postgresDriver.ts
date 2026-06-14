@@ -5,20 +5,24 @@ import {
   ColumnInfo,
   ConnectionConfigWithPassword,
   DbConnection,
+  ExplainQueryOptions,
   ExecuteQueryParams,
   ForeignKeyInfo,
   IndexInfo,
   KeyInfo,
+  QueryPlanResult,
   QueryExecutionResult,
   QueryError,
   QueryValidationResult,
   SchemaInfo,
   TablePreviewOptions,
+  TableStatsInfo,
   TableInfo,
   TestConnectionResult,
   ViewInfo
 } from '../../types';
 import { qualifiedName, quoteIdentifier } from '../../utils/identifiers';
+import { normalizeExplainJsonPlan } from '../../services/queryPlanService';
 
 interface ActiveExecution {
   connectionId: string;
@@ -148,6 +152,19 @@ export class PostgresDriver implements DatabaseDriver {
     } catch (error) {
       return { ok: false, error: this.toQueryError(error) };
     }
+  }
+
+  async explainQuery(params: ExecuteQueryParams, options: ExplainQueryOptions = {}): Promise<QueryPlanResult> {
+    const pool = this.requirePool(params.connectionId);
+    const sql = params.sql.trim().replace(/;+\s*$/, '');
+    if (!sql || !this.canExplain(sql)) {
+      throw new Error('Only SELECT, WITH, INSERT, UPDATE, DELETE, and MERGE statements can be explained.');
+    }
+    const explainOptions = options.analyze ? 'analyze, format json' : 'format json';
+    const result = await pool.query(`explain (${explainOptions}) ${sql}`);
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    const value = row?.['QUERY PLAN'] ?? row?.['query_plan'] ?? Object.values(row ?? {})[0];
+    return normalizeExplainJsonPlan(value, options.analyze === true);
   }
 
   async cancelQuery(executionId: string): Promise<void> {
@@ -288,6 +305,56 @@ export class PostgresDriver implements DatabaseDriver {
     return `create table ${qualifiedName(schema, table)} (\n${lines.join(',\n')}\n);`;
   }
 
+  async getTableStats(connectionId: string, schema: string, table: string): Promise<TableStatsInfo> {
+    const pool = this.requirePool(connectionId);
+    const tableResult = await pool.query(
+      `select s.seq_scan as "seqScan",
+              s.idx_scan as "idxScan",
+              s.n_live_tup as "liveRows",
+              s.n_dead_tup as "deadRows",
+              s.last_vacuum as "lastVacuum",
+              s.last_autovacuum as "lastAutoVacuum",
+              s.last_analyze as "lastAnalyze",
+              s.last_autoanalyze as "lastAutoAnalyze",
+              c.reltuples as "rowEstimate"
+       from pg_stat_user_tables s
+       left join pg_class c on c.oid = s.relid
+       where s.schemaname = $1 and s.relname = $2`,
+      [schema, table]
+    );
+    const columnResult = await pool.query(
+      `select attname as name,
+              null_frac as "nullFraction",
+              n_distinct as "nDistinct",
+              correlation
+       from pg_stats
+       where schemaname = $1 and tablename = $2
+       order by attname`,
+      [schema, table]
+    );
+    const row = tableResult.rows[0] ?? {};
+    return {
+      schema,
+      table,
+      databaseType: this.id,
+      rowEstimate: this.numberFromDb(row.rowEstimate),
+      seqScan: this.numberFromDb(row.seqScan),
+      idxScan: this.numberFromDb(row.idxScan),
+      liveRows: this.numberFromDb(row.liveRows),
+      deadRows: this.numberFromDb(row.deadRows),
+      lastVacuum: this.dateFromDb(row.lastVacuum),
+      lastAutoVacuum: this.dateFromDb(row.lastAutoVacuum),
+      lastAnalyze: this.dateFromDb(row.lastAnalyze),
+      lastAutoAnalyze: this.dateFromDb(row.lastAutoAnalyze),
+      columns: columnResult.rows.map((column) => ({
+        name: String(column.name),
+        nullFraction: this.numberFromDb(column.nullFraction),
+        nDistinct: this.numberFromDb(column.nDistinct),
+        correlation: this.numberFromDb(column.correlation)
+      }))
+    };
+  }
+
   protected requirePool(connectionId: string): Pool {
     const pool = this.pools.get(connectionId);
     if (!pool) {
@@ -348,6 +415,21 @@ export class PostgresDriver implements DatabaseDriver {
   private columnsFromIndexDefinition(definition: string): string[] {
     const match = definition.match(/\((.*)\)/);
     return match ? match[1].split(',').map((part) => part.trim().replace(/^"|"$/g, '')) : [];
+  }
+
+  protected numberFromDb(value: unknown): number | undefined {
+    if (value === null || value === undefined) {
+      return undefined;
+    }
+    const next = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(next) ? next : undefined;
+  }
+
+  protected dateFromDb(value: unknown): string | undefined {
+    if (!value) {
+      return undefined;
+    }
+    return value instanceof Date ? value.toISOString() : String(value);
   }
 
   private canApplyClientLimit(sql: string): boolean {

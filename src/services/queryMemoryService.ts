@@ -9,11 +9,15 @@ import {
   QueryMemorySearchRequest,
   QueryMemorySearchResult,
   QueryMemorySummary,
-  QueryMemorySummaryRequest
+  QueryMemorySummaryRequest,
+  TableWorkloadColumnRole,
+  TableWorkloadColumnUse,
+  TableWorkloadSummary
 } from '../types';
 import { QueryMemorySearch } from './queryMemorySearch';
 import { extractQualifiedColumns, extractQueryTables } from './queryMemoryMetadata';
 import { isQueryConsoleHistoryItem, isQueryConsoleMemoryItem, queryConsoleDocumentUris } from './queryConsoleHistory';
+import { extractSqlAliases } from './sqlRelationParser';
 
 export interface QueryMemorySummarizer {
   summarizeQueryMemory(request: QueryMemorySummaryRequest): Promise<QueryMemorySummary>;
@@ -58,6 +62,64 @@ export class QueryMemoryService {
     await this.syncFromHistory();
     await this.syncKnownDocuments();
     return this.searcher.search(this.queryConsoleMemoryItems(), request);
+  }
+
+  async getTableWorkload(connectionId: string, tableRef: string): Promise<TableWorkloadSummary> {
+    await this.syncFromHistory();
+    await this.syncKnownDocuments();
+    const target = this.parseTableRef(tableRef);
+    const items = this.memoryStore.getAll()
+      .filter((item) => item.connectionId === connectionId && item.status !== 'failed' && this.memoryItemReferencesTable(item, target))
+      .map((item) => ({
+        item,
+        runCount: Math.max(1, item.runCount ?? 1),
+        durationMs: Math.max(0, item.durationMs ?? 0),
+        score: Math.max(1, item.runCount ?? 1) * Math.max(1, item.durationMs ?? 1)
+      }))
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 15);
+
+    const columns = new Map<string, TableWorkloadColumnUse>();
+    for (const ranked of items) {
+      const seenInQuery = new Set<string>();
+      for (const use of this.extractTableColumnUses(ranked.item.sql, target)) {
+        const key = `${use.role}:${use.column.toLowerCase()}`;
+        if (seenInQuery.has(key)) {
+          continue;
+        }
+        seenInQuery.add(key);
+        const existing = columns.get(key);
+        columns.set(key, {
+          column: use.column,
+          role: use.role,
+          queryCount: (existing?.queryCount ?? 0) + 1,
+          runCount: (existing?.runCount ?? 0) + ranked.runCount,
+          durationMs: (existing?.durationMs ?? 0) + ranked.durationMs
+        });
+      }
+    }
+
+    return {
+      connectionId,
+      table: tableRef,
+      queryCount: items.length,
+      totalRunCount: items.reduce((total, ranked) => total + ranked.runCount, 0),
+      totalDurationMs: items.reduce((total, ranked) => total + ranked.durationMs, 0),
+      topQueries: items.map((ranked) => ({
+        sql: ranked.item.sql,
+        title: ranked.item.title,
+        runCount: ranked.runCount,
+        durationMs: ranked.durationMs,
+        lastExecutedAt: ranked.item.lastExecutedAt ?? ranked.item.executedAt,
+        score: ranked.score
+      })),
+      columns: [...columns.values()].sort((left, right) => {
+        return right.durationMs - left.durationMs
+          || right.runCount - left.runCount
+          || left.role.localeCompare(right.role)
+          || left.column.localeCompare(right.column);
+      })
+    };
   }
 
   async backfillSummaries(options: { limit?: number; token?: vscode.CancellationToken } = {}): Promise<QueryMemoryBackfillResult> {
@@ -238,6 +300,63 @@ export class QueryMemoryService {
     return [...new Set([...first, ...second].filter(Boolean))];
   }
 
+  private memoryItemReferencesTable(item: QueryMemoryItem, target: { schema?: string; table: string }): boolean {
+    return item.tables.some((table) => this.tableRefMatches(table, target))
+      || extractQueryTables(item.sql).some((table) => this.tableRefMatches(table, target));
+  }
+
+  private extractTableColumnUses(sql: string, target: { schema?: string; table: string }): Array<{ column: string; role: TableWorkloadColumnRole }> {
+    const aliases = new Set<string>([target.table.toLowerCase()]);
+    for (const alias of extractSqlAliases(sql)) {
+      if (this.tableRefMatches(`${alias.schema ? `${alias.schema}.` : ''}${alias.table}`, target)) {
+        aliases.add(alias.alias.toLowerCase());
+        aliases.add(alias.table.toLowerCase());
+      }
+    }
+
+    const uses: Array<{ column: string; role: TableWorkloadColumnRole }> = [];
+    this.extractClauseColumnUses(sql, aliases, 'join', /\bon\s+([\s\S]*?)(?=\b(?:left|right|inner|outer|full|cross)?\s*join\b|\bwhere\b|\bgroup\s+by\b|\border\s+by\b|\bhaving\b|\blimit\b|\bunion\b|\bintersect\b|\bexcept\b|$)/gi, uses);
+    this.extractClauseColumnUses(sql, aliases, 'filter', /\bwhere\s+([\s\S]*?)(?=\bgroup\s+by\b|\border\s+by\b|\bhaving\b|\blimit\b|\bunion\b|\bintersect\b|\bexcept\b|$)/gi, uses);
+    this.extractClauseColumnUses(sql, aliases, 'groupBy', /\bgroup\s+by\s+([\s\S]*?)(?=\border\s+by\b|\bhaving\b|\blimit\b|\bunion\b|\bintersect\b|\bexcept\b|$)/gi, uses);
+    this.extractClauseColumnUses(sql, aliases, 'orderBy', /\border\s+by\s+([\s\S]*?)(?=\blimit\b|\bunion\b|\bintersect\b|\bexcept\b|$)/gi, uses);
+    return uses;
+  }
+
+  private extractClauseColumnUses(
+    sql: string,
+    aliases: Set<string>,
+    role: TableWorkloadColumnRole,
+    regex: RegExp,
+    uses: Array<{ column: string; role: TableWorkloadColumnRole }>
+  ): void {
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(sql)) !== null) {
+      const clause = match[1];
+      const columnRegex = /(?:"([^"]+)"|(\b[A-Za-z_][A-Za-z0-9_]*\b))\s*\.\s*(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/g;
+      let columnMatch: RegExpExecArray | null;
+      while ((columnMatch = columnRegex.exec(clause)) !== null) {
+        const qualifier = stripQuotes(columnMatch[1] ?? columnMatch[2]);
+        const column = stripQuotes(columnMatch[3] ?? columnMatch[4]);
+        if (aliases.has(qualifier.toLowerCase())) {
+          uses.push({ column, role });
+        }
+      }
+    }
+  }
+
+  private tableRefMatches(value: string, target: { schema?: string; table: string }): boolean {
+    const parsed = this.parseTableRef(value);
+    return parsed.table.toLowerCase() === target.table.toLowerCase()
+      && (!target.schema || !parsed.schema || parsed.schema.toLowerCase() === target.schema.toLowerCase());
+  }
+
+  private parseTableRef(value: string): { schema?: string; table: string } {
+    const parts = value.split('.').map(stripQuotes).filter(Boolean);
+    return parts.length > 1
+      ? { schema: parts[parts.length - 2], table: parts[parts.length - 1] }
+      : { table: stripQuotes(value) };
+  }
+
   private documentMemoryId(documentUri: string): string {
     return `memory_doc_${this.hash(documentUri)}`;
   }
@@ -261,4 +380,8 @@ export class QueryMemoryService {
 
 export class NoopQueryMemoryService {
   async recordHistoryItem(_item: QueryHistoryItem): Promise<void> {}
+}
+
+function stripQuotes(value: string): string {
+  return value.replace(/^"|"$/g, '');
 }

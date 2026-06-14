@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SqlDiagnosticsService = void 0;
 const vscode = __importStar(require("vscode"));
+const sqlParameters_1 = require("./sqlParameters");
 const SQL_COLUMN_CONTEXT_KEYWORDS = new Set([
     'all',
     'and',
@@ -88,7 +89,7 @@ class SqlDiagnosticsService {
             const executable = selection
                 ? this.sectionService.detectExecutable(document, selection)
                 : this.sectionService.getSections(document)[0];
-            if (executable?.sql.trim()) {
+            if (executable?.sql.trim() && !(0, sqlParameters_1.hasSqlParameters)(executable.sql)) {
                 const plannerDiagnostic = await this.getPlannerDiagnostic(document, connection, executable, scriptRelations);
                 if (plannerDiagnostic) {
                     diagnostics.push(plannerDiagnostic);
@@ -180,6 +181,7 @@ class SqlDiagnosticsService {
         }
         const columnNames = new Set(columns.map((column) => column.name.toLowerCase()));
         const ignored = this.unqualifiedColumnIgnoreSet(section, columns, defaultSchema);
+        const parameters = (0, sqlParameters_1.findSqlParameters)(section.sql);
         const diagnostics = [];
         const seen = new Set();
         for (const [spanStart, spanEnd] of this.columnExpressionSpans(section.sql)) {
@@ -194,6 +196,7 @@ class SqlDiagnosticsService {
                     || ignored.has(lower)
                     || this.isInsideSingleQuotedLiteral(section.sql, tokenStart)
                     || this.isInLineComment(section.sql, tokenStart)
+                    || (0, sqlParameters_1.sqlParameterSpansContain)(parameters, tokenStart, tokenStart + token.length)
                     || this.isQualifiedIdentifierPart(section.sql, tokenStart, token.length)
                     || this.isTypeCastName(section.sql, tokenStart)
                     || this.isFunctionName(section.sql, tokenStart + token.length)

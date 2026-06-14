@@ -1,5 +1,6 @@
 import { PostgresDriver } from './postgresDriver';
-import { ColumnInfo, ConnectionConfigWithPassword, SchemaInfo, TableInfo, ViewInfo } from '../../types';
+import { ColumnInfo, ConnectionConfigWithPassword, ExecuteQueryParams, ExplainQueryOptions, QueryPlanResult, SchemaInfo, TableInfo, TableStatsInfo, ViewInfo } from '../../types';
+import { textExplainPlan } from '../../services/queryPlanService';
 
 export class RedshiftDriver extends PostgresDriver {
   override readonly id = 'redshift' as const;
@@ -83,6 +84,67 @@ export class RedshiftDriver extends PostgresDriver {
     return result.rows;
   }
 
+  override async getTableStats(connectionId: string, schema: string, table: string): Promise<TableStatsInfo> {
+    const pool = this.requirePool(connectionId);
+    try {
+      const result = await pool.query(
+        `select diststyle as "distStyle",
+                sortkey1 as "sortKey1",
+                sortkey_num as "sortKeyNum",
+                size as "sizeMb",
+                tbl_rows as "rowCount",
+                skew_rows as "skewRows",
+                unsorted as "unsortedPct",
+                stats_off as "statsOffPct",
+                encoded as "encoded"
+         from svv_table_info
+         where "schema" = $1 and "table" = $2`,
+        [schema, table]
+      );
+      const row = result.rows[0] ?? {};
+      return {
+        schema,
+        table,
+        databaseType: this.id,
+        rowEstimate: this.numberFromDb(row.rowCount),
+        columns: [],
+        redshift: {
+          distStyle: optionalString(row.distStyle),
+          sortKey1: optionalString(row.sortKey1),
+          sortKeyNum: this.numberFromDb(row.sortKeyNum),
+          sizeMb: this.numberFromDb(row.sizeMb),
+          rowCount: this.numberFromDb(row.rowCount),
+          skewRows: this.numberFromDb(row.skewRows),
+          unsortedPct: this.numberFromDb(row.unsortedPct),
+          statsOffPct: this.numberFromDb(row.statsOffPct),
+          encoded: optionalString(row.encoded)
+        }
+      };
+    } catch {
+      const fallback = await super.getTableStats(connectionId, schema, table);
+      return { ...fallback, databaseType: this.id };
+    }
+  }
+
+  override async explainQuery(params: ExecuteQueryParams, options: ExplainQueryOptions = {}): Promise<QueryPlanResult> {
+    try {
+      return await super.explainQuery(params, options);
+    } catch (error) {
+      if (options.analyze) {
+        throw error;
+      }
+      const sql = params.sql.trim().replace(/;+\s*$/, '');
+      if (!/^(select|with|insert|update|delete|merge)\b/i.test(sql)) {
+        throw error;
+      }
+      const result = await this.requirePool(params.connectionId).query(`explain ${sql}`);
+      const rawText = result.rows
+        .map((row) => Object.values(row).map((value) => String(value)).join(' '))
+        .join('\n');
+      return textExplainPlan(rawText, false);
+    }
+  }
+
   protected override shouldRetryWithoutSsl(_config: ConnectionConfigWithPassword, _error: unknown): boolean {
     return false;
   }
@@ -93,4 +155,12 @@ export class RedshiftDriver extends PostgresDriver {
       port: config.port || 5439
     };
   }
+}
+
+function optionalString(value: unknown): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  const next = String(value).trim();
+  return next || undefined;
 }

@@ -121,16 +121,37 @@ class TableNode extends vscode.TreeItem {
     connection;
     table;
     kind = 'table';
+    baseDescription;
+    baseTooltip;
+    baseIconPath;
     constructor(connection, table) {
         super(truncateMiddle(table.name, 48), vscode.TreeItemCollapsibleState.Collapsed);
         this.connection = connection;
         this.table = table;
         this.id = `table:${connection.id}:${table.schema}:${table.name}`;
-        this.description = table.rowEstimate !== undefined ? `~${table.rowEstimate}` : undefined;
+        this.baseDescription = table.rowEstimate !== undefined ? `~${table.rowEstimate}` : undefined;
+        this.description = this.baseDescription;
         this.contextValue = 'table';
-        this.iconPath = new vscode.ThemeIcon(table.type === 'materialized_view' ? 'symbol-structure' : 'table');
-        this.tooltip = table.comment ? `${table.schema}.${table.name}\n${table.comment}` : `${table.schema}.${table.name}`;
+        this.baseIconPath = new vscode.ThemeIcon(table.type === 'materialized_view' ? 'symbol-structure' : 'table');
+        this.iconPath = this.baseIconPath;
+        this.baseTooltip = table.comment ? `${table.schema}.${table.name}\n${table.comment}` : `${table.schema}.${table.name}`;
+        this.tooltip = this.baseTooltip;
         this.command = { command: 'database.openTableData', title: 'Open Table Data', arguments: [this] };
+    }
+    applyMaintenanceFlags(flags) {
+        if (!flags.length) {
+            this.description = this.baseDescription;
+            this.iconPath = this.baseIconPath;
+            this.tooltip = this.baseTooltip;
+            return;
+        }
+        const details = flags.map((flag) => `${flag.message} (${flag.evidence})`);
+        const actionSummary = flags
+            .map((flag) => flag.ddl ? `${flag.recommendationKind ?? 'maintenance'}: ${flag.ddl}` : flag.message)
+            .join('\n');
+        this.description = [this.baseDescription, flags.map((flag) => flag.evidence).join(' • ')].filter(Boolean).join(' | ');
+        this.iconPath = new vscode.ThemeIcon('warning');
+        this.tooltip = `${this.baseTooltip}\n\n${details.join('\n')}${actionSummary ? `\n\n${actionSummary}` : ''}`;
     }
 }
 exports.TableNode = TableNode;

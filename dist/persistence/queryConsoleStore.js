@@ -73,7 +73,7 @@ class QueryConsoleStore {
             }
         }
         const uri = await this.createConsoleUri(connection);
-        await this.ensureFile(uri, initialSql || this.defaultContent(connection, uri));
+        await this.ensureFile(uri, initialSql || this.defaultContent());
         const now = Date.now();
         if (connection) {
             await this.save({
@@ -195,10 +195,8 @@ class QueryConsoleStore {
             }
         }
     }
-    defaultContent(connection, uri) {
-        return connection
-            ? `-- ${connection.name} / ${connection.database}\n-- Schema: ${connection.defaultSchema ?? 'public'}\n\nselect *\nfrom \nlimit 100;\n`
-            : `-- SQL Console\n\n`;
+    defaultContent() {
+        return '';
     }
     safeName(value) {
         return value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'sql-console';

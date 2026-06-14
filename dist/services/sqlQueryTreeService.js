@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.SqlQueryTreeService = void 0;
 const vscode = __importStar(require("vscode"));
 const sqlSplitter_1 = require("../database/sqlSplitter");
+const sqlRelationParser_1 = require("./sqlRelationParser");
 class SqlQueryTreeService {
     getTree(document) {
         const text = document.getText();
@@ -436,16 +437,9 @@ class SqlQueryTreeService {
         return this.flatten(root.children).find((node) => node.kind === 'cte' && node.name?.toLowerCase() === tokenLower);
     }
     extractAliases(sql) {
-        const aliases = [];
-        const regex = /\b(?:from|join|update|into)\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)\s*(?:as\s+)?(?!(?:where|join|left|right|inner|outer|full|cross|on|using|group|order|limit|set)\b)(?:"([^"]+)"|(\w+))?/gi;
-        let match;
-        while ((match = regex.exec(sql)) !== null) {
-            const alias = match[2] ?? match[3];
-            if (alias) {
-                aliases.push(this.stripQuotes(alias));
-            }
-        }
-        return aliases;
+        return (0, sqlRelationParser_1.extractSqlAliases)(sql)
+            .filter((alias) => alias.explicitAlias)
+            .map((alias) => alias.alias);
     }
     matchWord(text, index, word) {
         const slice = text.slice(index, index + word.length);

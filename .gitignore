@@ -1,2 +1,4 @@
 .vscode-data-grip/
 *.vsix
+.vscode-test/
+e2e/out/

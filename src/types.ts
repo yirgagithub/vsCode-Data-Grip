@@ -63,6 +63,10 @@ export interface ExecuteQueryParams {
   maxRows?: number;
 }
 
+export interface ExplainQueryOptions {
+  analyze?: boolean;
+}
+
 export type QueryExecutionProgressStatus = 'started' | 'completed' | 'failed';
 
 export interface QueryExecutionProgress {
@@ -113,6 +117,53 @@ export interface QueryValidationResult {
   error?: QueryError;
 }
 
+export interface QueryPlanNode {
+  id: string;
+  nodeType: string;
+  relationName?: string;
+  alias?: string;
+  indexName?: string;
+  joinType?: string;
+  startupCost?: number;
+  totalCost?: number;
+  planRows?: number;
+  planWidth?: number;
+  actualStartupTime?: number;
+  actualTotalTime?: number;
+  actualRows?: number;
+  actualLoops?: number;
+  filter?: string;
+  indexCond?: string;
+  joinFilter?: string;
+  hashCond?: string;
+  mergeCond?: string;
+  sortKey?: string[];
+  groupKey?: string[];
+  raw?: Record<string, unknown>;
+  children: QueryPlanNode[];
+}
+
+export interface QueryPlanAnnotation {
+  nodeId?: string;
+  severity: 'high' | 'medium' | 'low';
+  message: string;
+  suggestion?: string;
+}
+
+export interface QueryPlanResult {
+  format: 'json' | 'text';
+  analyze: boolean;
+  root?: QueryPlanNode;
+  rawPlan?: unknown;
+  rawText?: string;
+  planningTimeMs?: number;
+  executionTimeMs?: number;
+  annotations: QueryPlanAnnotation[];
+  aiFindings?: string[];
+  rewrittenSql?: string;
+  aiError?: string;
+}
+
 export interface SchemaInfo {
   name: string;
 }
@@ -143,6 +194,42 @@ export interface ColumnInfo {
   encoding?: string;
   sortKey?: number;
   distKey?: boolean;
+}
+
+export interface TableColumnStatsInfo {
+  name: string;
+  nullFraction?: number;
+  nDistinct?: number;
+  correlation?: number;
+}
+
+export interface RedshiftTableStatsInfo {
+  distStyle?: string;
+  sortKey1?: string;
+  sortKeyNum?: number;
+  sizeMb?: number;
+  rowCount?: number;
+  skewRows?: number;
+  unsortedPct?: number;
+  statsOffPct?: number;
+  encoded?: string;
+}
+
+export interface TableStatsInfo {
+  schema: string;
+  table: string;
+  databaseType: DatabaseType;
+  rowEstimate?: number;
+  seqScan?: number;
+  idxScan?: number;
+  liveRows?: number;
+  deadRows?: number;
+  lastVacuum?: string;
+  lastAutoVacuum?: string;
+  lastAnalyze?: string;
+  lastAutoAnalyze?: string;
+  columns: TableColumnStatsInfo[];
+  redshift?: RedshiftTableStatsInfo;
 }
 
 export interface IndexInfo {
@@ -230,6 +317,7 @@ export interface QueryResultTab {
   maxRows?: number;
   error?: QueryError;
   resultSets: ResultSet[];
+  plan?: QueryPlanResult;
   activeResultSetIndex: number;
   filters: GridFilterState;
   sort: SortSpec[];
@@ -340,6 +428,137 @@ export interface QueryMemorySummaryRequest {
   databaseName?: string;
   outputColumns?: string[];
   errorMessage?: string;
+}
+
+export type TableWorkloadColumnRole = 'join' | 'filter' | 'groupBy' | 'orderBy';
+
+export interface TableWorkloadColumnUse {
+  column: string;
+  role: TableWorkloadColumnRole;
+  queryCount: number;
+  runCount: number;
+  durationMs: number;
+}
+
+export interface TableWorkloadQuery {
+  sql: string;
+  title?: string;
+  runCount: number;
+  durationMs: number;
+  lastExecutedAt?: number;
+  score: number;
+}
+
+export interface TableWorkloadSummary {
+  connectionId: string;
+  table: string;
+  queryCount: number;
+  totalRunCount: number;
+  totalDurationMs: number;
+  topQueries: TableWorkloadQuery[];
+  columns: TableWorkloadColumnUse[];
+}
+
+export type TablePerformanceImpact = 'high' | 'medium' | 'low';
+export type TablePerformanceRecommendationKind = 'sortkey' | 'distkey' | 'index' | 'partition' | 'vacuum' | 'analyze';
+
+export interface TablePerformancePrepassFlag {
+  kind: string;
+  impact: TablePerformanceImpact;
+  message: string;
+  evidence: string;
+  recommendationKind?: TablePerformanceRecommendationKind;
+  ddl?: string;
+}
+
+export interface TablePerformanceRecommendation {
+  kind: TablePerformanceRecommendationKind;
+  impact: TablePerformanceImpact;
+  rationale: string;
+  ddl: string;
+}
+
+export interface TablePerformanceAdvice {
+  findings: string[];
+  recommendations: TablePerformanceRecommendation[];
+}
+
+export interface TablePerformanceAdviceRequest {
+  connectionName?: string;
+  databaseType: DatabaseType;
+  databaseName?: string;
+  schema: string;
+  table: string;
+  tableDdl: string;
+  stats: TableStatsInfo;
+  prepassFlags: TablePerformancePrepassFlag[];
+  workload: TableWorkloadSummary;
+}
+
+export interface QueryPlanAnnotationRequest {
+  connectionName?: string;
+  databaseType: DatabaseType;
+  databaseName?: string;
+  sql: string;
+  plan: QueryPlanResult;
+}
+
+export interface QueryPlanAiAdvice {
+  findings: string[];
+  annotations: QueryPlanAnnotation[];
+  rewrittenSql?: string;
+}
+
+export interface DataProfileTopValue {
+  value: string;
+  count: number;
+}
+
+export interface DataProfileHistogramBucket {
+  label: string;
+  count: number;
+}
+
+export interface DataProfileColumn {
+  name: string;
+  dataType?: string;
+  nullable?: boolean;
+  rowCount: number;
+  nullCount: number;
+  nullPct: number;
+  distinctCount: number;
+  min?: string;
+  max?: string;
+  topValues: DataProfileTopValue[];
+  histogram: DataProfileHistogramBucket[];
+}
+
+export interface DataProfileNarrative {
+  summary: string;
+  anomalies: string[];
+}
+
+export interface DataProfileReport {
+  connectionName?: string;
+  databaseType: DatabaseType;
+  databaseName?: string;
+  schema: string;
+  table: string;
+  sampleRows: number;
+  sampledAt: number;
+  columns: DataProfileColumn[];
+  narrative?: DataProfileNarrative;
+  aiError?: string;
+}
+
+export interface DataProfileNarrativeRequest {
+  connectionName?: string;
+  databaseType: DatabaseType;
+  databaseName?: string;
+  schema: string;
+  table: string;
+  sampleRows: number;
+  columns: DataProfileColumn[];
 }
 
 export type SqlSafetyRisk = 'safe' | 'write' | 'destructive' | 'production';
