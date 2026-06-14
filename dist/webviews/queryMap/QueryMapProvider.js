@@ -605,6 +605,13 @@ class QueryMapProvider {
       text-align: left;
       font-weight: 500;
     }
+    .connection-header span:nth-child(2),
+    .tree-group span:nth-child(2) {
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
     .tree-count {
       color: var(--text-muted);
       font-weight: 400;
@@ -614,10 +621,10 @@ class QueryMapProvider {
       width: 100%;
       height: var(--row-height);
       display: grid;
-      grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+      grid-template-columns: .55rem minmax(0, 1fr) auto auto;
       align-items: center;
       gap: var(--space-xs);
-      padding: 0 var(--space-sm) 0 calc(var(--space-md) * 2.2);
+      padding: 0 var(--space-sm) 0 calc(var(--space-md) * 1.7);
       border: 0;
       border-radius: 0;
       text-align: left;
@@ -630,6 +637,7 @@ class QueryMapProvider {
       background: var(--bg-selected);
     }
     .session-icon {
+      display: none;
       color: var(--vscode-charts-blue);
       font-size: var(--icon-size);
       line-height: 1;
@@ -668,6 +676,7 @@ class QueryMapProvider {
       flex: 0 0 auto;
       border-radius: 50%;
       background: var(--text-muted);
+      justify-self: center;
     }
     .status-completed { background: var(--success); }
     .status-failed { background: var(--vscode-testing-iconFailed, var(--danger)); }
@@ -783,7 +792,8 @@ class QueryMapProvider {
         display: none;
       }
       .session-row {
-        grid-template-columns: auto auto minmax(0, 1fr);
+        grid-template-columns: .55rem minmax(0, 1fr);
+        padding-left: calc(var(--space-md) * 1.35);
       }
     }
   </style>

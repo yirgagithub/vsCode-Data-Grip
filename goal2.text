@@ -1,0 +1,88 @@
+MISSING DATABASE-CLIENT FUNCTIONALITY — vsCode-Data-Grip
+Date: 2026-06-11
+Compared against: DataGrip, DBeaver, TablePlus, pgAdmin
+
+=====================================================================
+TIER 1: TABLE STAKES — users from any client expect these
+=====================================================================
+
+1. IN-GRID DATA EDITING  (biggest gap)
+   - Edit cells, add/delete rows in results grid + table data panel
+   - Preview generated UPDATE/INSERT/DELETE before commit
+   - Use cached primary keys to build safe WHERE clauses
+   - Route confirmation through existing SqlSafetyClassifier
+
+2. SSH TUNNEL SUPPORT
+   - Hard blocker for many users: prod PG/Redshift only reachable
+     through a bastion. SSL modes exist, tunnels don't.
+   - Options: ssh2 npm package, or spawn system `ssh -L`
+
+3. DATA IMPORT (CSV/JSON -> table)
+   - Export exists, import doesn't
+   - File picker -> column mapping -> batched INSERTs
+     (or COPY FROM STDIN via pg copy-from stream — much faster)
+
+4. TRANSACTION CONTROL
+   - Manual-commit mode, commit/rollback buttons,
+     "open transaction" indicator (currently everything autocommits)
+   - Cheap companion win: read-only connection flag that refuses
+     non-SELECTs client-side
+
+5. FETCH-MORE PAGINATION IN RESULTS GRID
+   - First N rows + "fetch next page" instead of hard row cap
+   - TableDataPanel already has offset pagination; results grid doesn't
+
+=====================================================================
+TIER 2: STRONGLY EXPECTED — second wave
+=====================================================================
+
+6. ER DIAGRAM
+   - FKs + PKs already cached per schema -> webview-only feature
+   - High marketing/screenshot value
+
+7. SQL FORMATTER
+   - Format document/selection (sql-formatter npm = 90% there)
+   - Users expect Shift+Alt+F to work
+
+8. GO-TO-DATABASE-OBJECT
+   - Fuzzy quick-pick over cached tables/views/columns
+     (DataGrip double-shift) -> jump in explorer / open table data
+   - Nearly free given schema cache
+
+9. RICHER COPY/EXPORT FORMATS
+   - Copy as INSERT statements, Markdown table, JSON objects; XLSX export
+   - Copy-as-Markdown disproportionately loved (Slack/Notion/PRs)
+
+10. FUNCTIONS / PROCEDURES / TRIGGERS IN EXPLORER
+    - Routines invisible in tree today; matters for Redshift
+      stored procedures too
+
+11. SESSION / ACTIVITY MONITOR
+    - Panel over pg_stat_activity (Redshift: stv_recents/stv_inflight)
+    - See running queries, idle-in-transaction, kill a session
+    - pg_cancel_backend plumbing already exists for own cancellations
+
+=====================================================================
+TIER 3: POWER-USER / DIFFERENTIATING
+=====================================================================
+
+- Schema diff between connections/environments + migration DDL
+  (big lift, very sticky)
+- Parameterized queries: detect :name/$1 placeholders, prompt at execution
+- Connection environment color-coding (prod=red tint; cheap, prevents
+  disasters, fits safety-classifier story)
+- Query snippets/templates with placeholders (beyond history/favorites)
+- Result-set diff between two result tabs (before/after a fix)
+- Copy table between connections (e.g. prod table -> local PG)
+- More drivers: MySQL/SQLite/Snowflake/BigQuery — #1 audience limiter;
+  DatabaseDriver interface already shaped for it (deliberate scope for now)
+
+=====================================================================
+NEXT 3 FOR ADOPTION
+=====================================================================
+
+In-grid editing, SSH tunnels, CSV import — absence of these makes
+someone go back to DBeaver; the rest is "nice, someday".
+
+Coherent release idea: in-grid editing (closes table-stakes gap)
++ AI Table Performance Advisor from goa.txt (reason to switch).

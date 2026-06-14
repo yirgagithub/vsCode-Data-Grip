@@ -11,6 +11,7 @@ import { QueryHistoryStore } from './persistence/queryHistoryStore';
 import { QueryMemoryStore } from './persistence/queryMemoryStore';
 import { ResultSessionStore } from './persistence/resultSessionStore';
 import { orphanedConnectionRecordIds } from './persistence/orphanedConnectionRecords';
+import { DataProfileService } from './services/dataProfileService';
 import { QueryMemoryService } from './services/queryMemoryService';
 import { executionOriginForDocument, isQueryConsoleHistoryItem, queryConsoleDocumentUris } from './services/queryConsoleHistory';
 import { SchemaContextService } from './services/schemaContextService';
@@ -18,13 +19,16 @@ import { SchemaMetadataCacheStore } from './services/schemaMetadataCacheStore';
 import { relationCompletionCandidates, relationCompletionContext, unqualifiedColumnCompletionContext } from './services/sqlMetadataCompletion';
 import { connectAndRefreshSqlMetadata } from './services/sqlMetadataWarmup';
 import { SqlDiagnosticsService } from './services/sqlDiagnosticsService';
+import { SqlParameterPrompt } from './services/sqlParameterPrompt';
 import { rangeFromPlain as rangeFromSource, SqlSectionHighlighter } from './services/sqlSectionHighlighter';
 import { SqlSectionService } from './services/sqlSectionService';
 import { shouldRunSelectionForStatement } from './services/sqlSelectionExecution';
+import { buildTablePerformancePrepassFlags, TablePerformanceAdvisorService } from './services/tablePerformanceAdvisorService';
 import { VsCodeLanguageModelSqlAdapter } from './ai/vsCodeLanguageModelSqlAdapter';
 import { QueryMemoryController } from './controllers/queryMemoryController';
 import { DocumentConnectionBinding, DocumentConnectionResolution, resolveDocumentConnection } from './services/documentConnectionResolver';
 import { QueryOutputService } from './services/queryOutputService';
+import { QueryPlanAnalyzerService } from './services/queryPlanAnalyzerService';
 import { ConnectionEditorPanel } from './webviews/connection/ConnectionEditorPanel';
 import { QueryMapProvider } from './webviews/queryMap/QueryMapProvider';
 import { ResultsPanelProvider } from './webviews/results/ResultsPanelProvider';
@@ -32,7 +36,7 @@ import { TableDataPanel } from './webviews/table/TableDataPanel';
 import { Logger } from './utils/logger';
 import { qualifiedName, quoteIdentifier } from './utils/identifiers';
 import { createId } from './utils/id';
-import { ConnectionConfig, QueryConsoleRecord, QueryExecutionProgress, QueryResultTab } from './types';
+import { ConnectionConfig, QueryConsoleRecord, QueryExecutionProgress, QueryPlanResult, QueryResultTab, TableStatsInfo, TableWorkloadSummary } from './types';
 
 const PROJECT_SQL_SESSION_PREFIX = 'project-sql:';
 
@@ -49,17 +53,26 @@ export function activate(context: vscode.ExtensionContext): void {
   const highlighter = new SqlSectionHighlighter();
   const sqlDiagnostics = vscode.languages.createDiagnosticCollection('database-sql');
   const diagnosticsService = new SqlDiagnosticsService(connectionManager, schemaContext, sectionService);
+  const parameterPrompt = new SqlParameterPrompt();
   const aiAdapter = new VsCodeLanguageModelSqlAdapter();
+  const refreshAiAvailability = () => {
+    void aiAdapter.isAvailable().then((available) => {
+      void vscode.commands.executeCommand('setContext', 'database.aiAvailable', available);
+    });
+  };
   void vscode.commands.executeCommand('setContext', 'database.aiAvailable', false);
-  void aiAdapter.isAvailable().then((available) => {
-    void vscode.commands.executeCommand('setContext', 'database.aiAvailable', available);
-  });
+  refreshAiAvailability();
   const memoryStore = new QueryMemoryStore(context);
   const memoryService = new QueryMemoryService(historyStore, memoryStore, consoleStore, connectionManager, aiAdapter);
+  const tablePerformanceAdvisor = new TablePerformanceAdvisorService(connectionManager, memoryService, aiAdapter);
+  const queryPlanAnalyzer = new QueryPlanAnalyzerService(connectionManager, aiAdapter);
+  const dataProfiler = new DataProfileService(connectionManager, aiAdapter);
   const executor = new QueryExecutor(connectionManager, historyStore, memoryService);
   const queryOutput = new QueryOutputService();
   const diagnosticTimers = new Map<string, NodeJS.Timeout>();
   const diagnosticVersions = new Map<string, number>();
+  const consoleAutoSaves = new Map<string, Promise<void>>();
+  const consoleAutoSaveQueued = new Set<string>();
   const runningDocuments = new Map<string, number>();
   const statementRunningDecoration = vscode.window.createTextEditorDecorationType({
     before: {
@@ -194,6 +207,7 @@ export function activate(context: vscode.ExtensionContext): void {
     updateSqlDiagnostics(event.textEditor.document, event.selections[0]);
   }));
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((event) => {
+    autoSaveQueryConsoleDocument(event.document);
     const editor = vscode.window.activeTextEditor;
     if (editor?.document.uri.toString() === event.document.uri.toString()) {
       queryMap.updateFromEditor(editor);
@@ -202,7 +216,15 @@ export function activate(context: vscode.ExtensionContext): void {
     updateSqlDiagnostics(event.document, editor?.selection);
   }));
   context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => {
+    const documentUri = document.uri.toString();
+    consoleAutoSaves.delete(documentUri);
+    consoleAutoSaveQueued.delete(documentUri);
     sqlDiagnostics.delete(document.uri);
+  }));
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
+    if (event.affectsConfiguration('database.ai')) {
+      refreshAiAvailability();
+    }
   }));
   refreshQueryMap();
   void schemaContext.warmFromDisk(connectionManager.getConnections());
@@ -236,6 +258,37 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     void pruneMissingConsoleRecords();
     void pruneUnknownConnectionRecords();
+  }
+
+  function autoSaveQueryConsoleDocument(document: vscode.TextDocument): void {
+    const documentUri = document.uri.toString();
+    if (!document.isDirty || !queryConsoleDocumentUris(consoleStore.getAll()).has(documentUri)) {
+      return;
+    }
+    if (consoleAutoSaves.has(documentUri)) {
+      consoleAutoSaveQueued.add(documentUri);
+      return;
+    }
+    const save = async () => {
+      try {
+        do {
+          consoleAutoSaveQueued.delete(documentUri);
+          if (document.isDirty) {
+            try {
+              await document.save();
+            } catch (error) {
+              logger.error('queryConsoleAutoSave', error);
+              return;
+            }
+          }
+        } while (consoleAutoSaveQueued.has(documentUri));
+      } finally {
+        consoleAutoSaves.delete(documentUri);
+        consoleAutoSaveQueued.delete(documentUri);
+      }
+    };
+    const promise = save();
+    consoleAutoSaves.set(documentUri, promise);
   }
 
   function activeSessionRecords(knownConnectionIds = currentConnectionIds()): QueryConsoleRecord[] {
@@ -666,6 +719,51 @@ export function activate(context: vscode.ExtensionContext): void {
     await TableDataPanel.open(context, connectionManager, node);
   });
 
+  register('database.analyzeTablePerformance', async (node?: unknown) => {
+    if (!(node instanceof TableNode)) {
+      return;
+    }
+    const report = await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `Analyzing ${qualifiedName(node.table.schema, node.table.name)}`,
+      cancellable: false
+    }, () => tablePerformanceAdvisor.analyzeTable(node.connection, node.table.schema, node.table.name));
+    await TableDataPanel.openPerformanceAdvisor(context, node, report, (title, sql) => openSqlScript(title, sql, node.connection));
+  });
+
+  register('database.profileTableData', async (node?: unknown) => {
+    if (!(node instanceof TableNode)) {
+      return;
+    }
+    const configuredSampleRows = vscode.workspace.getConfiguration('database').get<number>('dataProfile.sampleRows', 5000);
+    const sampleRows = Number.isFinite(configuredSampleRows) && configuredSampleRows && configuredSampleRows > 0
+      ? Math.floor(configuredSampleRows)
+      : 5000;
+    const report = await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `Profiling ${qualifiedName(node.table.schema, node.table.name)}`,
+      cancellable: false
+    }, () => dataProfiler.profileTable(node.connection, node.table.schema, node.table.name, sampleRows));
+    await TableDataPanel.openDataProfile(context, node, report);
+  });
+
+  register('database.generateTableMaintenanceSql', async (node?: unknown) => {
+    const target = tableLikeTarget(node);
+    if (!target) {
+      return;
+    }
+    if (!connectionManager.isConnected(target.connection.id)) {
+      await connectionManager.connect(target.connection.id);
+    }
+    const stats = await connectionManager.getDriver(target.connection.type).getTableStats(target.connection.id, target.schema, target.name);
+    const sql = maintenanceScriptFromStats(stats);
+    if (!sql) {
+      void vscode.window.showInformationMessage(`No Redshift maintenance SQL was generated for ${qualifiedName(target.schema, target.name)}.`);
+      return;
+    }
+    await openSqlScript(`Maintenance ${target.name}`, `${sql}\n`, target.connection);
+  });
+
   register('database.copyName', async (node?: unknown) => {
     const name = objectName(node);
     if (name) {
@@ -825,6 +923,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   register('database.aiFixSql', () => runAi('fix'));
   register('database.aiExplainSql', () => runAi('explain'));
+  register('database.visualExplainSql', () => runVisualExplain(false));
+  register('database.visualExplainAnalyzeSql', () => runVisualExplain(true));
 
   async function executeFromEditor(mode: 'run' | 'smart' | 'selection' | 'file', options: { maxRows?: number } = {}): Promise<void> {
     const editor = vscode.window.activeTextEditor;
@@ -858,6 +958,95 @@ export function activate(context: vscode.ExtensionContext): void {
     const forceNewResultTab = detections.length > 1;
     for (const detected of detections) {
       await executeDetected(editor, detected, { forceNewResultTab, maxRows: options.maxRows });
+    }
+  }
+
+  async function runVisualExplain(analyze: boolean): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== 'sql') {
+      void vscode.window.showInformationMessage('Open a SQL editor before running Visual Explain.');
+      return;
+    }
+    const resolved = resolveConnectionForDocument(editor.document);
+    if (resolved.isBound && !resolved.connection) {
+      void vscode.window.showErrorMessage(`This SQL console is bound to a connection that no longer exists: ${resolved.boundConnectionId}`);
+      return;
+    }
+    const connection = resolved.connection ?? await connectionManager.pickConnection();
+    if (!connection) {
+      return;
+    }
+    if (analyze) {
+      const answer = await vscode.window.showWarningMessage(
+        'EXPLAIN ANALYZE executes the SQL to collect runtime timings.',
+        { modal: true },
+        'Run EXPLAIN ANALYZE'
+      );
+      if (answer !== 'Run EXPLAIN ANALYZE') {
+        return;
+      }
+    }
+    if (!resolved.isBound) {
+      await sqlDocumentConnections.set(editor.document.uri.toString(), connection.id);
+      results.setActiveConnection(connection.id);
+      updateSqlConnectionStatus(editor);
+      sqlCodeLensRefresh.fire();
+    }
+
+    const detected: { sql: string; range: vscode.Range; index?: number; id?: string } | undefined =
+      selectedSqlDetections(editor)[0] ?? sectionService.detectExecutable(editor.document, editor.selection);
+    if (!detected?.sql.trim()) {
+      void vscode.window.showInformationMessage('No SQL section to explain.');
+      return;
+    }
+    const sourceSql = detected.sql;
+    const executableSql = await parameterPrompt.resolve(sourceSql);
+    if (executableSql === undefined) {
+      return;
+    }
+
+    const documentUri = editor.document.uri.toString();
+    const sourceOrigin = executionOriginForDocument(documentUri, queryConsoleDocumentUris(consoleStore.getAll()));
+    const sourceRange = rangeToPlain(detected.range);
+    const runningTab = await results.addTab(createRunningResultTab(connection, executableSql, undefined, {
+      origin: sourceOrigin,
+      fileName: editor.document.fileName,
+      documentUri,
+      queryId: detected.id,
+      sectionIndex: detected.index,
+      range: sourceRange
+    }), { forceNew: true });
+
+    try {
+      const plan = await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: `${analyze ? 'Running EXPLAIN ANALYZE' : 'Running EXPLAIN'} for ${connection.name}`,
+        cancellable: false
+      }, () => queryPlanAnalyzer.explain(connection, executableSql, { analyze }));
+      const tab = createPlanResultTab(connection, executableSql, plan, {
+        origin: sourceOrigin,
+        fileName: editor.document.fileName,
+        documentUri,
+        queryId: detected.id,
+        sectionIndex: detected.index,
+        range: sourceRange
+      });
+      await results.addTab({ ...tab, id: runningTab.id, pinned: runningTab.pinned, customTitle: runningTab.customTitle }, { replaceTabId: runningTab.id });
+      await highlighter.reveal(documentUri, sourceRange, sourceSql);
+      queryMap.updateResults(results.getTabs());
+      refreshQueryMap();
+    } catch (error) {
+      const failed = {
+        ...runningTab,
+        executionStatus: 'failed' as const,
+        executionFinishedAt: Date.now(),
+        executionTimeMs: Date.now() - runningTab.executionStartedAt,
+        error: {
+          message: error instanceof Error ? error.message : String(error)
+        },
+        updatedAt: Date.now()
+      };
+      await results.addTab(failed, { replaceTabId: runningTab.id });
     }
   }
 
@@ -1039,6 +1228,11 @@ export function activate(context: vscode.ExtensionContext): void {
       updateSqlConnectionStatus(editor);
       sqlCodeLensRefresh.fire();
     }
+    const sourceSql = detected.sql;
+    const executableSql = await parameterPrompt.resolve(sourceSql);
+    if (executableSql === undefined) {
+      return;
+    }
 
     const decoration = vscode.window.createTextEditorDecorationType({ backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground') });
     editor.setDecorations(decoration, [detected.range]);
@@ -1056,10 +1250,10 @@ export function activate(context: vscode.ExtensionContext): void {
       await markActiveSessionExecuted(documentUri, connection.id, executedRange);
       refreshQueryMap();
       endDocumentExecution = beginDocumentExecution(documentUri);
-      const statementCount = splitSqlStatements(detected.sql).length || 1;
-      const updateStatementStatus = createStatementStatusUpdater(editor, detected.range, detected.sql);
+      const statementCount = splitSqlStatements(executableSql).length || 1;
+      const updateStatementStatus = createStatementStatusUpdater(editor, detected.range, sourceSql);
       queryOutput.recordExecutionStarted(connection, editor.document.fileName, statementCount);
-      const runningTab = await results.addTab(createRunningResultTab(connection, detected.sql, maxRows, {
+      const runningTab = await results.addTab(createRunningResultTab(connection, executableSql, maxRows, {
         origin: sourceOrigin,
         fileName: editor.document.fileName,
         documentUri,
@@ -1070,7 +1264,7 @@ export function activate(context: vscode.ExtensionContext): void {
       queryMap.updateResults(results.getTabs());
       const tab = await executor.execute({
         connectionId: connection.id,
-        sql: detected.sql,
+        sql: executableSql,
         onProgress: (progress) => {
           updateStatementStatus(progress);
           queryOutput.recordProgress(connection, progress);
@@ -1092,7 +1286,7 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       await results.addTab({ ...tab, id: runningTab.id, pinned: runningTab.pinned, customTitle: runningTab.customTitle }, { replaceTabId: runningTab.id });
       recordQueryOutput(tab);
-      await highlighter.reveal(documentUri, rangeToPlain(detected.range), detected.sql);
+      await highlighter.reveal(documentUri, rangeToPlain(detected.range), sourceSql);
       queryMap.updateResults(results.getTabs());
       await markActiveSessionExecuted(documentUri, connection.id, executedRange);
       refreshQueryMap();
@@ -1136,6 +1330,51 @@ export function activate(context: vscode.ExtensionContext): void {
       executionStartedAt: now,
       maxRows,
       resultSets: [],
+      activeResultSetIndex: 0,
+      filters: [],
+      sort: [],
+      columnState: [],
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  function createPlanResultTab(
+    connection: ConnectionConfig,
+    sql: string,
+    plan: QueryPlanResult,
+    source: {
+      origin: QueryResultTab['sourceOrigin'];
+      fileName?: string;
+      documentUri?: string;
+      queryId?: string;
+      sectionIndex?: number;
+      range?: QueryResultTab['sourceRange'];
+    }
+  ): QueryResultTab {
+    const now = Date.now();
+    return {
+      id: createId('tab'),
+      title: `${plan.analyze ? 'EXPLAIN ANALYZE' : 'EXPLAIN'} ${resultTitle(sql, source.fileName)}`,
+      pinned: false,
+      connectionId: connection.id,
+      databaseType: connection.type,
+      databaseName: connection.database,
+      schemaName: connection.defaultSchema,
+      queryText: sql,
+      sourceOrigin: source.origin,
+      sourceFile: source.fileName,
+      sourceDocumentUri: source.documentUri,
+      sourceQueryId: source.queryId,
+      sourceSectionIndex: source.sectionIndex,
+      sourceRange: source.range,
+      executionStatus: 'completed',
+      executionStartedAt: now,
+      executionFinishedAt: now,
+      executionTimeMs: plan.executionTimeMs,
+      rowCount: plan.root ? 1 : undefined,
+      resultSets: [],
+      plan,
       activeResultSetIndex: 0,
       filters: [],
       sort: [],
@@ -1621,6 +1860,37 @@ function tableLikeTarget(node: unknown): { connection: import('./types').Connect
     return { connection: node.connection, schema: node.column.schema, name: node.column.table, kind: 'table' };
   }
   return undefined;
+}
+
+function maintenanceScriptFromStats(stats: TableStatsInfo): string | undefined {
+  if (stats.databaseType !== 'redshift') {
+    return undefined;
+  }
+  const flags = buildTablePerformancePrepassFlags(stats, emptyWorkload()).filter((flag) => flag.kind === 'redshift_unsorted_rows' || flag.kind === 'redshift_stale_stats');
+  if (!flags.length) {
+    return undefined;
+  }
+  const statements: string[] = [];
+  const table = qualifiedName(stats.schema, stats.table);
+  if (flags.some((flag) => flag.kind === 'redshift_unsorted_rows')) {
+    statements.push(`vacuum sort only ${table};`);
+  }
+  if (flags.some((flag) => flag.kind === 'redshift_stale_stats')) {
+    statements.push(`analyze ${table};`);
+  }
+  return statements.join('\n');
+}
+
+function emptyWorkload(): TableWorkloadSummary {
+  return {
+    connectionId: '',
+    table: '',
+    queryCount: 0,
+    totalRunCount: 0,
+    totalDurationMs: 0,
+    topQueries: [],
+    columns: []
+  };
 }
 
 async function objectDdl(connectionManager: ConnectionManager, node: unknown): Promise<string | undefined> {

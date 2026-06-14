@@ -1,12 +1,15 @@
 import * as vscode from 'vscode';
 import { ConnectionManager } from '../../database/connectionManager';
 import { TableNode } from '../../explorer/nodes';
+import { DataProfileReport } from '../../types';
+import { TablePerformanceAdvisorReport } from '../../services/tablePerformanceAdvisorService';
 import { qualifiedName } from '../../utils/identifiers';
 
 type TableDataMessage =
   | { type?: 'ready' }
   | { type?: 'export'; format?: 'csv' | 'json' | 'tsv'; text?: string }
   | { type?: 'copy'; text?: string }
+  | { type?: 'openSql'; title?: string; sql?: string }
   | { type?: 'fetch'; limit?: number | null; offset?: number; where?: string; orderBySql?: string; orderBy?: Array<{ column: string; direction: 'asc' | 'desc' }> }
   | { type?: 'command'; command?: 'ddl' | 'select' };
 
@@ -71,6 +74,52 @@ export class TableDataPanel {
           orderBySql: message.orderBySql,
           orderBy: message.orderBy
         });
+      }
+    });
+  }
+
+  static async openPerformanceAdvisor(
+    context: vscode.ExtensionContext,
+    node: TableNode,
+    report: TablePerformanceAdvisorReport,
+    openSql: (title: string, sql: string) => Promise<void>
+  ): Promise<void> {
+    const panel = vscode.window.createWebviewPanel(
+      'databaseTablePerformance',
+      `Advisor: ${node.table.name}`,
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true
+      }
+    );
+    panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'database.svg');
+    panel.webview.html = this.advisorHtml(node, report);
+    panel.webview.onDidReceiveMessage(async (message: TableDataMessage) => {
+      if (message.type === 'copy' && typeof message.text === 'string') {
+        await vscode.env.clipboard.writeText(message.text);
+      }
+      if (message.type === 'openSql' && typeof message.sql === 'string') {
+        await openSql(message.title || `Advisor DDL ${node.table.name}`, `${message.sql.trim()}\n`);
+      }
+    });
+  }
+
+  static async openDataProfile(context: vscode.ExtensionContext, node: TableNode, report: DataProfileReport): Promise<void> {
+    const panel = vscode.window.createWebviewPanel(
+      'databaseTableProfile',
+      `Profile: ${node.table.name}`,
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true
+      }
+    );
+    panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'database.svg');
+    panel.webview.html = this.profileHtml(node, report);
+    panel.webview.onDidReceiveMessage(async (message: TableDataMessage) => {
+      if (message.type === 'copy' && typeof message.text === 'string') {
+        await vscode.env.clipboard.writeText(message.text);
       }
     });
   }
@@ -1498,6 +1547,434 @@ export class TableDataPanel {
 </body>
 </html>`;
   }
+
+  private static advisorHtml(node: TableNode, report: TablePerformanceAdvisorReport): string {
+    const nonce = Date.now().toString();
+    const table = qualifiedName(node.table.schema, node.table.name);
+    const recommendations = report.advice.recommendations;
+    const data = JSON.stringify({
+      recommendations: recommendations.map((item, index) => ({
+        index,
+        title: `${item.kind.toUpperCase()} (${item.impact})`,
+        ddl: item.ddl
+      }))
+    }).replace(/</g, '\\u003c');
+    return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Advisor ${escapeHtml(table)}</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg-main: var(--vscode-editor-background);
+      --bg-panel: var(--vscode-sideBar-background);
+      --bg-header: var(--vscode-editorWidget-background);
+      --bg-hover: var(--vscode-list-hoverBackground);
+      --border: var(--vscode-panel-border);
+      --text-main: var(--vscode-editor-foreground);
+      --text-muted: var(--vscode-descriptionForeground);
+      --accent: var(--vscode-focusBorder);
+      --success: var(--vscode-testing-iconPassed);
+      --warning: var(--vscode-charts-yellow);
+      --danger: var(--vscode-errorForeground);
+      --radius-sm: 0.25rem;
+      font-family: var(--vscode-font-family);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--text-main);
+      background: var(--bg-main);
+    }
+    .shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-panel);
+    }
+    h1 {
+      min-width: 0;
+      margin: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .meta {
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    main {
+      min-width: 0;
+      overflow: auto;
+      padding: 12px;
+    }
+    section {
+      margin-bottom: 16px;
+    }
+    h2 {
+      margin: 0 0 8px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .list {
+      margin: 0;
+      padding-left: 18px;
+    }
+    .list li {
+      margin: 0 0 6px;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px;
+    }
+    .stat,
+    .recommendation,
+    .note {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg-header);
+    }
+    .stat {
+      padding: 8px;
+    }
+    .stat strong {
+      display: block;
+      margin-bottom: 3px;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .stat span {
+      font-family: var(--vscode-editor-font-family);
+      font-size: 13px;
+    }
+    .recommendation {
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    .recommendation-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in srgb, var(--bg-header) 82%, var(--bg-main));
+    }
+    .recommendation-header strong {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .impact {
+      color: var(--warning);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .impact.high { color: var(--danger); }
+    .impact.low { color: var(--success); }
+    .recommendation p {
+      margin: 0;
+      padding: 10px;
+    }
+    pre {
+      margin: 0;
+      padding: 10px;
+      overflow: auto;
+      border-top: 1px solid var(--border);
+      background: var(--vscode-textCodeBlock-background, var(--bg-main));
+      font-family: var(--vscode-editor-font-family);
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    button {
+      height: 26px;
+      padding: 0 8px;
+      color: var(--text-main);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font: inherit;
+      cursor: pointer;
+    }
+    button:hover {
+      background: var(--bg-hover);
+    }
+    .empty,
+    .note {
+      padding: 10px;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <h1>${escapeHtml(table)} Performance Advisor</h1>
+      <span class="meta">${escapeHtml(node.connection.name)} | ${escapeHtml(node.connection.type)}</span>
+    </header>
+    <main>
+      ${report.aiError ? `<section><div class="note">AI advisor unavailable: ${escapeHtml(report.aiError)}. Showing deterministic findings.</div></section>` : ''}
+      <section>
+        <h2>Workload</h2>
+        <div class="stats">
+          <div class="stat"><strong>Queries</strong><span>${report.request.workload.queryCount.toLocaleString()}</span></div>
+          <div class="stat"><strong>Runs</strong><span>${report.request.workload.totalRunCount.toLocaleString()}</span></div>
+          <div class="stat"><strong>Duration</strong><span>${report.request.workload.totalDurationMs.toLocaleString()}ms</span></div>
+          <div class="stat"><strong>Rows</strong><span>${formatOptionalNumber(report.request.stats.redshift?.rowCount ?? report.request.stats.liveRows ?? report.request.stats.rowEstimate)}</span></div>
+        </div>
+      </section>
+      <section>
+        <h2>Findings</h2>
+        ${report.advice.findings.length
+          ? `<ul class="list">${report.advice.findings.map((finding) => `<li>${escapeHtml(finding)}</li>`).join('')}</ul>`
+          : '<div class="empty">No findings returned.</div>'}
+      </section>
+      <section>
+        <h2>Deterministic Flags</h2>
+        ${report.request.prepassFlags.length
+          ? `<ul class="list">${report.request.prepassFlags.map((flag) => `<li><strong>${escapeHtml(flag.impact)}</strong> ${escapeHtml(flag.message)} <span class="meta">${escapeHtml(flag.evidence)}</span></li>`).join('')}</ul>`
+          : '<div class="empty">No deterministic flags crossed thresholds.</div>'}
+      </section>
+      <section>
+        <h2>Recommendations</h2>
+        ${recommendations.length ? recommendations.map((item, index) => `
+          <article class="recommendation">
+            <div class="recommendation-header">
+              <strong>${escapeHtml(item.kind)}</strong>
+              <span class="impact ${escapeHtml(item.impact)}">${escapeHtml(item.impact)}</span>
+              <button data-copy="${index}">Copy DDL</button>
+              <button data-open="${index}">Open In Console</button>
+            </div>
+            <p>${escapeHtml(item.rationale)}</p>
+            <pre>${escapeHtml(item.ddl)}</pre>
+          </article>
+        `).join('') : '<div class="empty">No ready-to-run recommendations returned.</div>'}
+      </section>
+    </main>
+  </div>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    const data = ${data};
+    document.querySelectorAll('[data-copy]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const item = data.recommendations[Number(button.getAttribute('data-copy'))];
+        if (item) vscode.postMessage({ type: 'copy', text: item.ddl });
+      });
+    });
+    document.querySelectorAll('[data-open]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const item = data.recommendations[Number(button.getAttribute('data-open'))];
+        if (item) vscode.postMessage({ type: 'openSql', title: item.title, sql: item.ddl });
+      });
+    });
+  </script>
+</body>
+</html>`;
+  }
+
+  private static profileHtml(node: TableNode, report: DataProfileReport): string {
+    const nonce = Date.now().toString();
+    const table = qualifiedName(node.table.schema, node.table.name);
+    const json = JSON.stringify(report, null, 2);
+    const scriptData = JSON.stringify({ json }).replace(/</g, '\\u003c');
+    return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Profile ${escapeHtml(table)}</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg-main: var(--vscode-editor-background);
+      --bg-panel: var(--vscode-sideBar-background);
+      --bg-header: var(--vscode-editorWidget-background);
+      --bg-hover: var(--vscode-list-hoverBackground);
+      --border: var(--vscode-panel-border);
+      --text-main: var(--vscode-editor-foreground);
+      --text-muted: var(--vscode-descriptionForeground);
+      --accent: var(--vscode-focusBorder);
+      --danger: var(--vscode-errorForeground);
+      --radius-sm: 0.25rem;
+      font-family: var(--vscode-font-family);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--text-main); background: var(--bg-main); }
+    .shell { height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-panel);
+    }
+    h1 {
+      flex: 1;
+      min-width: 0;
+      margin: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    button {
+      height: 26px;
+      padding: 0 8px;
+      color: var(--text-main);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font: inherit;
+      cursor: pointer;
+    }
+    button:hover { background: var(--bg-hover); }
+    main { min-width: 0; overflow: auto; padding: 12px; }
+    section { margin-bottom: 16px; }
+    h2 {
+      margin: 0 0 8px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .summary, .note {
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg-header);
+    }
+    .note { color: var(--text-muted); }
+    .anomalies { margin: 8px 0 0; padding-left: 18px; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td {
+      padding: 6px 8px;
+      border: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      background: var(--bg-header);
+      color: var(--text-muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      z-index: 1;
+    }
+    td code, .mono {
+      font-family: var(--vscode-editor-font-family);
+      font-size: 12px;
+    }
+    .hist {
+      display: grid;
+      gap: 3px;
+    }
+    .bar {
+      display: grid;
+      grid-template-columns: minmax(5rem, 1fr) minmax(2rem, auto);
+      gap: 6px;
+      align-items: center;
+    }
+    .bar-track {
+      height: 7px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--accent) 18%, transparent);
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      background: var(--accent);
+    }
+    .danger { color: var(--danger); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <h1>${escapeHtml(table)} Data Profile</h1>
+      <span class="note">${report.sampleRows.toLocaleString()} sampled rows</span>
+      <button id="copyJson">Copy JSON</button>
+    </header>
+    <main>
+      ${report.aiError ? `<section><div class="note">AI narrative unavailable: ${escapeHtml(report.aiError)}. Showing deterministic narrative.</div></section>` : ''}
+      <section>
+        <h2>Narrative</h2>
+        <div class="summary">
+          <div>${escapeHtml(report.narrative?.summary ?? `Profiled ${report.columns.length} columns.`)}</div>
+          ${report.narrative?.anomalies?.length ? `<ul class="anomalies">${report.narrative.anomalies.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
+        </div>
+      </section>
+      <section>
+        <h2>Columns</h2>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 16%">Column</th>
+              <th style="width: 12%">Type</th>
+              <th style="width: 9%">Null</th>
+              <th style="width: 9%">Distinct</th>
+              <th style="width: 16%">Min / Max</th>
+              <th style="width: 18%">Top Values</th>
+              <th style="width: 20%">Histogram</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${report.columns.map((column) => `
+              <tr>
+                <td><code>${escapeHtml(column.name)}</code></td>
+                <td>${escapeHtml(column.dataType ?? '')}</td>
+                <td class="${column.nullPct >= 50 ? 'danger' : ''}">${column.nullPct}%</td>
+                <td>${column.distinctCount.toLocaleString()}</td>
+                <td class="mono">${escapeHtml(column.min ?? '')}<br>${escapeHtml(column.max ?? '')}</td>
+                <td>${column.topValues.map((item) => `<div><span class="mono">${escapeHtml(item.value)}</span> <span class="note">${item.count}</span></div>`).join('')}</td>
+                <td><div class="hist">${histogramHtml(column.histogram)}</div></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    const data = ${scriptData};
+    document.getElementById('copyJson').addEventListener('click', () => {
+      vscode.postMessage({ type: 'copy', text: data.json });
+    });
+  </script>
+</body>
+</html>`;
+  }
 }
 
 function escapeHtml(value: string): string {
@@ -1506,4 +1983,16 @@ function escapeHtml(value: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function formatOptionalNumber(value: number | undefined): string {
+  return value === undefined ? 'unknown' : value.toLocaleString();
+}
+
+function histogramHtml(histogram: Array<{ label: string; count: number }>): string {
+  const max = Math.max(...histogram.map((bucket) => bucket.count), 1);
+  return histogram.map((bucket) => {
+    const pct = Math.max(3, Math.round((bucket.count / max) * 100));
+    return `<div class="bar"><span class="mono" title="${escapeHtml(bucket.label)}">${escapeHtml(bucket.label)}</span><span>${bucket.count}</span><span class="bar-track" style="grid-column: 1 / -1"><span class="bar-fill" style="width: ${pct}%"></span></span></div>`;
+  }).join('');
 }

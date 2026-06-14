@@ -2,14 +2,17 @@ import {
   ColumnInfo,
   ConnectionConfigWithPassword,
   DbConnection,
+  ExplainQueryOptions,
   ExecuteQueryParams,
   ForeignKeyInfo,
   IndexInfo,
   KeyInfo,
+  QueryPlanResult,
   QueryExecutionResult,
   TablePreviewOptions,
   QueryValidationResult,
   SchemaInfo,
+  TableStatsInfo,
   TableInfo,
   TestConnectionResult,
   ViewInfo
@@ -25,6 +28,7 @@ export interface DatabaseDriver {
   executeQuery(params: ExecuteQueryParams): Promise<QueryExecutionResult>;
   executeStatements(params: ExecuteQueryParams, statements: string[]): Promise<QueryExecutionResult[]>;
   validateQuery(params: ExecuteQueryParams): Promise<QueryValidationResult>;
+  explainQuery(params: ExecuteQueryParams, options?: ExplainQueryOptions): Promise<QueryPlanResult>;
   cancelQuery(executionId: string): Promise<void>;
 
   getSchemas(connectionId: string): Promise<SchemaInfo[]>;
@@ -36,4 +40,5 @@ export interface DatabaseDriver {
   getForeignKeys(connectionId: string, schema: string, table: string): Promise<ForeignKeyInfo[]>;
   getTablePreview(connectionId: string, schema: string, table: string, limit: number, options?: TablePreviewOptions): Promise<QueryExecutionResult>;
   getTableDDL(connectionId: string, schema: string, table: string): Promise<string>;
+  getTableStats(connectionId: string, schema: string, table: string): Promise<TableStatsInfo>;
 }

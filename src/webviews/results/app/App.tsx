@@ -4,12 +4,14 @@ import { vscode } from './vscode';
 import { ResultsTabs } from './components/ResultsTabs';
 import { ResultToolbar } from './components/ResultToolbar';
 import { ResultGrid } from './components/ResultGrid';
+import { ChartView } from './components/ChartView';
+import { PlanView } from './components/PlanView';
 import { MessagesPanel } from './components/MessagesPanel';
 import { StatusBar } from './components/StatusBar';
 import { QueryResultTab } from '../../../types';
 
 export function App() {
-  const { tabs, activeTabId, setTabs, upsertTab } = useResultsStore();
+  const { tabs, activeTabId, viewModes, setTabs, upsertTab, setViewMode } = useResultsStore();
   const active = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const [activeResultSetIndex, setActiveResultSetIndex] = useState(0);
   const [columnFiltersVisible, setColumnFiltersVisible] = useState(true);
@@ -42,6 +44,9 @@ export function App() {
 
   const resultSet = active.resultSets[activeResultSetIndex] ?? active.resultSets[active.activeResultSetIndex] ?? active.resultSets[0];
   const isRunning = active.executionStatus === 'queued' || active.executionStatus === 'running';
+  const viewMode = viewModes[active.id] ?? 'grid';
+  const isPlanTab = !!active.plan;
+  const canChart = !isPlanTab && !!resultSet?.rows.length && (resultSet.fields.length >= 2);
 
   return (
     <main className={`app ${active.resultSets.length > 1 ? 'with-resultset-tabs' : ''}`}>
@@ -49,7 +54,11 @@ export function App() {
       <ResultToolbar
         tab={active}
         resultSet={resultSet}
+        viewMode={viewMode}
+        canChart={canChart}
+        isPlanTab={isPlanTab}
         columnFiltersVisible={columnFiltersVisible}
+        onSetViewMode={(mode) => setViewMode(active.id, mode)}
         onToggleColumnFilters={() => setColumnFiltersVisible((visible) => !visible)}
       />
       {active.resultSets.length > 1 && (
@@ -68,7 +77,15 @@ export function App() {
           ))}
         </div>
       )}
-      {isRunning ? <RunningPanel /> : active.executionStatus === 'failed' ? <MessagesPanel tab={active} /> : <ResultGrid tab={active} resultSet={resultSet} columnFiltersVisible={columnFiltersVisible} />}
+      {isRunning
+        ? <RunningPanel />
+        : active.executionStatus === 'failed'
+          ? <MessagesPanel tab={active} />
+          : active.plan
+            ? <PlanView plan={active.plan} />
+          : viewMode === 'chart'
+            ? <ChartView resultSet={resultSet} />
+            : <ResultGrid tab={active} resultSet={resultSet} columnFiltersVisible={columnFiltersVisible} />}
       <StatusBar tab={active} resultSet={resultSet} />
     </main>
   );

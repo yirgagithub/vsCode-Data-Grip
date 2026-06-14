@@ -4,6 +4,7 @@ exports.PostgresDriver = void 0;
 const pg_1 = require("pg");
 const crypto_1 = require("crypto");
 const identifiers_1 = require("../../utils/identifiers");
+const queryPlanService_1 = require("../../services/queryPlanService");
 class PostgresDriver {
     id = 'postgres';
     displayName = 'PostgreSQL';
@@ -129,6 +130,18 @@ class PostgresDriver {
             return { ok: false, error: this.toQueryError(error) };
         }
     }
+    async explainQuery(params, options = {}) {
+        const pool = this.requirePool(params.connectionId);
+        const sql = params.sql.trim().replace(/;+\s*$/, '');
+        if (!sql || !this.canExplain(sql)) {
+            throw new Error('Only SELECT, WITH, INSERT, UPDATE, DELETE, and MERGE statements can be explained.');
+        }
+        const explainOptions = options.analyze ? 'analyze, format json' : 'format json';
+        const result = await pool.query(`explain (${explainOptions}) ${sql}`);
+        const row = result.rows[0];
+        const value = row?.['QUERY PLAN'] ?? row?.['query_plan'] ?? Object.values(row ?? {})[0];
+        return (0, queryPlanService_1.normalizeExplainJsonPlan)(value, options.analyze === true);
+    }
     async cancelQuery(executionId) {
         const active = this.activeExecutions.get(executionId);
         if (!active?.processId) {
@@ -237,6 +250,49 @@ class PostgresDriver {
         });
         return `create table ${(0, identifiers_1.qualifiedName)(schema, table)} (\n${lines.join(',\n')}\n);`;
     }
+    async getTableStats(connectionId, schema, table) {
+        const pool = this.requirePool(connectionId);
+        const tableResult = await pool.query(`select s.seq_scan as "seqScan",
+              s.idx_scan as "idxScan",
+              s.n_live_tup as "liveRows",
+              s.n_dead_tup as "deadRows",
+              s.last_vacuum as "lastVacuum",
+              s.last_autovacuum as "lastAutoVacuum",
+              s.last_analyze as "lastAnalyze",
+              s.last_autoanalyze as "lastAutoAnalyze",
+              c.reltuples as "rowEstimate"
+       from pg_stat_user_tables s
+       left join pg_class c on c.oid = s.relid
+       where s.schemaname = $1 and s.relname = $2`, [schema, table]);
+        const columnResult = await pool.query(`select attname as name,
+              null_frac as "nullFraction",
+              n_distinct as "nDistinct",
+              correlation
+       from pg_stats
+       where schemaname = $1 and tablename = $2
+       order by attname`, [schema, table]);
+        const row = tableResult.rows[0] ?? {};
+        return {
+            schema,
+            table,
+            databaseType: this.id,
+            rowEstimate: this.numberFromDb(row.rowEstimate),
+            seqScan: this.numberFromDb(row.seqScan),
+            idxScan: this.numberFromDb(row.idxScan),
+            liveRows: this.numberFromDb(row.liveRows),
+            deadRows: this.numberFromDb(row.deadRows),
+            lastVacuum: this.dateFromDb(row.lastVacuum),
+            lastAutoVacuum: this.dateFromDb(row.lastAutoVacuum),
+            lastAnalyze: this.dateFromDb(row.lastAnalyze),
+            lastAutoAnalyze: this.dateFromDb(row.lastAutoAnalyze),
+            columns: columnResult.rows.map((column) => ({
+                name: String(column.name),
+                nullFraction: this.numberFromDb(column.nullFraction),
+                nDistinct: this.numberFromDb(column.nDistinct),
+                correlation: this.numberFromDb(column.correlation)
+            }))
+        };
+    }
     requirePool(connectionId) {
         const pool = this.pools.get(connectionId);
         if (!pool) {
@@ -294,6 +350,19 @@ class PostgresDriver {
     columnsFromIndexDefinition(definition) {
         const match = definition.match(/\((.*)\)/);
         return match ? match[1].split(',').map((part) => part.trim().replace(/^"|"$/g, '')) : [];
+    }
+    numberFromDb(value) {
+        if (value === null || value === undefined) {
+            return undefined;
+        }
+        const next = typeof value === 'number' ? value : Number(value);
+        return Number.isFinite(next) ? next : undefined;
+    }
+    dateFromDb(value) {
+        if (!value) {
+            return undefined;
+        }
+        return value instanceof Date ? value.toISOString() : String(value);
     }
     canApplyClientLimit(sql) {
         const normalized = sql.trim().replace(/^--.*$/gm, '').trim().toLowerCase();

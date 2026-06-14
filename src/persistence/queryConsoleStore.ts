@@ -45,7 +45,7 @@ export class QueryConsoleStore {
     }
 
     const uri = await this.createConsoleUri(connection);
-    await this.ensureFile(uri, initialSql || this.defaultContent(connection, uri));
+    await this.ensureFile(uri, initialSql || this.defaultContent());
     const now = Date.now();
     if (connection) {
       await this.save({
@@ -181,10 +181,8 @@ export class QueryConsoleStore {
     }
   }
 
-  private defaultContent(connection: ConnectionConfig | undefined, uri?: vscode.Uri): string {
-    return connection
-      ? `-- ${connection.name} / ${connection.database}\n-- Schema: ${connection.defaultSchema ?? 'public'}\n\nselect *\nfrom \nlimit 100;\n`
-      : `-- SQL Console\n\n`;
+  private defaultContent(): string {
+    return '';
   }
 
   private safeName(value: string): string {

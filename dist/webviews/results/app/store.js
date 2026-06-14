@@ -6,6 +6,7 @@ const vscode_1 = require("./vscode");
 exports.useResultsStore = (0, zustand_1.create)((set) => ({
     tabs: [],
     activeTabId: undefined,
+    viewModes: {},
     setTabs: (tabs, activeTabId) => set({ tabs, activeTabId: activeTabId ?? tabs[0]?.id }),
     upsertTab: (tab, active) => set((state) => {
         const exists = state.tabs.some((item) => item.id === tab.id);
@@ -20,7 +21,14 @@ exports.useResultsStore = (0, zustand_1.create)((set) => ({
     },
     closeTab: (tabId) => {
         vscode_1.vscode.postMessage({ type: 'closeTab', tabId });
-        set((state) => ({ tabs: state.tabs.filter((tab) => tab.id !== tabId), activeTabId: state.tabs.find((tab) => tab.id !== tabId)?.id }));
+        set((state) => {
+            const { [tabId]: _closed, ...viewModes } = state.viewModes;
+            return {
+                tabs: state.tabs.filter((tab) => tab.id !== tabId),
+                activeTabId: state.tabs.find((tab) => tab.id !== tabId)?.id,
+                viewModes
+            };
+        });
     },
     pinTab: (tabId, pinned) => {
         vscode_1.vscode.postMessage({ type: 'pinTab', tabId, pinned });
@@ -29,6 +37,9 @@ exports.useResultsStore = (0, zustand_1.create)((set) => ({
     renameTab: (tabId, title) => {
         vscode_1.vscode.postMessage({ type: 'renameTab', tabId, title });
         set((state) => ({ tabs: state.tabs.map((tab) => tab.id === tabId ? { ...tab, customTitle: title } : tab) }));
+    },
+    setViewMode: (tabId, mode) => {
+        set((state) => ({ viewModes: { ...state.viewModes, [tabId]: mode } }));
     }
 }));
 //# sourceMappingURL=store.js.map

@@ -3,6 +3,9 @@ tests/**
 docs/**
 .vscode-data-grip/**
 **/*.vsix
+.vscode-test/**
+.vscode-test.mjs
+e2e/**
 **/*.map
 tsconfig.json
 vite.config.ts

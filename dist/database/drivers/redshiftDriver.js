@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RedshiftDriver = void 0;
 const postgresDriver_1 = require("./postgresDriver");
+const queryPlanService_1 = require("../../services/queryPlanService");
 class RedshiftDriver extends postgresDriver_1.PostgresDriver {
     id = 'redshift';
     displayName = 'Amazon Redshift';
@@ -65,6 +66,64 @@ class RedshiftDriver extends postgresDriver_1.PostgresDriver {
        order by ordinal_position`, [schema, table]);
         return result.rows;
     }
+    async getTableStats(connectionId, schema, table) {
+        const pool = this.requirePool(connectionId);
+        try {
+            const result = await pool.query(`select diststyle as "distStyle",
+                sortkey1 as "sortKey1",
+                sortkey_num as "sortKeyNum",
+                size as "sizeMb",
+                tbl_rows as "rowCount",
+                skew_rows as "skewRows",
+                unsorted as "unsortedPct",
+                stats_off as "statsOffPct",
+                encoded as "encoded"
+         from svv_table_info
+         where "schema" = $1 and "table" = $2`, [schema, table]);
+            const row = result.rows[0] ?? {};
+            return {
+                schema,
+                table,
+                databaseType: this.id,
+                rowEstimate: this.numberFromDb(row.rowCount),
+                columns: [],
+                redshift: {
+                    distStyle: optionalString(row.distStyle),
+                    sortKey1: optionalString(row.sortKey1),
+                    sortKeyNum: this.numberFromDb(row.sortKeyNum),
+                    sizeMb: this.numberFromDb(row.sizeMb),
+                    rowCount: this.numberFromDb(row.rowCount),
+                    skewRows: this.numberFromDb(row.skewRows),
+                    unsortedPct: this.numberFromDb(row.unsortedPct),
+                    statsOffPct: this.numberFromDb(row.statsOffPct),
+                    encoded: optionalString(row.encoded)
+                }
+            };
+        }
+        catch {
+            const fallback = await super.getTableStats(connectionId, schema, table);
+            return { ...fallback, databaseType: this.id };
+        }
+    }
+    async explainQuery(params, options = {}) {
+        try {
+            return await super.explainQuery(params, options);
+        }
+        catch (error) {
+            if (options.analyze) {
+                throw error;
+            }
+            const sql = params.sql.trim().replace(/;+\s*$/, '');
+            if (!/^(select|with|insert|update|delete|merge)\b/i.test(sql)) {
+                throw error;
+            }
+            const result = await this.requirePool(params.connectionId).query(`explain ${sql}`);
+            const rawText = result.rows
+                .map((row) => Object.values(row).map((value) => String(value)).join(' '))
+                .join('\n');
+            return (0, queryPlanService_1.textExplainPlan)(rawText, false);
+        }
+    }
     shouldRetryWithoutSsl(_config, _error) {
         return false;
     }
@@ -76,4 +135,11 @@ class RedshiftDriver extends postgresDriver_1.PostgresDriver {
     }
 }
 exports.RedshiftDriver = RedshiftDriver;
+function optionalString(value) {
+    if (value === null || value === undefined) {
+        return undefined;
+    }
+    const next = String(value).trim();
+    return next || undefined;
+}
 //# sourceMappingURL=redshiftDriver.js.map

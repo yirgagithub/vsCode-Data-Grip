@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { splitSqlStatements } from '../database/sqlSplitter';
+import { extractSqlAliases } from './sqlRelationParser';
 
 export type SqlQueryKind = 'statement' | 'cte' | 'subquery';
 
@@ -467,16 +468,9 @@ export class SqlQueryTreeService {
   }
 
   private extractAliases(sql: string): string[] {
-    const aliases: string[] = [];
-    const regex = /\b(?:from|join|update|into)\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)\s*(?:as\s+)?(?!(?:where|join|left|right|inner|outer|full|cross|on|using|group|order|limit|set)\b)(?:"([^"]+)"|(\w+))?/gi;
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(sql)) !== null) {
-      const alias = match[2] ?? match[3];
-      if (alias) {
-        aliases.push(this.stripQuotes(alias));
-      }
-    }
-    return aliases;
+    return extractSqlAliases(sql)
+      .filter((alias) => alias.explicitAlias)
+      .map((alias) => alias.alias);
   }
 
   private matchWord(text: string, index: number, word: string): boolean {

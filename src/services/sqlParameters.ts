@@ -1,0 +1,233 @@
+export type SqlParameterKind = 'brace' | 'colon';
+
+export interface SqlParameter {
+  name: string;
+  placeholder: string;
+  kind: SqlParameterKind;
+  start: number;
+  end: number;
+  inSingleQuotedString: boolean;
+}
+
+export function findSqlParameters(sql: string): SqlParameter[] {
+  const parameters: SqlParameter[] = [];
+  let single = false;
+  let double = false;
+  let lineComment = false;
+  let blockComment = false;
+  let dollarTag: string | undefined;
+
+  for (let index = 0; index < sql.length;) {
+    const char = sql[index];
+    const next = sql[index + 1];
+
+    if (lineComment) {
+      lineComment = char !== '\n';
+      index += 1;
+      continue;
+    }
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        blockComment = false;
+        index += 2;
+      } else {
+        index += 1;
+      }
+      continue;
+    }
+    if (dollarTag) {
+      if (sql.startsWith(dollarTag, index)) {
+        index += dollarTag.length;
+        dollarTag = undefined;
+      } else {
+        index += 1;
+      }
+      continue;
+    }
+
+    const brace = readBraceParameter(sql, index, single);
+    if (brace) {
+      parameters.push(brace);
+      index = brace.end;
+      continue;
+    }
+    const colon = readColonParameter(sql, index, single);
+    if (colon) {
+      parameters.push(colon);
+      index = colon.end;
+      continue;
+    }
+
+    if (single) {
+      if (char === '\'' && next === '\'') {
+        index += 2;
+      } else {
+        single = char !== '\'';
+        index += 1;
+      }
+      continue;
+    }
+    if (double) {
+      if (char === '"' && next === '"') {
+        index += 2;
+      } else {
+        double = char !== '"';
+        index += 1;
+      }
+      continue;
+    }
+
+    if (char === '-' && next === '-') {
+      lineComment = true;
+      index += 2;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      blockComment = true;
+      index += 2;
+      continue;
+    }
+    if (char === '\'') {
+      single = true;
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      double = true;
+      index += 1;
+      continue;
+    }
+    if (char === '$') {
+      const tag = sql.slice(index).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)?.[0];
+      if (tag) {
+        dollarTag = tag;
+        index += tag.length;
+        continue;
+      }
+    }
+
+    index += 1;
+  }
+
+  return parameters;
+}
+
+export function hasSqlParameters(sql: string): boolean {
+  return findSqlParameters(sql).length > 0;
+}
+
+export function uniqueSqlParameterNames(parameters: SqlParameter[]): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const parameter of parameters) {
+    if (!seen.has(parameter.name)) {
+      seen.add(parameter.name);
+      names.push(parameter.name);
+    }
+  }
+  return names;
+}
+
+export function applySqlParameterValues(sql: string, values: Record<string, string>): string {
+  const parameters = findSqlParameters(sql);
+  let nextSql = sql;
+  for (const parameter of [...parameters].reverse()) {
+    if (!(parameter.name in values)) {
+      throw new Error(`Missing SQL parameter value for ${parameter.name}.`);
+    }
+    const replacement = sqlParameterReplacement(values[parameter.name], parameter.inSingleQuotedString);
+    nextSql = `${nextSql.slice(0, parameter.start)}${replacement}${nextSql.slice(parameter.end)}`;
+  }
+  return nextSql;
+}
+
+export function sqlParameterSpansContain(parameters: SqlParameter[], start: number, end = start + 1): boolean {
+  return parameters.some((parameter) => start >= parameter.start && end <= parameter.end);
+}
+
+function readBraceParameter(sql: string, start: number, inSingleQuotedString: boolean): SqlParameter | undefined {
+  if (sql[start] !== '{') {
+    return undefined;
+  }
+  const match = sql.slice(start).match(/^\{([A-Za-z_][A-Za-z0-9_]*)\}/);
+  if (!match) {
+    return undefined;
+  }
+  return {
+    name: match[1],
+    placeholder: match[0],
+    kind: 'brace',
+    start,
+    end: start + match[0].length,
+    inSingleQuotedString
+  };
+}
+
+function readColonParameter(sql: string, start: number, inSingleQuotedString: boolean): SqlParameter | undefined {
+  if (sql[start] !== ':' || sql[start - 1] === ':' || !isIdentifierStart(sql[start + 1])) {
+    return undefined;
+  }
+  let end = start + 2;
+  while (isIdentifierPart(sql[end])) {
+    end += 1;
+  }
+  const name = sql.slice(start + 1, end);
+  return {
+    name,
+    placeholder: sql.slice(start, end),
+    kind: 'colon',
+    start,
+    end,
+    inSingleQuotedString
+  };
+}
+
+function sqlParameterReplacement(value: string, inSingleQuotedString: boolean): string {
+  if (inSingleQuotedString) {
+    return escapeSingleQuotedSql(value);
+  }
+  const trimmed = value.trim();
+  if (/^sql:/i.test(trimmed)) {
+    return trimmed.slice(4).trim();
+  }
+  if (/^null$/i.test(trimmed)) {
+    return 'NULL';
+  }
+  if (/^(true|false)$/i.test(trimmed)) {
+    return trimmed.toUpperCase();
+  }
+  if (/^[+-]?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?$/i.test(trimmed)) {
+    return trimmed;
+  }
+  if (isSingleQuotedSqlLiteral(trimmed)) {
+    return trimmed;
+  }
+  return `'${escapeSingleQuotedSql(value)}'`;
+}
+
+function isSingleQuotedSqlLiteral(value: string): boolean {
+  if (!value.startsWith('\'') || !value.endsWith('\'') || value.length < 2) {
+    return false;
+  }
+  for (let index = 1; index < value.length - 1; index += 1) {
+    if (value[index] === '\'' && value[index + 1] !== '\'') {
+      return false;
+    }
+    if (value[index] === '\'' && value[index + 1] === '\'') {
+      index += 1;
+    }
+  }
+  return true;
+}
+
+function escapeSingleQuotedSql(value: string): string {
+  return value.replace(/'/g, '\'\'');
+}
+
+function isIdentifierStart(char: string | undefined): boolean {
+  return !!char && /[A-Za-z_]/.test(char);
+}
+
+function isIdentifierPart(char: string | undefined): boolean {
+  return !!char && /[A-Za-z0-9_]/.test(char);
+}
