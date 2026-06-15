@@ -15,6 +15,9 @@ vite.config.ts
 .claude/**
 .gstack/**
 CLAUDE.md
+goa.txt
+goal*.txt
+goal*.text
 **/*.ts
 !dist/**/*.js
 node_modules/@types/**

@@ -116,6 +116,7 @@ export function activate(context: vscode.ExtensionContext): void {
     async (tab, resultSetIndex) => compareResultTabs(tab, resultSetIndex)
   );
   queryMap = new QueryMapProvider(
+    context.extensionUri,
     sectionService,
     async (documentUri, section) => {
       await highlighter.reveal(documentUri, rangeToPlain(section.range), section.sql);

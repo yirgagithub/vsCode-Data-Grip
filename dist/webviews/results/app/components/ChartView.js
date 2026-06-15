@@ -38,6 +38,7 @@ const jsx_runtime_1 = require("react/jsx-runtime");
 const react_1 = require("react");
 const Plot = __importStar(require("@observablehq/plot"));
 const format_1 = require("../format");
+const Icon_1 = require("./Icon");
 const NUMERIC_TYPE_IDS = new Set([20, 21, 23, 700, 701, 790, 1700]);
 const TEMPORAL_TYPE_IDS = new Set([1082, 1083, 1114, 1184, 1266]);
 const STRING_TYPE_IDS = new Set([18, 19, 25, 1042, 1043]);
@@ -93,7 +94,7 @@ function ChartView({ resultSet }) {
         return (0, jsx_runtime_1.jsx)("section", { className: "grid-empty", children: "No result set." });
     }
     if (!spec) {
-        return ((0, jsx_runtime_1.jsx)("section", { className: "chart-empty", children: (0, jsx_runtime_1.jsxs)("div", { className: "empty-panel", children: [(0, jsx_runtime_1.jsx)("span", { className: "empty-icon", children: "\u25C7" }), (0, jsx_runtime_1.jsx)("span", { children: "No chartable columns in this result set" })] }) }));
+        return ((0, jsx_runtime_1.jsx)("section", { className: "chart-empty", children: (0, jsx_runtime_1.jsxs)("div", { className: "empty-panel", children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "graph-line", className: "empty-icon" }), (0, jsx_runtime_1.jsx)("span", { children: "No chartable columns in this result set" })] }) }));
     }
     return ((0, jsx_runtime_1.jsxs)("section", { className: "chart-shell", "aria-label": spec.title, children: [(0, jsx_runtime_1.jsxs)("div", { className: "chart-header", children: [(0, jsx_runtime_1.jsx)("span", { className: `chart-kind ${spec.kind}`, children: spec.kind }), (0, jsx_runtime_1.jsx)("strong", { children: spec.title }), (0, jsx_runtime_1.jsxs)("span", { className: "muted", children: [spec.data.length.toLocaleString(), " points"] })] }), (0, jsx_runtime_1.jsx)("div", { ref: host, className: "chart-canvas" })] }));
 }

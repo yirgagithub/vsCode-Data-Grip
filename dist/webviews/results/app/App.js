@@ -44,6 +44,7 @@ const ResultGrid_1 = require("./components/ResultGrid");
 const PlanView_1 = require("./components/PlanView");
 const MessagesPanel_1 = require("./components/MessagesPanel");
 const StatusBar_1 = require("./components/StatusBar");
+const Icon_1 = require("./components/Icon");
 const ChartView = (0, react_1.lazy)(() => Promise.resolve().then(() => __importStar(require('./components/ChartView'))).then((module) => ({ default: module.ChartView })));
 function App() {
     const { tabs, activeTabId, viewModes, setTabs, upsertTab, setViewMode } = (0, store_1.useResultsStore)();
@@ -65,14 +66,14 @@ function App() {
         return () => window.removeEventListener('message', listener);
     }, [setTabs, upsertTab]);
     if (!active) {
-        return ((0, jsx_runtime_1.jsx)("main", { className: "empty app-empty", children: (0, jsx_runtime_1.jsxs)("div", { className: "empty-panel", children: [(0, jsx_runtime_1.jsx)("span", { className: "empty-icon", children: "\u25A6" }), (0, jsx_runtime_1.jsx)("span", { children: "Run a query to see results" })] }) }));
+        return ((0, jsx_runtime_1.jsx)("main", { className: "empty app-empty", children: (0, jsx_runtime_1.jsxs)("div", { className: "empty-panel", children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "table", className: "empty-icon" }), (0, jsx_runtime_1.jsx)("span", { children: "Run a query to see results" })] }) }));
     }
     const resultSet = active.resultSets[activeResultSetIndex] ?? active.resultSets[active.activeResultSetIndex] ?? active.resultSets[0];
     const isRunning = active.executionStatus === 'queued' || active.executionStatus === 'running';
     const viewMode = viewModes[active.id] ?? 'grid';
     const isPlanTab = !!active.plan;
     const canChart = !isPlanTab && !!resultSet?.rows.length && (resultSet.fields.length >= 2);
-    return ((0, jsx_runtime_1.jsxs)("main", { className: `app ${active.resultSets.length > 1 ? 'with-resultset-tabs' : ''}`, children: [(0, jsx_runtime_1.jsx)(ResultsTabs_1.ResultsTabs, { tabs: tabs, activeTabId: active.id }), (0, jsx_runtime_1.jsx)(ResultToolbar_1.ResultToolbar, { tab: active, resultSet: resultSet, resultSetIndex: activeResultSetIndex, viewMode: viewMode, canChart: canChart, isPlanTab: isPlanTab, columnFiltersVisible: columnFiltersVisible, onSetViewMode: (mode) => setViewMode(active.id, mode), onToggleColumnFilters: () => setColumnFiltersVisible((visible) => !visible) }), active.resultSets.length > 1 && ((0, jsx_runtime_1.jsx)("div", { className: "resultset-tabs", children: active.resultSets.map((set, index) => ((0, jsx_runtime_1.jsxs)("button", { className: index === activeResultSetIndex ? 'active' : '', onClick: () => setActiveResultSetIndex(index), title: `${set.command ?? 'Result'} - ${set.rowCount} rows`, children: [(0, jsx_runtime_1.jsx)("span", { className: "resultset-icon", children: "\u25A6" }), (0, jsx_runtime_1.jsx)("span", { children: set.command ?? 'Result' }), (0, jsx_runtime_1.jsxs)("span", { className: "resultset-count", children: [set.rowCount.toLocaleString(), " rows"] })] }, set.id))) })), isRunning
+    return ((0, jsx_runtime_1.jsxs)("main", { className: `app ${active.resultSets.length > 1 ? 'with-resultset-tabs' : ''}`, children: [(0, jsx_runtime_1.jsx)(ResultsTabs_1.ResultsTabs, { tabs: tabs, activeTabId: active.id }), (0, jsx_runtime_1.jsx)(ResultToolbar_1.ResultToolbar, { tab: active, resultSet: resultSet, resultSetIndex: activeResultSetIndex, viewMode: viewMode, canChart: canChart, isPlanTab: isPlanTab, columnFiltersVisible: columnFiltersVisible, onSetViewMode: (mode) => setViewMode(active.id, mode), onToggleColumnFilters: () => setColumnFiltersVisible((visible) => !visible) }), active.resultSets.length > 1 && ((0, jsx_runtime_1.jsx)("div", { className: "resultset-tabs", children: active.resultSets.map((set, index) => ((0, jsx_runtime_1.jsxs)("button", { className: index === activeResultSetIndex ? 'active' : '', onClick: () => setActiveResultSetIndex(index), title: `${set.command ?? 'Result'} - ${set.rowCount} rows`, children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "table", className: "resultset-icon" }), (0, jsx_runtime_1.jsx)("span", { children: set.command ?? 'Result' }), (0, jsx_runtime_1.jsxs)("span", { className: "resultset-count", children: [set.rowCount.toLocaleString(), " rows"] })] }, set.id))) })), isRunning
                 ? (0, jsx_runtime_1.jsx)(RunningPanel, {})
                 : active.executionStatus === 'failed'
                     ? (0, jsx_runtime_1.jsx)(MessagesPanel_1.MessagesPanel, { tab: active })

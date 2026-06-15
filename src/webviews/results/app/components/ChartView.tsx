@@ -3,6 +3,7 @@ import type { RefObject } from 'react';
 import * as Plot from '@observablehq/plot';
 import { QueryField, ResultSet } from '../../../../types';
 import { formatValue } from '../format';
+import { Icon } from './Icon';
 
 type ChartKind = 'line' | 'bar' | 'scatter';
 
@@ -76,7 +77,7 @@ export function ChartView({ resultSet }: { resultSet?: ResultSet }) {
     return (
       <section className="chart-empty">
         <div className="empty-panel">
-          <span className="empty-icon">◇</span>
+          <Icon name="graph-line" className="empty-icon" />
           <span>No chartable columns in this result set</span>
         </div>
       </section>

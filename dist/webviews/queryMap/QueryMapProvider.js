@@ -37,6 +37,7 @@ exports.QueryMapProvider = void 0;
 const vscode = __importStar(require("vscode"));
 const PROJECT_SQL_SESSION_PREFIX = 'project-sql:';
 class QueryMapProvider {
+    extensionUri;
     sectionService;
     revealSection;
     runSection;
@@ -60,7 +61,8 @@ class QueryMapProvider {
     activeConnectionIds = new Set();
     runningDocumentUris = new Set();
     resultTabs = [];
-    constructor(sectionService, revealSection, runSection, getHistoryItems, openHistoryItem, setConsolePinned, untrackConsole, moveConsole, touchConsoleDocument, updateHistoryItem, deleteHistoryItem, clearActiveSessions, clearHistoryItems, refreshData) {
+    constructor(extensionUri, sectionService, revealSection, runSection, getHistoryItems, openHistoryItem, setConsolePinned, untrackConsole, moveConsole, touchConsoleDocument, updateHistoryItem, deleteHistoryItem, clearActiveSessions, clearHistoryItems, refreshData) {
+        this.extensionUri = extensionUri;
         this.sectionService = sectionService;
         this.revealSection = revealSection;
         this.runSection = runSection;
@@ -414,12 +416,14 @@ class QueryMapProvider {
     }
     html(webview) {
         const nonce = Date.now().toString();
+        const codicons = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'codicons', 'codicon.css'));
         return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="${codicons}" rel="stylesheet">
   <style>
     :root {
       color-scheme: light dark;
@@ -449,6 +453,7 @@ class QueryMapProvider {
       line-height: 1.35;
     }
     * { box-sizing: border-box; }
+    .codicon[class*='codicon-'] { font-size: var(--icon-size); line-height: 1; color: inherit; vertical-align: middle; }
     body {
       margin: 0;
       color: var(--text-main);
@@ -463,6 +468,10 @@ class QueryMapProvider {
       border: 1px solid transparent;
       border-radius: var(--radius-sm);
       cursor: pointer;
+      transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; animation-duration: 0.001ms !important; }
     }
     button:hover:not(:disabled) {
       background: var(--bg-hover);
@@ -833,8 +842,8 @@ class QueryMapProvider {
       toolbar.className = 'toolbar';
       toolbar.setAttribute('role', 'toolbar');
       toolbar.setAttribute('aria-label', 'Query session actions');
-      toolbar.appendChild(icon('+', 'New query console', () => vscode.postMessage({ type: 'newConsole' })));
-      toolbar.appendChild(icon('↻', 'Refresh', () => vscode.postMessage({ type: 'refreshQuerySessions' })));
+      toolbar.appendChild(icon('add', 'New query console', () => vscode.postMessage({ type: 'newConsole' })));
+      toolbar.appendChild(icon('refresh', 'Refresh', () => vscode.postMessage({ type: 'refreshQuerySessions' })));
       toolbar.appendChild(toolbarIcon('expand-all', 'Expand all', () => setAllExpanded(true)));
       toolbar.appendChild(toolbarIcon('collapse-all', 'Collapse all', () => setAllExpanded(false)));
       header.appendChild(toolbar);
@@ -933,7 +942,7 @@ class QueryMapProvider {
         vscode.postMessage({ type: 'openConsole', consoleId: item.id, documentUri: item.documentUri });
       };
       row.oncontextmenu = (event) => openMenu(event, consoleActions(item));
-      row.appendChild(icon('⋯', 'Console actions', (event) => openMenu(event, consoleActions(item)), item.pinned ? 'row-action pin' : 'row-action'));
+      row.appendChild(icon('ellipsis', 'Console actions', (event) => openMenu(event, consoleActions(item)), item.pinned ? 'row-action pin' : 'row-action'));
       return row;
     }
 
@@ -946,7 +955,7 @@ class QueryMapProvider {
         vscode.postMessage({ type: 'openHistory', historyId: item.id });
       };
       row.oncontextmenu = (event) => openMenu(event, historyActions(item));
-      row.appendChild(icon('⋯', 'Console history actions', (event) => openMenu(event, historyActions(item)), item.favorite ? 'row-action pin' : 'row-action'));
+      row.appendChild(icon('ellipsis', 'Console history actions', (event) => openMenu(event, historyActions(item)), item.favorite ? 'row-action pin' : 'row-action'));
       return row;
     }
 
@@ -1024,7 +1033,7 @@ class QueryMapProvider {
       row.appendChild(status === 'running' ? loader() : statusDot(status || 'completed'));
       const iconNode = document.createElement('span');
       iconNode.className = 'session-icon';
-      iconNode.textContent = '▣';
+      iconNode.innerHTML = '<i class="codicon codicon-output"></i>';
       row.appendChild(iconNode);
       const nameNode = document.createElement('span');
       nameNode.className = 'session-name';
@@ -1040,22 +1049,22 @@ class QueryMapProvider {
     function consoleActions(item) {
       if (item.projectFile) {
         return [
-          { icon: '×', label: 'Remove from active session', run: () => vscode.postMessage({ type: 'untrackConsole', consoleId: item.id }) }
+          { icon: 'close', label: 'Remove from active session', run: () => vscode.postMessage({ type: 'untrackConsole', consoleId: item.id }) }
         ];
       }
       return [
-        { icon: '⌖', label: item.pinned ? 'Unpin console' : 'Pin console', run: () => vscode.postMessage({ type: 'togglePin', consoleId: item.id, pinned: !item.pinned }) },
-        { icon: '↑', label: 'Move up', run: () => vscode.postMessage({ type: 'moveConsole', consoleId: item.id, direction: 'up' }) },
-        { icon: '↓', label: 'Move down', run: () => vscode.postMessage({ type: 'moveConsole', consoleId: item.id, direction: 'down' }) },
-        { icon: '×', label: 'Untrack console', shortcut: 'Delete', run: () => vscode.postMessage({ type: 'untrackConsole', consoleId: item.id }) }
+        { icon: item.pinned ? 'pinned' : 'pin', label: item.pinned ? 'Unpin console' : 'Pin console', run: () => vscode.postMessage({ type: 'togglePin', consoleId: item.id, pinned: !item.pinned }) },
+        { icon: 'arrow-up', label: 'Move up', run: () => vscode.postMessage({ type: 'moveConsole', consoleId: item.id, direction: 'up' }) },
+        { icon: 'arrow-down', label: 'Move down', run: () => vscode.postMessage({ type: 'moveConsole', consoleId: item.id, direction: 'down' }) },
+        { icon: 'trash', label: 'Untrack console', shortcut: 'Delete', run: () => vscode.postMessage({ type: 'untrackConsole', consoleId: item.id }) }
       ];
     }
 
     function historyActions(item) {
       return [
-        { icon: '⌖', label: item.favorite ? 'Remove favorite' : 'Favorite', run: () => vscode.postMessage({ type: 'toggleFavoriteHistory', historyId: item.id, favorite: !item.favorite }) },
-        { icon: '⧉', label: 'Copy SQL', shortcut: 'Ctrl+C', run: () => vscode.postMessage({ type: 'copyHistory', historyId: item.id }) },
-        { icon: '×', label: 'Delete history item', shortcut: 'Delete', run: () => vscode.postMessage({ type: 'deleteHistory', historyId: item.id }) }
+        { icon: item.favorite ? 'star-full' : 'star-empty', label: item.favorite ? 'Remove favorite' : 'Favorite', run: () => vscode.postMessage({ type: 'toggleFavoriteHistory', historyId: item.id, favorite: !item.favorite }) },
+        { icon: 'copy', label: 'Copy SQL', shortcut: 'Ctrl+C', run: () => vscode.postMessage({ type: 'copyHistory', historyId: item.id }) },
+        { icon: 'trash', label: 'Delete history item', shortcut: 'Delete', run: () => vscode.postMessage({ type: 'deleteHistory', historyId: item.id }) }
       ];
     }
 
@@ -1068,7 +1077,7 @@ class QueryMapProvider {
       for (const action of actions) {
         const item = document.createElement('button');
         item.type = 'button';
-        item.innerHTML = '<span>' + escapeHtml(action.icon || '') + '</span><span>' + escapeHtml(action.label) + '</span><kbd>' + escapeHtml(action.shortcut || '') + '</kbd>';
+        item.innerHTML = '<i class="codicon codicon-' + (action.icon || 'blank') + '"></i><span>' + escapeHtml(action.label) + '</span><kbd>' + escapeHtml(action.shortcut || '') + '</kbd>';
         item.disabled = action.disabled === true;
         item.onclick = () => {
           if (action.disabled === true) return;
@@ -1094,13 +1103,13 @@ class QueryMapProvider {
       }
     }
 
-    function icon(text, title, onclick, extraClass) {
+    function icon(name, title, onclick, extraClass) {
       const button = document.createElement('button');
       button.className = 'icon' + (extraClass ? ' ' + extraClass : '');
       button.type = 'button';
       button.title = title;
       button.setAttribute('aria-label', title);
-      button.textContent = text;
+      if (name) button.innerHTML = '<i class="codicon codicon-' + name + '"></i>';
       button.onclick = (event) => {
         event.stopPropagation();
         onclick(event);
