@@ -207,6 +207,7 @@ class SqlQueryTreeService {
         if (dollarTag) {
             issues.push(this.endOfDocumentIssue(document, `Unterminated dollar quote ${dollarTag}.`));
         }
+        issues.push(...this.getIncompleteBetweenIssues(document));
         issues.push(...this.getDanglingClauseIssues(document));
         return issues;
     }
@@ -606,14 +607,60 @@ class SqlQueryTreeService {
         }
         return issues;
     }
-    wordTokens(text, start, end) {
+    getIncompleteBetweenIssues(document) {
+        const text = document.getText();
+        const issues = [];
+        for (const statement of (0, sqlSplitter_1.splitSqlStatements)(text)) {
+            const tokens = this.wordTokens(text, statement.start, statement.end, { includeQuotedValues: true });
+            for (let index = 0; index < tokens.length; index += 1) {
+                const token = tokens[index];
+                if (token.word.toLowerCase() !== 'between') {
+                    continue;
+                }
+                const lowerBound = tokens[index + 1]?.word.toLowerCase();
+                if (!lowerBound || lowerBound === 'and' || this.isBetweenBoundary(lowerBound)) {
+                    issues.push({
+                        message: 'BETWEEN requires a lower bound and an AND upper bound.',
+                        range: new vscode.Range(document.positionAt(token.start), document.positionAt(token.end))
+                    });
+                    continue;
+                }
+                const andIndex = this.findBetweenAnd(tokens, index + 2);
+                if (andIndex < 0) {
+                    issues.push({
+                        message: 'BETWEEN requires an AND upper bound.',
+                        range: new vscode.Range(document.positionAt(token.start), document.positionAt(token.end))
+                    });
+                    continue;
+                }
+                const upperBound = tokens[andIndex + 1]?.word.toLowerCase();
+                if (!upperBound || upperBound === 'and' || this.isBetweenBoundary(upperBound)) {
+                    issues.push({
+                        message: 'BETWEEN requires an upper bound after AND.',
+                        range: new vscode.Range(document.positionAt(tokens[andIndex].start), document.positionAt(tokens[andIndex].end))
+                    });
+                }
+            }
+        }
+        return issues;
+    }
+    findBetweenAnd(tokens, startIndex) {
+        for (let index = startIndex; index < tokens.length; index += 1) {
+            const word = tokens[index].word.toLowerCase();
+            if (word === 'and') {
+                return index;
+            }
+            if (this.isBetweenBoundary(word)) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+    wordTokens(text, start, end, options = {}) {
         const tokens = [];
         let i = start;
-        let single = false;
-        let double = false;
         let lineComment = false;
         let blockComment = false;
-        let dollarTag;
         while (i < end) {
             const char = text[i];
             const next = text[i + 1];
@@ -632,36 +679,6 @@ class SqlQueryTreeService {
                 }
                 continue;
             }
-            if (dollarTag) {
-                if (text.startsWith(dollarTag, i)) {
-                    i += dollarTag.length;
-                    dollarTag = undefined;
-                }
-                else {
-                    i += 1;
-                }
-                continue;
-            }
-            if (single) {
-                if (char === "'" && next === "'") {
-                    i += 2;
-                }
-                else {
-                    single = char !== "'";
-                    i += 1;
-                }
-                continue;
-            }
-            if (double) {
-                if (char === '"' && next === '"') {
-                    i += 2;
-                }
-                else {
-                    double = char !== '"';
-                    i += 1;
-                }
-                continue;
-            }
             if (char === '-' && next === '-') {
                 lineComment = true;
                 i += 2;
@@ -673,20 +690,55 @@ class SqlQueryTreeService {
                 continue;
             }
             if (char === "'") {
-                single = true;
+                const tokenStart = i;
                 i += 1;
+                while (i < end) {
+                    if (text[i] === "'" && text[i + 1] === "'") {
+                        i += 2;
+                    }
+                    else if (text[i] === "'") {
+                        i += 1;
+                        break;
+                    }
+                    else {
+                        i += 1;
+                    }
+                }
+                if (options.includeQuotedValues) {
+                    tokens.push({ word: text.slice(tokenStart, i), start: tokenStart, end: i });
+                }
                 continue;
             }
             if (char === '"') {
-                double = true;
+                const tokenStart = i;
                 i += 1;
+                while (i < end) {
+                    if (text[i] === '"' && text[i + 1] === '"') {
+                        i += 2;
+                    }
+                    else if (text[i] === '"') {
+                        i += 1;
+                        break;
+                    }
+                    else {
+                        i += 1;
+                    }
+                }
+                if (options.includeQuotedValues) {
+                    tokens.push({ word: text.slice(tokenStart, i), start: tokenStart, end: i });
+                }
                 continue;
             }
             if (char === '$') {
                 const match = text.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
                 if (match) {
-                    dollarTag = match[0];
-                    i += dollarTag.length;
+                    const tokenStart = i;
+                    const tag = match[0];
+                    const close = text.indexOf(tag, i + tag.length);
+                    i = close >= 0 ? close + tag.length : end;
+                    if (options.includeQuotedValues) {
+                        tokens.push({ word: text.slice(tokenStart, i), start: tokenStart, end: i });
+                    }
                     continue;
                 }
             }
@@ -701,6 +753,15 @@ class SqlQueryTreeService {
             i += 1;
         }
         return tokens;
+    }
+    isBetweenBoundary(word) {
+        return [
+            'or',
+            'when',
+            'then',
+            'else',
+            'end'
+        ].includes(word) || this.isClauseBoundary(word);
     }
     isClauseBoundary(word) {
         return [

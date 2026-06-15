@@ -7,6 +7,7 @@ import { ResultGrid } from './components/ResultGrid';
 import { PlanView } from './components/PlanView';
 import { MessagesPanel } from './components/MessagesPanel';
 import { StatusBar } from './components/StatusBar';
+import { Icon } from './components/Icon';
 import { QueryResultTab } from '../../../types';
 
 const ChartView = lazy(() => import('./components/ChartView').then((module) => ({ default: module.ChartView })));
@@ -36,7 +37,7 @@ export function App() {
     return (
       <main className="empty app-empty">
         <div className="empty-panel">
-          <span className="empty-icon">▦</span>
+          <Icon name="table" className="empty-icon" />
           <span>Run a query to see results</span>
         </div>
       </main>
@@ -72,7 +73,7 @@ export function App() {
               onClick={() => setActiveResultSetIndex(index)}
               title={`${set.command ?? 'Result'} - ${set.rowCount} rows`}
             >
-              <span className="resultset-icon">▦</span>
+              <Icon name="table" className="resultset-icon" />
               <span>{set.command ?? 'Result'}</span>
               <span className="resultset-count">{set.rowCount.toLocaleString()} rows</span>
             </button>

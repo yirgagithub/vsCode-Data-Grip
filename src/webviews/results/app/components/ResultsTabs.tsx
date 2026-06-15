@@ -1,5 +1,6 @@
 import { QueryResultTab } from '../../../../types';
 import { useResultsStore } from '../store';
+import { Icon } from './Icon';
 
 export function ResultsTabs({ tabs, activeTabId }: { tabs: QueryResultTab[]; activeTabId?: string }) {
   const { activateTab, closeTab, pinTab, renameTab } = useResultsStore();
@@ -7,7 +8,7 @@ export function ResultsTabs({ tabs, activeTabId }: { tabs: QueryResultTab[]; act
   return (
     <div className="tabs result-tabs" role="tablist" aria-label="SQL result tabs">
       <div className="tab-strip-leading" aria-hidden="true">
-        <span className="codicon-lite console-icon">▣</span>
+        <Icon name="output" className="console-icon" />
         <span>Output</span>
       </div>
       {tabs.map((tab) => (
@@ -35,7 +36,7 @@ export function ResultsTabs({ tabs, activeTabId }: { tabs: QueryResultTab[]; act
             aria-label={`${tab.customTitle ?? tab.title}, ${tab.executionStatus}`}
           >
             <span className={`connection-dot ${tab.databaseType} status-${tab.executionStatus}`} />
-            <span className="tab-object-icon" aria-hidden="true">▦</span>
+            <Icon name="table" className="tab-object-icon" />
             <span className="tab-title">{tab.customTitle ?? tab.title}</span>
           </button>
           <button
@@ -48,7 +49,7 @@ export function ResultsTabs({ tabs, activeTabId }: { tabs: QueryResultTab[]; act
               pinTab(tab.id, !tab.pinned);
             }}
           >
-            ⌖
+            <Icon name={tab.pinned ? 'pinned' : 'pin'} />
           </button>
           <button
             type="button"
@@ -60,7 +61,7 @@ export function ResultsTabs({ tabs, activeTabId }: { tabs: QueryResultTab[]; act
               closeTab(tab.id);
             }}
           >
-            ×
+            <Icon name="close" />
           </button>
         </div>
       ))}

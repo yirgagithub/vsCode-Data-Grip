@@ -39,19 +39,21 @@ const id_1 = require("../../utils/id");
 const connectionDefaults_1 = require("../../services/connectionDefaults");
 class ConnectionEditorPanel {
     panel;
+    extensionUri;
     connectionManager;
     existing;
     resolve;
     static async open(context, connectionManager, existing) {
         return new Promise((resolve) => {
             const panel = vscode.window.createWebviewPanel('databaseConnectionEditor', existing ? `Edit ${existing.name}` : 'Add Database Connection', vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true });
-            const editor = new ConnectionEditorPanel(panel, connectionManager, existing, resolve);
+            const editor = new ConnectionEditorPanel(panel, context.extensionUri, connectionManager, existing, resolve);
             context.subscriptions.push(panel);
             editor.render();
         });
     }
-    constructor(panel, connectionManager, existing, resolve) {
+    constructor(panel, extensionUri, connectionManager, existing, resolve) {
         this.panel = panel;
+        this.extensionUri = extensionUri;
         this.connectionManager = connectionManager;
         this.existing = existing;
         this.resolve = resolve;
@@ -189,12 +191,14 @@ class ConnectionEditorPanel {
         const data = JSON.stringify(form).replace(/</g, '\\u003c');
         const connections = JSON.stringify(this.connectionManager.getConnections()).replace(/</g, '\\u003c');
         const defaults = JSON.stringify(connectionDefaults_1.DEFAULTS_BY_DATABASE_TYPE).replace(/</g, '\\u003c');
+        const codicons = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'codicons', 'codicon.css'));
         return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <link href="${codicons}" rel="stylesheet">
   <style>
     :root {
       color-scheme: light dark;
@@ -227,6 +231,7 @@ class ConnectionEditorPanel {
       line-height: 1.35;
     }
     * { box-sizing: border-box; }
+    .codicon[class*='codicon-'] { font-size: var(--icon-size); line-height: 1; color: inherit; vertical-align: middle; }
     body {
       margin: 0;
       color: var(--text-main);
@@ -243,6 +248,10 @@ class ConnectionEditorPanel {
       border: 1px solid transparent;
       border-radius: var(--radius-sm);
       cursor: pointer;
+      transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; animation-duration: 0.001ms !important; }
     }
     button:hover:not(:disabled) {
       background: var(--bg-hover);
@@ -677,20 +686,20 @@ class ConnectionEditorPanel {
     <form id="form" class="dialog">
       <div class="dialog-titlebar">
         <h1>Data Sources and Drivers</h1>
-        <button type="button" id="cancelTop" class="close" aria-label="Close">×</button>
+        <button type="button" id="cancelTop" class="close" aria-label="Close"><i class="codicon codicon-close"></i></button>
       </div>
       <div class="dialog-body">
         <aside class="sidebar" aria-label="Data sources">
           <div class="sidebar-header">
             <span class="section-label">Data Sources</span>
             <div class="rail-toolbar" role="toolbar" aria-label="Data source actions">
-              <button type="button" class="icon-button" title="Add data source" aria-label="Add data source">＋</button>
-              <button type="button" class="icon-button" title="Remove data source" aria-label="Remove data source">−</button>
+              <button type="button" class="icon-button" title="Add data source" aria-label="Add data source"><i class="codicon codicon-add"></i></button>
+              <button type="button" class="icon-button" title="Remove data source" aria-label="Remove data source"><i class="codicon codicon-remove"></i></button>
             </div>
           </div>
           <div class="data-source-list">
             <button type="button" class="source-row active">
-              <span class="db-icon">▣</span>
+              <span class="db-icon"><i class="codicon codicon-database"></i></span>
               <span class="source-name" id="sourceName">Connection</span>
               <span class="status-dot" title="Configured"></span>
             </button>
@@ -833,14 +842,14 @@ class ConnectionEditorPanel {
       const draftRow = document.createElement('button');
       draftRow.type = 'button';
       draftRow.className = 'source-row' + (selected === 'new' ? ' active' : '');
-      draftRow.innerHTML = '<span class="db-icon">＋</span><span class="source-name">New connection</span><span class="status-dot" title="Draft"></span>';
+      draftRow.innerHTML = '<span class="db-icon"><i class="codicon codicon-add"></i></span><span class="source-name">New connection</span><span class="status-dot" title="Draft"></span>';
       draftRow.addEventListener('click', () => selectConnection('new'));
       sourceRows.appendChild(draftRow);
       for (const connection of connectionList) {
         const row = document.createElement('button');
         row.type = 'button';
         row.className = 'source-row' + (selected === connection.id ? ' active' : '');
-        row.innerHTML = '<span class="db-icon">▣</span><span class="source-name"></span><span class="status-dot" title="Configured"></span>';
+        row.innerHTML = '<span class="db-icon"><i class="codicon codicon-database"></i></span><span class="source-name"></span><span class="status-dot" title="Configured"></span>';
         row.querySelector('.source-name').textContent = connectionLabel(connection);
         row.addEventListener('click', () => selectConnection(connection.id));
         sourceRows.appendChild(row);
