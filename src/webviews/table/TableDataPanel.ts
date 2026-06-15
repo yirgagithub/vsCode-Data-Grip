@@ -4,6 +4,7 @@ import { TableNode } from '../../explorer/nodes';
 import { DataProfileReport } from '../../types';
 import { TablePerformanceAdvisorReport } from '../../services/tablePerformanceAdvisorService';
 import { qualifiedName } from '../../utils/identifiers';
+import { loadBundledRuntime } from '../../runtime/runtimeLoader';
 
 type TableDataMessage =
   | { type?: 'ready' }
@@ -11,25 +12,13 @@ type TableDataMessage =
   | { type?: 'copy'; text?: string }
   | { type?: 'openSql'; title?: string; sql?: string }
   | { type?: 'fetch'; limit?: number | null; offset?: number; where?: string; orderBySql?: string; orderBy?: Array<{ column: string; direction: 'asc' | 'desc' }> }
-  | { type?: 'command'; command?: 'ddl' | 'select' | 'import' | 'copyToConnection' }
-  | TableMutationMessage;
-
-interface TableMutationMessage {
-  type: 'mutation';
-  kind?: 'edit-cell' | 'insert-row' | 'delete-row';
-  row?: Record<string, unknown>;
-  updatedRow?: Record<string, unknown>;
-  column?: string;
-  valueText?: string;
-  rowText?: string;
-}
+  | { type?: 'command'; command?: 'ddl' | 'select' | 'import' | 'copyToConnection' };
 
 export class TableDataPanel {
   static async open(
     context: vscode.ExtensionContext,
     connectionManager: ConnectionManager,
-    node: TableNode,
-    onMutationRequest?: (message: TableMutationMessage) => Promise<void>
+    node: TableNode
   ): Promise<void> {
     const configuredMaxRows = vscode.workspace.getConfiguration('database').get<number>('defaultMaxRows', 500);
     const maxRows = Number.isFinite(configuredMaxRows) && configuredMaxRows && configuredMaxRows > 0 ? Math.floor(configuredMaxRows) : 500;
@@ -111,9 +100,6 @@ export class TableDataPanel {
         return;
       }
 
-      if (message.type === 'mutation') {
-        await onMutationRequest?.(message);
-      }
     });
   }
 
@@ -882,9 +868,6 @@ export class TableDataPanel {
       <button class="icon-button" id="copyRows" data-tone="purple" title="Copy visible rows as TSV" aria-label="Copy visible rows as TSV"><i class="codicon codicon-copy"></i></button>
       <button class="icon-button" id="focusWhere" data-tone="blue" title="Focus WHERE" aria-label="Focus WHERE"><i class="codicon codicon-search"></i></button>
       <span class="toolbar-separator"></span>
-      <button class="icon-button" id="editCell" data-tone="purple" title="Edit selected cell" aria-label="Edit selected cell"><i class="codicon codicon-edit"></i></button>
-      <button class="icon-button" id="insertRow" data-tone="green" title="Insert row" aria-label="Insert row"><i class="codicon codicon-add"></i></button>
-      <button class="icon-button" id="deleteRow" data-tone="red" title="Delete selected row" aria-label="Delete selected row"><i class="codicon codicon-trash"></i></button>
       <span class="toolbar-separator"></span>
       <button class="icon-button" id="generateSelect" data-tone="green" title="Generate SELECT" aria-label="Generate SELECT"><i class="codicon codicon-file-code"></i></button>
       <button class="icon-button" id="copyTable" data-tone="purple" title="Copy table to another connection" aria-label="Copy table to another connection"><i class="codicon codicon-arrow-swap"></i></button>
@@ -1079,7 +1062,7 @@ export class TableDataPanel {
     function matchingColumns(partial) {
       const lower = partial.toLowerCase();
       return columns
-        .filter((column) => !lower || column.toLowerCase().startsWith(lower))
+        .filter((column) => !lower || column.toLowerCase().includes(lower))
         .slice(0, 30);
     }
     function positionColumnSuggest(input) {
@@ -1096,6 +1079,10 @@ export class TableDataPanel {
       }
       suggestInput = input;
       suggestContext = suggestColumnContext(input);
+      if (!suggestContext.partial.trim()) {
+        closeColumnSuggest();
+        return;
+      }
       suggestItems = matchingColumns(suggestContext.partial);
       suggestIndex = Math.min(suggestIndex, Math.max(0, suggestItems.length - 1));
       if (!suggestItems.length) {
@@ -1555,50 +1542,6 @@ export class TableDataPanel {
     document.getElementById('focusWhere').addEventListener('click', () => {
       where.focus();
     });
-    document.getElementById('editCell').addEventListener('click', () => {
-      if (!selectedCell) {
-        return;
-      }
-      const row = currentRows[selectedCell.row];
-      const current = row?.[selectedCell.column];
-      const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', cell(current));
-      if (valueText === null) {
-        return;
-      }
-      vscode.postMessage({
-        type: 'mutation',
-        kind: 'edit-cell',
-        row,
-        updatedRow: { ...row, [selectedCell.column]: valueText },
-        column: selectedCell.column,
-        valueText
-      });
-    });
-    document.getElementById('insertRow').addEventListener('click', () => {
-      const rowText = window.prompt('Insert row as JSON object', '{}');
-      if (rowText === null) {
-        return;
-      }
-      vscode.postMessage({
-        type: 'mutation',
-        kind: 'insert-row',
-        rowText
-      });
-    });
-    document.getElementById('deleteRow').addEventListener('click', () => {
-      if (selectedRow === null || selectedRow === undefined) {
-        return;
-      }
-      const row = currentRows[selectedRow];
-      if (!row || !window.confirm('Open DELETE preview for the selected row?')) {
-        return;
-      }
-      vscode.postMessage({
-        type: 'mutation',
-        kind: 'delete-row',
-        row
-      });
-    });
     document.getElementById('applyWhere').addEventListener('click', () => fetchRows(0));
     document.getElementById('showDdl').addEventListener('click', () => {
       vscode.postMessage({ type: 'command', command: 'ddl' });
@@ -1669,24 +1612,10 @@ export class TableDataPanel {
       }
       const rowIndex = Number(cellElement.dataset.row);
       const column = cellElement.dataset.column;
-      const row = currentRows[rowIndex];
-      const current = row?.[column];
-      const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', cell(current));
-      if (valueText === null) {
-        return;
-      }
       selectedCell = { row: rowIndex, column };
       selectedRow = null;
       selectedColumn = null;
       render();
-      vscode.postMessage({
-        type: 'mutation',
-        kind: 'edit-cell',
-        row,
-        updatedRow: { ...row, [column]: valueText },
-        column,
-        valueText
-      });
     });
     window.addEventListener('message', (event) => {
       if (event.data?.type === 'error') {
@@ -2174,11 +2103,19 @@ type XlsxRuntime = {
 let xlsxRuntime: Promise<XlsxRuntime> | undefined;
 
 function loadXlsx(): Promise<XlsxRuntime> {
-  xlsxRuntime ??= import('xlsx').then((module) => {
+  xlsxRuntime ??= loadXlsxRuntime();
+  return xlsxRuntime;
+}
+
+async function loadXlsxRuntime(): Promise<XlsxRuntime> {
+  const bundled = loadBundledRuntime<XlsxRuntime>('xlsxRuntime');
+  if (bundled) {
+    return bundled;
+  }
+  return import('xlsx').then((module) => {
     const candidate = module as unknown as XlsxRuntime | { default?: XlsxRuntime };
     return 'utils' in candidate ? candidate : candidate.default as XlsxRuntime;
   });
-  return xlsxRuntime;
 }
 
 function formatOptionalNumber(value: number | undefined): string {

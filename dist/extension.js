@@ -159,6 +159,15 @@ function numberValue(value) {
   return Number.isFinite(next) ? next : void 0;
 }
 
+// src/runtime/runtimeLoader.ts
+var import_path = require("path");
+function loadBundledRuntime(moduleName) {
+  if (typeof __dirname !== "string" || (0, import_path.basename)(__dirname) !== "dist" || typeof require !== "function") {
+    return void 0;
+  }
+  return require((0, import_path.join)(__dirname, "runtime", moduleName));
+}
+
 // src/database/drivers/postgresDriver.ts
 var PostgresDriver = class {
   id = "postgres";
@@ -723,11 +732,18 @@ ${lines.join(",\n")}
 };
 var pgRuntime;
 function loadPg() {
-  pgRuntime ??= import("pg").then((module2) => {
+  pgRuntime ??= loadPgRuntime();
+  return pgRuntime;
+}
+async function loadPgRuntime() {
+  const bundled = loadBundledRuntime("pgRuntime");
+  if (bundled) {
+    return bundled;
+  }
+  return import("pg").then((module2) => {
     const candidate = module2;
     return "Pool" in candidate ? candidate : candidate.default;
   });
-  return pgRuntime;
 }
 function optionalString(value) {
   if (value === null || value === void 0) {
@@ -1457,11 +1473,18 @@ ${lines.join(",\n")}
 };
 var mysqlRuntime;
 function loadMysql() {
-  mysqlRuntime ??= import("mysql2/promise").then((module2) => {
+  mysqlRuntime ??= loadMysqlRuntime();
+  return mysqlRuntime;
+}
+async function loadMysqlRuntime() {
+  const bundled = loadBundledRuntime("mysqlRuntime");
+  if (bundled) {
+    return bundled;
+  }
+  return import("mysql2/promise").then((module2) => {
     const candidate = module2;
     return "createPool" in candidate ? candidate : candidate.default;
   });
-  return mysqlRuntime;
 }
 function groupKeyRows(rows) {
   const grouped = /* @__PURE__ */ new Map();
@@ -6071,7 +6094,7 @@ var SqlQueryTreeService = class {
     const text = document.getText();
     const issues = [];
     for (const statement of splitSqlStatements(text)) {
-      const tokens = this.wordTokens(text, statement.start, statement.end);
+      const tokens = this.wordTokens(text, statement.start, statement.end, { includeQuotedIdentifiers: true });
       for (let index = 0; index < tokens.length; index += 1) {
         const token = tokens[index];
         const word = token.word.toLowerCase();
@@ -6201,7 +6224,7 @@ var SqlQueryTreeService = class {
             i += 1;
           }
         }
-        if (options.includeQuotedValues) {
+        if (options.includeQuotedValues || options.includeQuotedIdentifiers) {
           tokens.push({ word: text.slice(tokenStart, i), start: tokenStart, end: i });
         }
         continue;
@@ -6334,157 +6357,6 @@ function comparePositions(a, b) {
   return a.line - b.line || a.character - b.character;
 }
 
-// src/services/tableRowMutationService.ts
-var TableRowMutationService = class {
-  constructor(schemaContext) {
-    this.schemaContext = schemaContext;
-  }
-  async preview(request) {
-    const target = request.target;
-    const primaryKeys = await this.primaryKeys(target.connection, target.schema, target.table);
-    const table = qualifiedName(target.schema, target.table);
-    if (request.kind === "delete-row") {
-      const originalRow2 = request.originalRow ?? parseRowText(request.rowText);
-      const where2 = this.whereClause(primaryKeys, originalRow2, target.table);
-      return {
-        kind: request.kind,
-        sql: `delete from ${table}
-where ${where2};`,
-        title: `Delete ${target.table}`,
-        primaryKeys
-      };
-    }
-    if (request.kind === "insert-row") {
-      const row = request.updatedRow ?? parseRowText(request.rowText);
-      const columns = this.orderedColumns(target.columns, row);
-      if (!columns.length) {
-        throw new Error("No values were provided for the new row.");
-      }
-      return {
-        kind: request.kind,
-        sql: `insert into ${table} (${columns.map(quoteIdentifier).join(", ")})
-values (${columns.map((column) => formatLiteral(row[column])).join(", ")});`,
-        title: `Insert into ${target.table}`,
-        primaryKeys
-      };
-    }
-    const originalRow = request.originalRow ?? parseRowText(request.rowText);
-    const updatedRow = request.kind === "edit-cell" ? {
-      ...originalRow,
-      ...request.column ? { [request.column]: parseScalar(request.valueText ?? "") } : {}
-    } : request.updatedRow ?? originalRow;
-    const changedColumns = this.changedColumns(primaryKeys, originalRow, updatedRow);
-    if (!changedColumns.length) {
-      throw new Error("No editable columns changed.");
-    }
-    const where = this.whereClause(primaryKeys, originalRow, target.table);
-    return {
-      kind: request.kind,
-      sql: `update ${table}
-set ${changedColumns.map((column) => `${quoteIdentifier(column)} = ${formatLiteral(updatedRow[column])}`).join(", ")}
-where ${where};`,
-      title: `Update ${target.table}`,
-      primaryKeys
-    };
-  }
-  async inferTargetFromQuery(connection, sql) {
-    if (/\b(with|join|union|intersect|except)\b/i.test(sql) || /\bfrom\s*\(/i.test(sql)) {
-      return void 0;
-    }
-    const aliases = extractSqlAliases(sql);
-    if (aliases.length !== 1) {
-      return void 0;
-    }
-    const [unique2] = aliases;
-    const schema = unique2.schema ?? connection.defaultSchema ?? "public";
-    const columns = await this.schemaContext.getColumns(connection, schema, unique2.table);
-    return {
-      connection,
-      schema,
-      table: unique2.table,
-      columns: columns.map((column) => column.name),
-      queryText: sql
-    };
-  }
-  async primaryKeys(connection, schema, table) {
-    const keys = await this.schemaContext.getPrimaryKeys(connection, schema, table);
-    return keys.flatMap((key) => key.columns).filter((column, index, all) => all.findIndex((item) => item === column) === index);
-  }
-  orderedColumns(columns, row) {
-    const existing = new Set(columns ?? Object.keys(row));
-    return [...columns ?? Object.keys(row), ...Object.keys(row).filter((column) => !existing.has(column))].filter((column, index, all) => all.indexOf(column) === index);
-  }
-  changedColumns(primaryKeys, originalRow, updatedRow) {
-    const allColumns = /* @__PURE__ */ new Set([...Object.keys(originalRow), ...Object.keys(updatedRow)]);
-    return [...allColumns].filter((column) => !primaryKeys.includes(column) && !valuesEqual(originalRow[column], updatedRow[column]));
-  }
-  whereClause(primaryKeys, row, table) {
-    if (!primaryKeys.length) {
-      throw new Error(`Cannot edit ${table} safely because no primary key is cached.`);
-    }
-    return primaryKeys.map((column) => {
-      if (!(column in row)) {
-        throw new Error(`Cannot edit ${table} safely because the primary key column ${column} is missing from the row.`);
-      }
-      const value = row[column];
-      return value === null || value === void 0 ? `${quoteIdentifier(column)} is null` : `${quoteIdentifier(column)} = ${formatLiteral(value)}`;
-    }).join(" and ");
-  }
-};
-function parseRowText(valueText) {
-  if (!valueText || !valueText.trim()) {
-    return {};
-  }
-  const trimmed = valueText.trim();
-  const parsed = JSON.parse(trimmed);
-  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-    return parsed;
-  }
-  throw new Error("Insert row input must be a JSON object.");
-}
-function parseScalar(text) {
-  if (!text.trim()) return null;
-  if (/^null$/i.test(text)) return null;
-  if (/^true$/i.test(text)) return true;
-  if (/^false$/i.test(text)) return false;
-  if (/^-?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?$/i.test(text)) {
-    const next = Number(text);
-    return Number.isFinite(next) ? next : text;
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-}
-function valuesEqual(left, right) {
-  if (left === right) {
-    return true;
-  }
-  if (left instanceof Date && right instanceof Date) {
-    return left.getTime() === right.getTime();
-  }
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-function formatLiteral(value) {
-  if (value === null || value === void 0) {
-    return "null";
-  }
-  if (typeof value === "number" || typeof value === "bigint") {
-    return String(value);
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (value instanceof Date) {
-    return `'${value.toISOString().replace(/'/g, "''")}'`;
-  }
-  if (typeof value === "object") {
-    return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
-  }
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
 // src/ai/vsCodeLanguageModelSqlAdapter.ts
 var vscode16 = __toESM(require("vscode"));
 
@@ -6531,7 +6403,7 @@ var VsCodeLanguageModelSqlAdapter = class {
       return false;
     }
     try {
-      const models = await lm2.selectChatModels({ vendor: "copilot" });
+      const models = await this.selectVsCodeLanguageModels(settings);
       return models.length > 0;
     } catch {
       return false;
@@ -6585,15 +6457,14 @@ ${schema || "(no schema metadata available)"}`
     if (settings.provider === "openAiCompatible") {
       return this.sendOpenAiCompatible(prompt, settings);
     }
-    return this.sendCopilot(prompt, settings);
+    return this.sendVsCodeLanguageModel(prompt, settings);
   }
-  async sendCopilot(prompt, settings = this.settings()) {
+  async sendVsCodeLanguageModel(prompt, settings = this.settings()) {
     const lm2 = this.languageModelNamespace();
     if (!lm2?.selectChatModels) {
       throw new Error("VS Code Language Model API is not available.");
     }
-    const models = await lm2.selectChatModels({ vendor: settings.copilotVendor });
-    const model = models[0];
+    const model = (await this.selectVsCodeLanguageModels(settings))[0];
     if (!model) {
       throw new Error("No VS Code language model is available.");
     }
@@ -6606,6 +6477,20 @@ ${schema || "(no schema metadata available)"}`
       text += chunk3;
     }
     return text;
+  }
+  async selectVsCodeLanguageModels(settings = this.settings()) {
+    const lm2 = this.languageModelNamespace();
+    if (!lm2?.selectChatModels) {
+      return [];
+    }
+    const preferredVendor = settings.vscodeLanguageModelVendor.trim();
+    if (preferredVendor) {
+      const preferred = await lm2.selectChatModels({ vendor: preferredVendor });
+      if (preferred.length) {
+        return preferred;
+      }
+    }
+    return lm2.selectChatModels();
   }
   async sendOpenAiCompatible(prompt, settings = this.settings()) {
     const apiKey = this.openAiCompatibleApiKey(settings);
@@ -6762,10 +6647,11 @@ ${JSON.stringify(request.columns, null, 2)}`
   }
   settings() {
     const config = vscode16.workspace.getConfiguration("database");
-    const provider = config.get("ai.provider", "copilot") === "openAiCompatible" ? "openAiCompatible" : "copilot";
+    const provider = config.get("ai.provider", "vscodeLanguageModel") === "openAiCompatible" ? "openAiCompatible" : "vscodeLanguageModel";
+    const legacyVendor = config.get("ai.copilot.vendor", "copilot");
     return {
       provider,
-      copilotVendor: config.get("ai.copilot.vendor", "copilot") || "copilot",
+      vscodeLanguageModelVendor: config.get("ai.vscodeLanguageModel.vendor", legacyVendor).trim(),
       openAiCompatibleBaseUrl: config.get("ai.openAiCompatible.baseUrl", "").trim(),
       openAiCompatibleModel: config.get("ai.openAiCompatible.model", "").trim(),
       openAiCompatibleApiKey: config.get("ai.openAiCompatible.apiKey", "").trim(),
@@ -6890,7 +6776,7 @@ var QueryMemoryController = class {
   }
   async backfillSummaries() {
     if (!await this.ai.isAvailable()) {
-      void vscode17.window.showInformationMessage("Query memory summaries require an available VS Code language model.");
+      void vscode17.window.showInformationMessage("Query memory summaries need a VS Code language model provider or configured database.ai.openAiCompatible settings.");
       return;
     }
     await vscode17.window.withProgress({
@@ -7670,11 +7556,18 @@ async function formatSqlText(sql, dialect) {
 }
 var sqlFormatterRuntime;
 function loadSqlFormatter() {
-  sqlFormatterRuntime ??= import("sql-formatter").then((module2) => {
+  sqlFormatterRuntime ??= loadSqlFormatterRuntime();
+  return sqlFormatterRuntime;
+}
+async function loadSqlFormatterRuntime() {
+  const bundled = loadBundledRuntime("sqlFormatterRuntime");
+  if (bundled) {
+    return bundled;
+  }
+  return import("sql-formatter").then((module2) => {
     const candidate = module2;
     return "format" in candidate ? candidate : candidate.default;
   });
-  return sqlFormatterRuntime;
 }
 
 // src/services/tableCopyService.ts
@@ -7720,9 +7613,9 @@ ${lines.join(",\n")}
 function buildInsertBatch(schema, table, columns, rows) {
   return `insert into ${qualifiedName(schema, table)} (${columns.map(quoteIdentifier).join(", ")})
 values
-${rows.map((row) => `  (${columns.map((column) => formatLiteral2(row[column])).join(", ")})`).join(",\n")};`;
+${rows.map((row) => `  (${columns.map((column) => formatLiteral(row[column])).join(", ")})`).join(",\n")};`;
 }
-function formatLiteral2(value) {
+function formatLiteral(value) {
   if (value === null || value === void 0) {
     return "null";
   }
@@ -7805,7 +7698,7 @@ function parseCsvSource(text) {
   const columns = header.map((value, index) => value || `column_${index + 1}`);
   return {
     columns,
-    rows: dataRows.map((row) => Object.fromEntries(columns.map((column, index) => [column, parseScalar2(row[index] ?? "")]))),
+    rows: dataRows.map((row) => Object.fromEntries(columns.map((column, index) => [column, parseScalar(row[index] ?? "")]))),
     warnings: []
   };
 }
@@ -7917,9 +7810,9 @@ function mappingWarnings(sourceColumns, targetColumns, mapping) {
 function buildInsertBatch2(schema, table, columns, rows) {
   return `insert into ${qualifiedName(schema, table)} (${columns.map(quoteIdentifier).join(", ")})
 values
-${rows.map((row) => `  (${columns.map((column) => formatLiteral3(row[column])).join(", ")})`).join(",\n")};`;
+${rows.map((row) => `  (${columns.map((column) => formatLiteral2(row[column])).join(", ")})`).join(",\n")};`;
 }
-function formatLiteral3(value) {
+function formatLiteral2(value) {
   if (value === null || value === void 0) {
     return "null";
   }
@@ -7937,7 +7830,7 @@ function formatLiteral3(value) {
   }
   return `'${String(value).replace(/'/g, "''")}'`;
 }
-function parseScalar2(text) {
+function parseScalar(text) {
   const trimmed = text.trim();
   if (!trimmed) {
     return null;
@@ -10756,7 +10649,7 @@ var QueryMapProvider = class {
 // src/webviews/results/ResultsPanelProvider.ts
 var vscode23 = __toESM(require("vscode"));
 var ResultsPanelProvider = class _ResultsPanelProvider {
-  constructor(context, connectionManager, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection, onMutationRequest, onCompareRequest) {
+  constructor(context, connectionManager, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection, onCompareRequest) {
     this.context = context;
     this.connectionManager = connectionManager;
     this.sessionStore = sessionStore;
@@ -10764,7 +10657,6 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
     this.revealSource = revealSource;
     this.onTabsChanged = onTabsChanged;
     this.runActiveEditorSelection = runActiveEditorSelection;
-    this.onMutationRequest = onMutationRequest;
     this.onCompareRequest = onCompareRequest;
     this.tabs = this.sessionStore.getTabs();
     this.activeTabId = this.tabs[0]?.id;
@@ -10930,13 +10822,6 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
       await vscode23.env.clipboard.writeText(message.text);
       return;
     }
-    if (message.type === "mutation") {
-      const tab = this.getTab(this.activeTabId ?? "");
-      if (tab) {
-        await this.onMutationRequest?.(tab, message);
-      }
-      return;
-    }
     if (message.type === "compareTabs") {
       const tab = this.getTab(this.activeTabId ?? "");
       if (tab) {
@@ -11041,7 +10926,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
 // src/webviews/table/TableDataPanel.ts
 var vscode24 = __toESM(require("vscode"));
 var TableDataPanel = class {
-  static async open(context, connectionManager, node, onMutationRequest) {
+  static async open(context, connectionManager, node) {
     const configuredMaxRows = vscode24.workspace.getConfiguration("database").get("defaultMaxRows", 500);
     const maxRows = Number.isFinite(configuredMaxRows) && configuredMaxRows && configuredMaxRows > 0 ? Math.floor(configuredMaxRows) : 500;
     const panel = vscode24.window.createWebviewPanel(
@@ -11115,9 +11000,6 @@ var TableDataPanel = class {
           orderBy: message.orderBy
         });
         return;
-      }
-      if (message.type === "mutation") {
-        await onMutationRequest?.(message);
       }
     });
   }
@@ -11854,9 +11736,6 @@ var TableDataPanel = class {
       <button class="icon-button" id="copyRows" data-tone="purple" title="Copy visible rows as TSV" aria-label="Copy visible rows as TSV"><i class="codicon codicon-copy"></i></button>
       <button class="icon-button" id="focusWhere" data-tone="blue" title="Focus WHERE" aria-label="Focus WHERE"><i class="codicon codicon-search"></i></button>
       <span class="toolbar-separator"></span>
-      <button class="icon-button" id="editCell" data-tone="purple" title="Edit selected cell" aria-label="Edit selected cell"><i class="codicon codicon-edit"></i></button>
-      <button class="icon-button" id="insertRow" data-tone="green" title="Insert row" aria-label="Insert row"><i class="codicon codicon-add"></i></button>
-      <button class="icon-button" id="deleteRow" data-tone="red" title="Delete selected row" aria-label="Delete selected row"><i class="codicon codicon-trash"></i></button>
       <span class="toolbar-separator"></span>
       <button class="icon-button" id="generateSelect" data-tone="green" title="Generate SELECT" aria-label="Generate SELECT"><i class="codicon codicon-file-code"></i></button>
       <button class="icon-button" id="copyTable" data-tone="purple" title="Copy table to another connection" aria-label="Copy table to another connection"><i class="codicon codicon-arrow-swap"></i></button>
@@ -12051,7 +11930,7 @@ var TableDataPanel = class {
     function matchingColumns(partial) {
       const lower = partial.toLowerCase();
       return columns
-        .filter((column) => !lower || column.toLowerCase().startsWith(lower))
+        .filter((column) => !lower || column.toLowerCase().includes(lower))
         .slice(0, 30);
     }
     function positionColumnSuggest(input) {
@@ -12068,6 +11947,10 @@ var TableDataPanel = class {
       }
       suggestInput = input;
       suggestContext = suggestColumnContext(input);
+      if (!suggestContext.partial.trim()) {
+        closeColumnSuggest();
+        return;
+      }
       suggestItems = matchingColumns(suggestContext.partial);
       suggestIndex = Math.min(suggestIndex, Math.max(0, suggestItems.length - 1));
       if (!suggestItems.length) {
@@ -12527,50 +12410,6 @@ var TableDataPanel = class {
     document.getElementById('focusWhere').addEventListener('click', () => {
       where.focus();
     });
-    document.getElementById('editCell').addEventListener('click', () => {
-      if (!selectedCell) {
-        return;
-      }
-      const row = currentRows[selectedCell.row];
-      const current = row?.[selectedCell.column];
-      const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', cell(current));
-      if (valueText === null) {
-        return;
-      }
-      vscode.postMessage({
-        type: 'mutation',
-        kind: 'edit-cell',
-        row,
-        updatedRow: { ...row, [selectedCell.column]: valueText },
-        column: selectedCell.column,
-        valueText
-      });
-    });
-    document.getElementById('insertRow').addEventListener('click', () => {
-      const rowText = window.prompt('Insert row as JSON object', '{}');
-      if (rowText === null) {
-        return;
-      }
-      vscode.postMessage({
-        type: 'mutation',
-        kind: 'insert-row',
-        rowText
-      });
-    });
-    document.getElementById('deleteRow').addEventListener('click', () => {
-      if (selectedRow === null || selectedRow === undefined) {
-        return;
-      }
-      const row = currentRows[selectedRow];
-      if (!row || !window.confirm('Open DELETE preview for the selected row?')) {
-        return;
-      }
-      vscode.postMessage({
-        type: 'mutation',
-        kind: 'delete-row',
-        row
-      });
-    });
     document.getElementById('applyWhere').addEventListener('click', () => fetchRows(0));
     document.getElementById('showDdl').addEventListener('click', () => {
       vscode.postMessage({ type: 'command', command: 'ddl' });
@@ -12641,24 +12480,10 @@ var TableDataPanel = class {
       }
       const rowIndex = Number(cellElement.dataset.row);
       const column = cellElement.dataset.column;
-      const row = currentRows[rowIndex];
-      const current = row?.[column];
-      const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', cell(current));
-      if (valueText === null) {
-        return;
-      }
       selectedCell = { row: rowIndex, column };
       selectedRow = null;
       selectedColumn = null;
       render();
-      vscode.postMessage({
-        type: 'mutation',
-        kind: 'edit-cell',
-        row,
-        updatedRow: { ...row, [column]: valueText },
-        column,
-        valueText
-      });
     });
     window.addEventListener('message', (event) => {
       if (event.data?.type === 'error') {
@@ -13123,11 +12948,18 @@ function sanitizeSheetName(name) {
 }
 var xlsxRuntime;
 function loadXlsx() {
-  xlsxRuntime ??= import("xlsx").then((module2) => {
+  xlsxRuntime ??= loadXlsxRuntime();
+  return xlsxRuntime;
+}
+async function loadXlsxRuntime() {
+  const bundled = loadBundledRuntime("xlsxRuntime");
+  if (bundled) {
+    return bundled;
+  }
+  return import("xlsx").then((module2) => {
     const candidate = module2;
     return "utils" in candidate ? candidate : candidate.default;
   });
-  return xlsxRuntime;
 }
 function formatOptionalNumber(value) {
   return value === void 0 ? "unknown" : value.toLocaleString();
@@ -13188,7 +13020,6 @@ function activate(context) {
   const memoryService = new QueryMemoryService(historyStore, memoryStore, consoleStore, connectionManager, aiAdapter);
   const tablePerformanceAdvisor = new TablePerformanceAdvisorService(connectionManager, memoryService, aiAdapter);
   const erDiagramService = new ErDiagramService(connectionManager, schemaContext);
-  const tableRowMutator = new TableRowMutationService(schemaContext);
   const queryPlanAnalyzer = new QueryPlanAnalyzerService(connectionManager, aiAdapter);
   const dataProfiler = new DataProfileService(connectionManager, aiAdapter);
   const executor = new QueryExecutor(connectionManager, historyStore, memoryService);
@@ -13223,7 +13054,6 @@ function activate(context) {
     async (tab) => revealSourceForTab(tab),
     (tabs) => queryMap?.updateResults(tabs),
     async (maxRows) => executeActiveMultiStatementSelection(maxRows),
-    async (tab, message) => handleTableMutationFromResultTab(tab, message),
     async (tab, resultSetIndex) => compareResultTabs(tab, resultSetIndex)
   );
   queryMap = new QueryMapProvider(
@@ -13895,21 +13725,7 @@ function activate(context) {
     if (!(node instanceof TableNode)) {
       return;
     }
-    await TableDataPanel.open(context, connectionManager, node, async (message) => {
-      await handleTableMutation({
-        kind: message.kind,
-        target: {
-          connection: node.connection,
-          schema: node.table.schema,
-          table: node.table.name
-        },
-        originalRow: message.row,
-        updatedRow: message.updatedRow,
-        column: message.column,
-        valueText: message.valueText,
-        rowText: message.rowText
-      });
-    });
+    await TableDataPanel.open(context, connectionManager, node);
   });
   register("database.analyzeTablePerformance", async (node) => {
     if (!(node instanceof TableNode)) {
@@ -14144,37 +13960,6 @@ function activate(context) {
     updateSqlConnectionStatus(vscode26.window.activeTextEditor);
     refreshQueryMap();
     sqlCodeLensRefresh.fire();
-  }
-  async function handleTableMutation(request) {
-    const preview = await tableRowMutator.preview(request);
-    await openSqlScript(preview.title, `${preview.sql}
-`, request.target.connection);
-  }
-  async function handleTableMutationFromResultTab(tab, message) {
-    const resultSet = tab.resultSets[tab.activeResultSetIndex] ?? tab.resultSets[0];
-    const connection = connectionManager.getConnection(tab.connectionId);
-    if (!connection) {
-      void vscode26.window.showInformationMessage("This result tab is no longer connected to a database.");
-      return;
-    }
-    const target = await tableRowMutator.inferTargetFromQuery(connection, tab.queryText);
-    if (!target) {
-      void vscode26.window.showInformationMessage("This result set does not map cleanly to a single editable table.");
-      return;
-    }
-    await handleTableMutation({
-      kind: message.kind,
-      target: {
-        ...target,
-        columns: resultSet?.fields.map((field) => field.name),
-        queryText: tab.queryText
-      },
-      originalRow: message.row,
-      updatedRow: message.updatedRow,
-      column: message.column,
-      valueText: message.valueText,
-      rowText: message.rowText
-    });
   }
   register("database.showObjectDdl", async (node) => {
     const sql = await objectDdl(connectionManager, node);
@@ -14758,7 +14543,7 @@ where ${quoteIdentifier("id")} = '<id>';
   }
   async function runAi(action) {
     if (!await aiAdapter.isAvailable()) {
-      void vscode26.window.showInformationMessage("AI SQL actions require an available VS Code language model.");
+      void vscode26.window.showInformationMessage("AI SQL actions need a VS Code language model provider or configured database.ai.openAiCompatible settings.");
       return;
     }
     const editor = vscode26.window.activeTextEditor;

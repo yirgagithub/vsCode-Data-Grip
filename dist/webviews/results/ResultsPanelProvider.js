@@ -43,14 +43,13 @@ class ResultsPanelProvider {
     revealSource;
     onTabsChanged;
     runActiveEditorSelection;
-    onMutationRequest;
     onCompareRequest;
     static viewType = 'sqlResults';
     view;
     tabs;
     activeTabId;
     activeConnectionId;
-    constructor(context, connectionManager, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection, onMutationRequest, onCompareRequest) {
+    constructor(context, connectionManager, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection, onCompareRequest) {
         this.context = context;
         this.connectionManager = connectionManager;
         this.sessionStore = sessionStore;
@@ -58,7 +57,6 @@ class ResultsPanelProvider {
         this.revealSource = revealSource;
         this.onTabsChanged = onTabsChanged;
         this.runActiveEditorSelection = runActiveEditorSelection;
-        this.onMutationRequest = onMutationRequest;
         this.onCompareRequest = onCompareRequest;
         this.tabs = this.sessionStore.getTabs();
         this.activeTabId = this.tabs[0]?.id;
@@ -221,13 +219,6 @@ class ResultsPanelProvider {
         }
         if (message.type === 'copy') {
             await vscode.env.clipboard.writeText(message.text);
-            return;
-        }
-        if (message.type === 'mutation') {
-            const tab = this.getTab(this.activeTabId ?? '');
-            if (tab) {
-                await this.onMutationRequest?.(tab, message);
-            }
             return;
         }
         if (message.type === 'compareTabs') {

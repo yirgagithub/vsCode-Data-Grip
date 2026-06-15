@@ -24,7 +24,6 @@ import { rangeFromPlain as rangeFromSource, SqlSectionHighlighter } from './serv
 import { SqlSectionService } from './services/sqlSectionService';
 import { shouldRunSelectionForStatement } from './services/sqlSelectionExecution';
 import { buildTablePerformancePrepassFlags, TablePerformanceAdvisorService } from './services/tablePerformanceAdvisorService';
-import { TableMutationRequest, TableRowMutationService } from './services/tableRowMutationService';
 import { VsCodeLanguageModelSqlAdapter } from './ai/vsCodeLanguageModelSqlAdapter';
 import { QueryMemoryController } from './controllers/queryMemoryController';
 import { DocumentConnectionBinding, DocumentConnectionResolution, resolveDocumentConnection } from './services/documentConnectionResolver';
@@ -42,7 +41,6 @@ import { ErDiagramPanel } from './webviews/erDiagram/ErDiagramPanel';
 import { ConnectionEditorPanel } from './webviews/connection/ConnectionEditorPanel';
 import { QueryMapProvider } from './webviews/queryMap/QueryMapProvider';
 import { ResultsPanelProvider } from './webviews/results/ResultsPanelProvider';
-import type { ResultsFromWebviewMessage } from './webviews/results/messages';
 import { TableDataPanel } from './webviews/table/TableDataPanel';
 import { Logger } from './utils/logger';
 import { qualifiedName, quoteIdentifier } from './utils/identifiers';
@@ -77,7 +75,6 @@ export function activate(context: vscode.ExtensionContext): void {
   const memoryService = new QueryMemoryService(historyStore, memoryStore, consoleStore, connectionManager, aiAdapter);
   const tablePerformanceAdvisor = new TablePerformanceAdvisorService(connectionManager, memoryService, aiAdapter);
   const erDiagramService = new ErDiagramService(connectionManager, schemaContext);
-  const tableRowMutator = new TableRowMutationService(schemaContext);
   const queryPlanAnalyzer = new QueryPlanAnalyzerService(connectionManager, aiAdapter);
   const dataProfiler = new DataProfileService(connectionManager, aiAdapter);
   const executor = new QueryExecutor(connectionManager, historyStore, memoryService);
@@ -112,7 +109,6 @@ export function activate(context: vscode.ExtensionContext): void {
     async (tab) => revealSourceForTab(tab),
     (tabs) => queryMap?.updateResults(tabs),
     async (maxRows) => executeActiveMultiStatementSelection(maxRows),
-    async (tab, message) => handleTableMutationFromResultTab(tab, message),
     async (tab, resultSetIndex) => compareResultTabs(tab, resultSetIndex)
   );
   queryMap = new QueryMapProvider(
@@ -841,21 +837,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!(node instanceof TableNode)) {
       return;
     }
-    await TableDataPanel.open(context, connectionManager, node, async (message) => {
-      await handleTableMutation({
-        kind: message.kind!,
-        target: {
-          connection: node.connection,
-          schema: node.table.schema,
-          table: node.table.name
-        },
-        originalRow: message.row,
-        updatedRow: message.updatedRow,
-        column: message.column,
-        valueText: message.valueText,
-        rowText: message.rowText
-      });
-    });
+    await TableDataPanel.open(context, connectionManager, node);
   });
 
   register('database.analyzeTablePerformance', async (node?: unknown) => {
@@ -1100,41 +1082,6 @@ export function activate(context: vscode.ExtensionContext): void {
     updateSqlConnectionStatus(vscode.window.activeTextEditor);
     refreshQueryMap();
     sqlCodeLensRefresh.fire();
-  }
-
-  async function handleTableMutation(request: TableMutationRequest): Promise<void> {
-    const preview = await tableRowMutator.preview(request);
-    await openSqlScript(preview.title, `${preview.sql}\n`, request.target.connection);
-  }
-
-  async function handleTableMutationFromResultTab(
-    tab: QueryResultTab,
-    message: Extract<ResultsFromWebviewMessage, { type: 'mutation' }>
-  ): Promise<void> {
-    const resultSet = tab.resultSets[tab.activeResultSetIndex] ?? tab.resultSets[0];
-    const connection = connectionManager.getConnection(tab.connectionId);
-    if (!connection) {
-      void vscode.window.showInformationMessage('This result tab is no longer connected to a database.');
-      return;
-    }
-    const target = await tableRowMutator.inferTargetFromQuery(connection, tab.queryText);
-    if (!target) {
-      void vscode.window.showInformationMessage('This result set does not map cleanly to a single editable table.');
-      return;
-    }
-    await handleTableMutation({
-      kind: message.kind,
-      target: {
-        ...target,
-        columns: resultSet?.fields.map((field) => field.name),
-        queryText: tab.queryText
-      },
-      originalRow: message.row,
-      updatedRow: message.updatedRow,
-      column: message.column,
-      valueText: message.valueText,
-      rowText: message.rowText
-    });
   }
 
   register('database.showObjectDdl', async (node?: unknown) => {
@@ -1789,7 +1736,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   async function runAi(action: 'fix' | 'explain'): Promise<void> {
     if (!await aiAdapter.isAvailable()) {
-      void vscode.window.showInformationMessage('AI SQL actions require an available VS Code language model.');
+      void vscode.window.showInformationMessage('AI SQL actions need a VS Code language model provider or configured database.ai.openAiCompatible settings.');
       return;
     }
     const editor = vscode.window.activeTextEditor;
