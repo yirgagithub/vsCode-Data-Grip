@@ -26,6 +26,7 @@ import {
 } from '../../types';
 import { qualifiedName, quoteIdentifier } from '../../utils/identifiers';
 import { normalizeExplainJsonPlan } from '../../services/queryPlanService';
+import { loadBundledRuntime } from '../../runtime/runtimeLoader';
 
 interface ActiveExecution {
   connectionId: string;
@@ -652,11 +653,19 @@ type PgRuntime = {
 let pgRuntime: Promise<PgRuntime> | undefined;
 
 function loadPg(): Promise<PgRuntime> {
-  pgRuntime ??= import('pg').then((module) => {
+  pgRuntime ??= loadPgRuntime();
+  return pgRuntime;
+}
+
+async function loadPgRuntime(): Promise<PgRuntime> {
+  const bundled = loadBundledRuntime<PgRuntime>('pgRuntime');
+  if (bundled) {
+    return bundled;
+  }
+  return import('pg').then((module) => {
     const candidate = module as unknown as PgRuntime | { default?: PgRuntime };
     return 'Pool' in candidate ? candidate : candidate.default as PgRuntime;
   });
-  return pgRuntime;
 }
 
 function optionalString(value: unknown): string | undefined {

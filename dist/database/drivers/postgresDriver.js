@@ -37,6 +37,7 @@ exports.PostgresDriver = void 0;
 const crypto_1 = require("crypto");
 const identifiers_1 = require("../../utils/identifiers");
 const queryPlanService_1 = require("../../services/queryPlanService");
+const runtimeLoader_1 = require("../../runtime/runtimeLoader");
 class PostgresDriver {
     id = 'postgres';
     displayName = 'PostgreSQL';
@@ -586,11 +587,18 @@ class PostgresDriver {
 exports.PostgresDriver = PostgresDriver;
 let pgRuntime;
 function loadPg() {
-    pgRuntime ??= Promise.resolve().then(() => __importStar(require('pg'))).then((module) => {
+    pgRuntime ??= loadPgRuntime();
+    return pgRuntime;
+}
+async function loadPgRuntime() {
+    const bundled = (0, runtimeLoader_1.loadBundledRuntime)('pgRuntime');
+    if (bundled) {
+        return bundled;
+    }
+    return Promise.resolve().then(() => __importStar(require('pg'))).then((module) => {
         const candidate = module;
         return 'Pool' in candidate ? candidate : candidate.default;
     });
-    return pgRuntime;
 }
 function optionalString(value) {
     if (value === null || value === undefined) {

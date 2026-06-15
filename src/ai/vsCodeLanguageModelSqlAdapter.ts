@@ -14,7 +14,15 @@ import {
 } from '../types';
 import { parseQueryMemorySummaryText } from './queryMemorySummaryParser';
 
-type AiProvider = 'copilot' | 'openAiCompatible';
+type AiProvider = 'vscodeLanguageModel' | 'openAiCompatible';
+
+interface VsCodeLanguageModel {
+  id?: string;
+  vendor?: string;
+  family?: string;
+  name?: string;
+  sendRequest: (messages: unknown[], options: Record<string, unknown>, token: vscode.CancellationToken) => Promise<{ text: AsyncIterable<string> }>;
+}
 
 export class VsCodeLanguageModelSqlAdapter {
   async isAvailable(): Promise<boolean> {
@@ -27,7 +35,7 @@ export class VsCodeLanguageModelSqlAdapter {
       return false;
     }
     try {
-      const models = await lm.selectChatModels({ vendor: 'copilot' });
+      const models = await this.selectVsCodeLanguageModels(settings);
       return models.length > 0;
     } catch {
       return false;
@@ -85,19 +93,16 @@ export class VsCodeLanguageModelSqlAdapter {
     if (settings.provider === 'openAiCompatible') {
       return this.sendOpenAiCompatible(prompt, settings);
     }
-    return this.sendCopilot(prompt, settings);
+    return this.sendVsCodeLanguageModel(prompt, settings);
   }
 
-  private async sendCopilot(prompt: string, settings = this.settings()): Promise<string> {
+  private async sendVsCodeLanguageModel(prompt: string, settings = this.settings()): Promise<string> {
     const lm = this.languageModelNamespace();
     if (!lm?.selectChatModels) {
       throw new Error('VS Code Language Model API is not available.');
     }
 
-    const models = await lm.selectChatModels({ vendor: settings.copilotVendor });
-    const model = models[0] as {
-      sendRequest: (messages: unknown[], options: Record<string, unknown>, token: vscode.CancellationToken) => Promise<{ text: AsyncIterable<string> }>;
-    } | undefined;
+    const model = (await this.selectVsCodeLanguageModels(settings))[0];
     if (!model) {
       throw new Error('No VS Code language model is available.');
     }
@@ -111,6 +116,21 @@ export class VsCodeLanguageModelSqlAdapter {
       text += chunk;
     }
     return text;
+  }
+
+  private async selectVsCodeLanguageModels(settings = this.settings()): Promise<VsCodeLanguageModel[]> {
+    const lm = this.languageModelNamespace();
+    if (!lm?.selectChatModels) {
+      return [];
+    }
+    const preferredVendor = settings.vscodeLanguageModelVendor.trim();
+    if (preferredVendor) {
+      const preferred = await lm.selectChatModels({ vendor: preferredVendor });
+      if (preferred.length) {
+        return preferred;
+      }
+    }
+    return lm.selectChatModels();
   }
 
   private async sendOpenAiCompatible(prompt: string, settings = this.settings()): Promise<string> {
@@ -264,9 +284,9 @@ export class VsCodeLanguageModelSqlAdapter {
     };
   }
 
-  private languageModelNamespace(): { selectChatModels?: (selector?: Record<string, unknown>) => Promise<unknown[]> } | undefined {
+  private languageModelNamespace(): { selectChatModels?: (selector?: Record<string, unknown>) => Promise<VsCodeLanguageModel[]> } | undefined {
     return (vscode as unknown as { lm?: unknown }).lm as {
-      selectChatModels?: (selector?: Record<string, unknown>) => Promise<unknown[]>;
+      selectChatModels?: (selector?: Record<string, unknown>) => Promise<VsCodeLanguageModel[]>;
     } | undefined;
   }
 
@@ -288,17 +308,18 @@ export class VsCodeLanguageModelSqlAdapter {
 
   private settings(): {
     provider: AiProvider;
-    copilotVendor: string;
+    vscodeLanguageModelVendor: string;
     openAiCompatibleBaseUrl: string;
     openAiCompatibleModel: string;
     openAiCompatibleApiKey: string;
     openAiCompatibleApiKeyEnvVar: string;
   } {
     const config = vscode.workspace.getConfiguration('database');
-    const provider = config.get<string>('ai.provider', 'copilot') === 'openAiCompatible' ? 'openAiCompatible' : 'copilot';
+    const provider = config.get<string>('ai.provider', 'vscodeLanguageModel') === 'openAiCompatible' ? 'openAiCompatible' : 'vscodeLanguageModel';
+    const legacyVendor = config.get<string>('ai.copilot.vendor', 'copilot');
     return {
       provider,
-      copilotVendor: config.get<string>('ai.copilot.vendor', 'copilot') || 'copilot',
+      vscodeLanguageModelVendor: config.get<string>('ai.vscodeLanguageModel.vendor', legacyVendor).trim(),
       openAiCompatibleBaseUrl: config.get<string>('ai.openAiCompatible.baseUrl', '').trim(),
       openAiCompatibleModel: config.get<string>('ai.openAiCompatible.model', '').trim(),
       openAiCompatibleApiKey: config.get<string>('ai.openAiCompatible.apiKey', '').trim(),

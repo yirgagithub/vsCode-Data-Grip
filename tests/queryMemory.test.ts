@@ -34,6 +34,15 @@ vi.mock('vscode', () => ({
   commands: {
     executeCommand: vi.fn(async () => undefined)
   },
+  lm: {
+    selectChatModels: vi.fn(async () => [])
+  },
+  LanguageModelChatMessage: {
+    User: vi.fn((content: string) => ({ role: 'user', content }))
+  },
+  CancellationTokenSource: class {
+    token = {};
+  },
   workspace: {
     getConfiguration: vi.fn(() => ({
       get: vi.fn((_key: string, fallback: unknown) => fallback)
@@ -531,6 +540,51 @@ order by e.created_at desc`,
 });
 
 describe('AI provider settings', () => {
+  it('falls back to any registered VS Code language model when the preferred vendor is unavailable', async () => {
+    const workspaceMock = vscode.workspace as unknown as { getConfiguration: ReturnType<typeof vi.fn> };
+    workspaceMock.getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback: unknown) => ({
+        'ai.provider': 'vscodeLanguageModel',
+        'ai.vscodeLanguageModel.vendor': 'copilot'
+      } as Record<string, unknown>)[key] ?? fallback)
+    });
+    const selectChatModels = vi.fn(async (selector?: Record<string, unknown>) => {
+      if (selector?.vendor === 'copilot') {
+        return [];
+      }
+      return [{
+        vendor: 'anthropic',
+        family: 'claude',
+        id: 'claude-local',
+        sendRequest: vi.fn(async () => ({
+          text: (async function* () {
+            yield 'select 1;';
+          })()
+        }))
+      }];
+    });
+    const vscodeMock = vscode as unknown as { lm?: { selectChatModels: typeof selectChatModels } };
+    const previousLm = vscodeMock.lm;
+    vscodeMock.lm = { selectChatModels };
+    try {
+      const adapter = new VsCodeLanguageModelSqlAdapter();
+      await expect(adapter.isAvailable()).resolves.toBe(true);
+      await expect(adapter.send({
+        action: 'fix',
+        selectedSql: 'select 1',
+        relevantSchema: { tables: [] }
+      })).resolves.toBe('select 1;');
+      expect(selectChatModels).toHaveBeenCalledWith({ vendor: 'copilot' });
+      expect(selectChatModels).toHaveBeenCalledWith();
+    } finally {
+      vscodeMock.lm = previousLm;
+      workspaceMock.getConfiguration.mockReset();
+      workspaceMock.getConfiguration.mockImplementation(() => ({
+        get: vi.fn((_key: string, fallback: unknown) => fallback)
+      }));
+    }
+  });
+
   it('routes table performance advice through a configured OpenAI-compatible endpoint', async () => {
     const workspaceMock = vscode.workspace as unknown as { getConfiguration: ReturnType<typeof vi.fn> };
     workspaceMock.getConfiguration.mockReturnValue({
@@ -1036,6 +1090,36 @@ where event_datetime::date between '2026-06-01' and '2026-06-01'`;
 
     expect(diagnostics.map((diagnostic) => diagnostic.message)).not.toContain(
       'Table or view "event_datetime" does not exist in public.'
+    );
+  });
+
+  it('accepts generated selects with quoted schema and table names', async () => {
+    const local = connection({ id: 'local' });
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => false)
+      } as never,
+      {
+        getCachedForConnection: vi.fn(async () => schemaEntry({
+          connectionId: local.id,
+          tables: [{ schema: 'public', name: 'adjust_offer', type: 'table' }]
+        })),
+        getCachedColumns: vi.fn(),
+        refreshDefaultSchemaInBackground: vi.fn(),
+        refreshSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+    const sql = `select *
+from "public"."adjust_offer"
+limit 100;`;
+
+    const diagnostics = await service.getDiagnostics(sqlDocument(sql) as never, undefined, local);
+
+    expect(diagnostics.map((diagnostic) => diagnostic.message)).not.toContain('Expected a table name after FROM.');
+    expect(diagnostics.map((diagnostic) => diagnostic.message)).not.toContain(
+      'Table or view "public.adjust_offer" does not exist in public.'
     );
   });
 

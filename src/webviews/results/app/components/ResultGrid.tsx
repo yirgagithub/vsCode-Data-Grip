@@ -222,16 +222,6 @@ export function ResultGrid({
     event.preventDefault();
     setContextMenu({ ...menu, x: event.clientX, y: event.clientY });
   };
-  const requestMutation = (message: {
-    kind: 'edit-cell' | 'insert-row' | 'delete-row';
-    row?: Record<string, unknown>;
-    updatedRow?: Record<string, unknown>;
-    column?: string;
-    valueText?: string;
-    rowText?: string;
-  }) => {
-    vscode.postMessage({ type: 'mutation', ...message });
-  };
   const startColumnResize = (event: ReactMouseEvent, column: string) => {
     event.preventDefault();
     event.stopPropagation();
@@ -372,21 +362,6 @@ export function ResultGrid({
                           setSelection({ type: 'cell', rowIndex, column: field.name, value });
                           openContextMenu(event, { rowIndex, column: field.name, value, row });
                         }}
-                        onDoubleClick={() => {
-                          setSelection({ type: 'cell', rowIndex, column: field.name, value });
-                          const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', formatValue(value));
-                          if (valueText === null) {
-                            setInspectorOpen(true);
-                            return;
-                          }
-                          requestMutation({
-                            kind: 'edit-cell',
-                            row,
-                            updatedRow: { ...row, [field.name]: valueText },
-                            column: field.name,
-                            valueText
-                          });
-                        }}
                         role="gridcell"
                         aria-selected={isSelected}
                       >
@@ -422,40 +397,6 @@ export function ResultGrid({
             setContextMenu(undefined);
           }}>
             <Icon name="copy" /><span>Copy</span><kbd>Ctrl+C</kbd>
-          </button>
-          <button role="menuitem" disabled={contextMenu.rowIndex === undefined || !contextMenu.row} onClick={() => {
-            if (contextMenu.row) {
-              const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', formatValue(contextMenu.value));
-              if (valueText !== null && contextMenu.column) {
-                requestMutation({
-                  kind: 'edit-cell',
-                  row: contextMenu.row,
-                  updatedRow: { ...contextMenu.row, [contextMenu.column]: valueText },
-                  column: contextMenu.column,
-                  valueText
-                });
-              }
-            }
-            setContextMenu(undefined);
-          }}>
-            <Icon name="edit" /><span>Edit Cell</span>
-          </button>
-          <button role="menuitem" onClick={() => {
-            const rowText = window.prompt('Insert row as JSON object', '{}');
-            if (rowText !== null) {
-              requestMutation({ kind: 'insert-row', rowText });
-            }
-            setContextMenu(undefined);
-          }}>
-            <Icon name="add" /><span>Insert Row</span>
-          </button>
-          <button role="menuitem" disabled={contextMenu.rowIndex === undefined || !contextMenu.row} onClick={() => {
-            if (contextMenu.row) {
-              requestMutation({ kind: 'delete-row', row: contextMenu.row });
-            }
-            setContextMenu(undefined);
-          }}>
-            <Icon name="trash" /><span>Delete Row</span>
           </button>
           <button role="menuitem" disabled={contextMenu.rowIndex === undefined} onClick={() => {
             const row = contextMenu.rowIndex !== undefined ? rowForIndex(contextMenu.rowIndex) : undefined;

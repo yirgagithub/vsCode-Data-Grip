@@ -77,7 +77,7 @@ describe('command surface', () => {
       .sort()).toEqual([]);
   });
 
-  it('gates language-model actions behind the AI availability context', () => {
+  it('keeps AI actions discoverable even before an AI provider is configured', () => {
     const pkg = packageJson();
     const commands = new Map((pkg.contributes?.commands ?? []).map((item) => [item.command, item]));
     const aiCommands = [
@@ -89,10 +89,11 @@ describe('command surface', () => {
     const menuJson = JSON.stringify(pkg.contributes?.menus ?? {});
 
     aiCommands.forEach((command) => {
-      expect(commands.get(command)?.enablement).toContain('database.aiAvailable');
+      expect(commands.get(command)).toBeDefined();
+      expect(commands.get(command)?.enablement ?? '').not.toContain('database.aiAvailable');
       expect(menuJson).toContain(`"command":"${command}"`);
     });
-    expect(menuJson.match(/database\.aiAvailable/g)?.length ?? 0).toBeGreaterThanOrEqual(aiCommands.length);
+    expect(menuJson).not.toContain('database.aiAvailable');
   });
 
   it('does not ship known placeholder or misleading actions', () => {
@@ -143,5 +144,33 @@ describe('command surface', () => {
     ].forEach((placeholder) => {
       expect(shippedSurface).not.toContain(placeholder);
     });
+  });
+
+  it('does not ship table edit, insert, or delete actions in the webviews', () => {
+    const mutationWebviews = [
+      readText('src/webviews/table/TableDataPanel.ts'),
+      readText('src/webviews/results/app/components/ResultGrid.tsx')
+    ].join('\n');
+
+    [
+      'editCell',
+      'insertRow',
+      'deleteRow',
+      'Edit Cell',
+      'Insert Row',
+      'Delete Row',
+      'type: \'mutation\'',
+      'window.confirm'
+    ].forEach((dialogText) => {
+      expect(mutationWebviews).not.toContain(dialogText);
+    });
+  });
+
+  it('only opens table column suggestions after typing a filter fragment', () => {
+    const tablePanel = readText('src/webviews/table/TableDataPanel.ts');
+
+    expect(tablePanel).toContain("if (!suggestContext.partial.trim())");
+    expect(tablePanel).toContain("column.toLowerCase().includes(lower)");
+    expect(tablePanel).not.toContain("filter((column) => !lower || column.toLowerCase().startsWith(lower))");
   });
 });

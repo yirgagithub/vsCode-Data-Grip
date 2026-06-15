@@ -1,4 +1,5 @@
 import { ConnectionConfig } from '../types';
+import { loadBundledRuntime } from '../runtime/runtimeLoader';
 
 export type SqlFormatterDialect = 'postgresql' | 'redshift' | 'mysql';
 
@@ -30,9 +31,17 @@ type SqlFormatterRuntime = {
 let sqlFormatterRuntime: Promise<SqlFormatterRuntime> | undefined;
 
 function loadSqlFormatter(): Promise<SqlFormatterRuntime> {
-  sqlFormatterRuntime ??= import('sql-formatter').then((module) => {
+  sqlFormatterRuntime ??= loadSqlFormatterRuntime();
+  return sqlFormatterRuntime;
+}
+
+async function loadSqlFormatterRuntime(): Promise<SqlFormatterRuntime> {
+  const bundled = loadBundledRuntime<SqlFormatterRuntime>('sqlFormatterRuntime');
+  if (bundled) {
+    return bundled;
+  }
+  return import('sql-formatter').then((module) => {
     const candidate = module as unknown as SqlFormatterRuntime | { default?: SqlFormatterRuntime };
     return 'format' in candidate ? candidate : candidate.default as SqlFormatterRuntime;
   });
-  return sqlFormatterRuntime;
 }

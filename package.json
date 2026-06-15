@@ -2,7 +2,7 @@
   "name": "vscode-data-grip",
   "displayName": "Data Grip",
   "description": "A VS Code database client for PostgreSQL, Redshift, and MySQL.",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "vs-code-database-client",
   "icon": "media/icon.png",
   "repository": {
@@ -147,22 +147,19 @@
       {
         "command": "database.backfillQueryMemorySummaries",
         "title": "Backfill Query Memory Summaries",
-        "category": "Database",
-        "enablement": "database.aiAvailable"
+        "category": "Database"
       },
       {
         "command": "database.aiFixSql",
         "title": "AI: Fix SQL",
         "category": "Database",
-        "icon": "$(sparkle)",
-        "enablement": "database.aiAvailable"
+        "icon": "$(sparkle)"
       },
       {
         "command": "database.aiExplainSql",
         "title": "AI: Explain SQL",
         "category": "Database",
-        "icon": "$(comment-discussion)",
-        "enablement": "database.aiAvailable"
+        "icon": "$(comment-discussion)"
       },
       {
         "command": "database.visualExplainSql",
@@ -180,8 +177,7 @@
         "command": "database.analyzeTablePerformance",
         "title": "AI: Analyze Table Performance",
         "category": "Database",
-        "icon": "$(graph-line)",
-        "enablement": "database.aiAvailable"
+        "icon": "$(graph-line)"
       },
       {
         "command": "database.profileTableData",
@@ -646,7 +642,7 @@
         },
         {
           "command": "database.analyzeTablePerformance",
-          "when": "viewItem == table && database.aiAvailable",
+          "when": "viewItem == table",
           "group": "data@2"
         },
         {
@@ -717,17 +713,14 @@
         },
         {
           "command": "database.backfillQueryMemorySummaries",
-          "when": "database.aiAvailable",
           "group": "history@3"
         },
         {
           "command": "database.aiFixSql",
-          "when": "database.aiAvailable",
           "group": "ai@1"
         },
         {
           "command": "database.aiExplainSql",
-          "when": "database.aiAvailable",
           "group": "ai@2"
         }
       ],
@@ -769,12 +762,12 @@
         },
         {
           "command": "database.aiFixSql",
-          "when": "editorLangId == sql && database.aiAvailable",
+          "when": "editorLangId == sql",
           "group": "ai@1"
         },
         {
           "command": "database.aiExplainSql",
-          "when": "editorLangId == sql && database.aiAvailable",
+          "when": "editorLangId == sql",
           "group": "ai@2"
         }
       ],
@@ -913,16 +906,23 @@
         "database.ai.provider": {
           "type": "string",
           "enum": [
+            "vscodeLanguageModel",
             "copilot",
             "openAiCompatible"
           ],
-          "default": "copilot",
+          "default": "vscodeLanguageModel",
           "description": "AI provider used by SQL AI features."
+        },
+        "database.ai.vscodeLanguageModel.vendor": {
+          "type": "string",
+          "default": "copilot",
+          "description": "Preferred VS Code language model vendor. Leave empty to use the first available registered language model."
         },
         "database.ai.copilot.vendor": {
           "type": "string",
           "default": "copilot",
-          "description": "VS Code Language Model vendor selector used when database.ai.provider is copilot."
+          "markdownDeprecationMessage": "Use `database.ai.vscodeLanguageModel.vendor` instead.",
+          "description": "Legacy VS Code Language Model vendor selector used by SQL AI features."
         },
         "database.ai.openAiCompatible.baseUrl": {
           "type": "string",
@@ -951,9 +951,10 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "bundle:extension": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --external:pg --external:pg/* --external:pg-native --external:mysql2 --external:mysql2/* --external:sql-formatter --external:xlsx --sourcemap --outfile=dist/extension.js",
+    "bundle:runtimes": "esbuild src/runtime/pgRuntime.ts src/runtime/mysqlRuntime.ts src/runtime/sqlFormatterRuntime.ts src/runtime/xlsxRuntime.ts --bundle --platform=node --format=cjs --target=node20 --external:pg-native --sourcemap --outdir=dist/runtime",
     "bundle:webview": "vite build --config vite.config.ts",
     "copy:codicons": "node -e \"const fs=require('fs');fs.mkdirSync('media/codicons',{recursive:true});for(const f of ['codicon.css','codicon.ttf'])fs.copyFileSync('node_modules/@vscode/codicons/dist/'+f,'media/codicons/'+f);\"",
-    "build": "npm run copy:codicons && npm run compile && npm run bundle:extension && npm run bundle:webview",
+    "build": "npm run copy:codicons && npm run compile && npm run bundle:extension && npm run bundle:runtimes && npm run bundle:webview",
     "lint": "tsc -p ./ --noEmit",
     "test": "vitest run",
     "compile:e2e": "tsc -p e2e",

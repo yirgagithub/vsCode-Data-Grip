@@ -640,7 +640,7 @@ export class SqlQueryTreeService {
     const text = document.getText();
     const issues: SqlSyntaxIssue[] = [];
     for (const statement of splitSqlStatements(text)) {
-      const tokens = this.wordTokens(text, statement.start, statement.end);
+      const tokens = this.wordTokens(text, statement.start, statement.end, { includeQuotedIdentifiers: true });
       for (let index = 0; index < tokens.length; index += 1) {
         const token = tokens[index];
         const word = token.word.toLowerCase();
@@ -717,7 +717,7 @@ export class SqlQueryTreeService {
     text: string,
     start: number,
     end: number,
-    options: { includeQuotedValues?: boolean } = {}
+    options: { includeQuotedValues?: boolean; includeQuotedIdentifiers?: boolean } = {}
   ): Array<{ word: string; start: number; end: number }> {
     const tokens: Array<{ word: string; start: number; end: number }> = [];
     let i = start;
@@ -783,7 +783,7 @@ export class SqlQueryTreeService {
             i += 1;
           }
         }
-        if (options.includeQuotedValues) {
+        if (options.includeQuotedValues || options.includeQuotedIdentifiers) {
           tokens.push({ word: text.slice(tokenStart, i), start: tokenStart, end: i });
         }
         continue;
