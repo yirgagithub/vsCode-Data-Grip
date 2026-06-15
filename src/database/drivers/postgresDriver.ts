@@ -1,4 +1,4 @@
-import { Pool, PoolClient, PoolConfig, QueryResult } from 'pg';
+import type { Pool, PoolClient, PoolConfig, QueryResult } from 'pg';
 import { randomUUID } from 'crypto';
 import { DatabaseDriver } from './DatabaseDriver';
 import {
@@ -14,11 +14,14 @@ import {
   QueryExecutionResult,
   QueryError,
   QueryValidationResult,
+  ActiveSessionInfo,
+  RoutineInfo,
   SchemaInfo,
   TablePreviewOptions,
   TableStatsInfo,
   TableInfo,
   TestConnectionResult,
+  TriggerInfo,
   ViewInfo
 } from '../../types';
 import { qualifiedName, quoteIdentifier } from '../../utils/identifiers';
@@ -35,6 +38,7 @@ export class PostgresDriver implements DatabaseDriver {
   protected readonly pools = new Map<string, Pool>();
   protected readonly configs = new Map<string, ConnectionConfigWithPassword>();
   protected readonly activeExecutions = new Map<string, ActiveExecution>();
+  protected readonly transactionClients = new Map<string, PoolClient>();
 
   async testConnection(config: ConnectionConfigWithPassword): Promise<TestConnectionResult> {
     let pool: Pool | undefined;
@@ -60,11 +64,57 @@ export class PostgresDriver implements DatabaseDriver {
   }
 
   async disconnect(connectionId: string): Promise<void> {
+    await this.rollbackTransaction(connectionId).catch(() => undefined);
     const pool = this.pools.get(connectionId);
     if (pool) {
       this.pools.delete(connectionId);
       await pool.end();
     }
+  }
+
+  async beginTransaction(connectionId: string): Promise<void> {
+    if (this.transactionClients.has(connectionId)) {
+      return;
+    }
+    const pool = this.requirePool(connectionId);
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      this.transactionClients.set(connectionId, client);
+    } catch (error) {
+      client.release();
+      throw error;
+    }
+  }
+
+  async commitTransaction(connectionId: string): Promise<void> {
+    const client = this.transactionClients.get(connectionId);
+    if (!client) {
+      return;
+    }
+    try {
+      await client.query('commit');
+    } finally {
+      this.transactionClients.delete(connectionId);
+      client.release();
+    }
+  }
+
+  async rollbackTransaction(connectionId: string): Promise<void> {
+    const client = this.transactionClients.get(connectionId);
+    if (!client) {
+      return;
+    }
+    try {
+      await client.query('rollback');
+    } finally {
+      this.transactionClients.delete(connectionId);
+      client.release();
+    }
+  }
+
+  isTransactionOpen(connectionId: string): boolean {
+    return this.transactionClients.has(connectionId);
   }
 
   async executeQuery(params: ExecuteQueryParams): Promise<QueryExecutionResult> {
@@ -74,9 +124,11 @@ export class PostgresDriver implements DatabaseDriver {
 
   async executeStatements(params: ExecuteQueryParams, statements: string[]): Promise<QueryExecutionResult[]> {
     const pool = this.requirePool(params.connectionId);
-    const client = await pool.connect();
+    const transactionClient = this.transactionClients.get(params.connectionId);
+    const client = transactionClient ?? await pool.connect();
     const results: QueryExecutionResult[] = [];
-    const hasExplicitTransaction = statements.some((sql) => /\bbegin\b/i.test(sql));
+    const hasExplicitTransaction = !transactionClient && statements.some((sql) => /\bbegin\b/i.test(sql));
+    const pinnedTransaction = !!transactionClient;
 
     try {
       for (const [index, sql] of statements.entries()) {
@@ -92,7 +144,7 @@ export class PostgresDriver implements DatabaseDriver {
         });
         this.activeExecutions.set(executionId, { connectionId: params.connectionId, processId: (client as PoolClient & { processID?: number }).processID });
         try {
-          const result = await client.query(this.sqlWithClientLimit(sql, params.maxRows));
+          const result = await client.query(this.sqlWithClientLimit(sql, params.maxRows, params.offset));
           const queryResults = Array.isArray(result) ? result : [result];
           const executionResults = queryResults.map((item) => this.toExecutionResult(item, executionId, started));
           params.onProgress?.({
@@ -136,7 +188,9 @@ export class PostgresDriver implements DatabaseDriver {
       }
       throw error;
     } finally {
-      client.release();
+      if (!pinnedTransaction) {
+        client.release();
+      }
     }
   }
 
@@ -210,6 +264,119 @@ export class PostgresDriver implements DatabaseDriver {
       [schema]
     );
     return result.rows;
+  }
+
+  async getFunctions(connectionId: string, schema: string): Promise<RoutineInfo[]> {
+    const result = await this.requirePool(connectionId).query(
+      `select n.nspname as schema,
+              p.proname as name,
+              'function' as kind,
+              pg_get_function_result(p.oid) as "returnType",
+              l.lanname as language,
+              obj_description(p.oid, 'pg_proc') as comment
+       from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+       left join pg_language l on l.oid = p.prolang
+       where n.nspname = $1 and p.prokind = 'f'
+       order by p.proname`,
+      [schema]
+    );
+    return result.rows;
+  }
+
+  async getProcedures(connectionId: string, schema: string): Promise<RoutineInfo[]> {
+    const result = await this.requirePool(connectionId).query(
+      `select n.nspname as schema,
+              p.proname as name,
+              'procedure' as kind,
+              pg_get_function_result(p.oid) as "returnType",
+              l.lanname as language,
+              obj_description(p.oid, 'pg_proc') as comment
+       from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+       left join pg_language l on l.oid = p.prolang
+       where n.nspname = $1 and p.prokind = 'p'
+       order by p.proname`,
+      [schema]
+    );
+    return result.rows;
+  }
+
+  async getTriggers(connectionId: string, schema: string): Promise<TriggerInfo[]> {
+    const result = await this.requirePool(connectionId).query(
+      `select n.nspname as schema,
+              c.relname as table,
+              t.tgname as name,
+              t.tgenabled as enabled,
+              pg_get_triggerdef(t.oid) as definition
+       from pg_trigger t
+       join pg_class c on c.oid = t.tgrelid
+       join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = $1 and not t.tgisinternal
+       order by c.relname, t.tgname`,
+      [schema]
+    );
+    return result.rows.map((row: Record<string, unknown>) => ({
+      schema: String(row.schema),
+      table: String(row.table),
+      name: String(row.name),
+      enabled: optionalString(row.enabled),
+      orientation: optionalString(row.definition)?.includes('FOR EACH ROW') ? 'row' : 'statement',
+      timing: optionalString(row.definition)?.includes('BEFORE')
+        ? 'before'
+        : optionalString(row.definition)?.includes('AFTER')
+          ? 'after'
+          : optionalString(row.definition)?.includes('INSTEAD OF')
+            ? 'instead of'
+            : undefined,
+      events: triggerEvents(optionalString(row.definition))
+    }));
+  }
+
+  async getActiveSessions(connectionId: string): Promise<ActiveSessionInfo[]> {
+    const result = await this.requirePool(connectionId).query(
+      `select pid,
+              usename as user,
+              datname as database,
+              application_name as application,
+              client_addr::text as client,
+              state,
+              query,
+              backend_start as "startedAt",
+              xact_start as "transactionStartedAt",
+              state_change as "stateChangedAt",
+              wait_event_type as "waitEventType",
+              wait_event as "waitEvent",
+              pid = pg_backend_pid() as "isCurrent",
+              state = 'idle in transaction' as "isIdleInTransaction"
+       from pg_stat_activity
+       where datname = current_database()
+       order by backend_start desc nulls last, pid desc`
+    );
+    return result.rows.map((row: Record<string, unknown>) => ({
+      pid: Number(row.pid),
+      user: optionalString(row.user),
+      database: optionalString(row.database),
+      application: optionalString(row.application),
+      client: optionalString(row.client),
+      state: optionalString(row.state),
+      query: optionalString(row.query),
+      startedAt: optionalString(row.startedAt),
+      transactionStartedAt: optionalString(row.transactionStartedAt),
+      stateChangedAt: optionalString(row.stateChangedAt),
+      waitEventType: optionalString(row.waitEventType),
+      waitEvent: optionalString(row.waitEvent),
+      isCurrent: Boolean(row.isCurrent),
+      isIdleInTransaction: Boolean(row.isIdleInTransaction)
+    }));
+  }
+
+  async cancelSession(connectionId: string, pid: number): Promise<void> {
+    await this.requirePool(connectionId).query('select pg_cancel_backend($1)', [pid]);
+  }
+
+  async terminateSession(connectionId: string, pid: number): Promise<void> {
+    await this.requirePool(connectionId).query('select pg_terminate_backend($1)', [pid]);
   }
 
   async getColumns(connectionId: string, schema: string, table: string): Promise<ColumnInfo[]> {
@@ -383,6 +550,7 @@ export class PostgresDriver implements DatabaseDriver {
   }
 
   private async createVerifiedPool(config: ConnectionConfigWithPassword, max: number): Promise<Pool> {
+    const { Pool } = await loadPg();
     const pool = new Pool(this.toPoolConfig(config, max));
     try {
       await pool.query('select 1');
@@ -437,10 +605,12 @@ export class PostgresDriver implements DatabaseDriver {
     return normalized.startsWith('select') || normalized.startsWith('with');
   }
 
-  private sqlWithClientLimit(sql: string, maxRows: number | undefined): string {
+  private sqlWithClientLimit(sql: string, maxRows: number | undefined, offset?: number): string {
     const limit = Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : undefined;
-    return limit && this.canApplyClientLimit(sql)
-      ? `select * from (${sql.replace(/;+\s*$/, '')}) __dg_query limit ${limit}`
+    const nextOffset = Number.isFinite(offset) && offset && offset > 0 ? Math.floor(offset) : 0;
+    const pageLimit = limit ? limit + 1 : undefined;
+    return pageLimit && this.canApplyClientLimit(sql)
+      ? `select * from (${sql.replace(/;+\s*$/, '')}) __dg_query limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ''}`
       : sql;
   }
 
@@ -473,4 +643,34 @@ export class PostgresDriver implements DatabaseDriver {
       where: pgError.where
     };
   }
+}
+
+type PgRuntime = {
+  Pool: new (config: PoolConfig) => Pool;
+};
+
+let pgRuntime: Promise<PgRuntime> | undefined;
+
+function loadPg(): Promise<PgRuntime> {
+  pgRuntime ??= import('pg').then((module) => {
+    const candidate = module as unknown as PgRuntime | { default?: PgRuntime };
+    return 'Pool' in candidate ? candidate : candidate.default as PgRuntime;
+  });
+  return pgRuntime;
+}
+
+function optionalString(value: unknown): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  const next = String(value).trim();
+  return next || undefined;
+}
+
+function triggerEvents(definition?: string): string[] | undefined {
+  if (!definition) {
+    return undefined;
+  }
+  const events = ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'].filter((event) => definition.includes(event));
+  return events.length ? events : undefined;
 }

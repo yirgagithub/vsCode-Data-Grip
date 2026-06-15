@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ColumnNode = exports.ViewNode = exports.TableNode = exports.FolderNode = exports.SchemaNode = exports.SchemasNode = exports.CatalogNode = exports.ConnectionNode = void 0;
+exports.ColumnNode = exports.ViewNode = exports.TableNode = exports.TriggerNode = exports.RoutineNode = exports.FolderNode = exports.SchemaNode = exports.SchemasNode = exports.CatalogNode = exports.ConnectionNode = void 0;
 const vscode = __importStar(require("vscode"));
 class ConnectionNode extends vscode.TreeItem {
     connection;
@@ -42,9 +42,9 @@ class ConnectionNode extends vscode.TreeItem {
         super(truncateMiddle(connection.name, 36), vscode.TreeItemCollapsibleState.Collapsed);
         this.connection = connection;
         this.id = connection.id;
-        this.description = `${connected ? 'online' : 'offline'} | ${connection.type}`;
+        this.description = `${connected ? 'online' : 'offline'} | ${connection.type}${connection.production ? ' | prod' : ''}`;
         this.contextValue = 'connection';
-        this.iconPath = new vscode.ThemeIcon('database', new vscode.ThemeColor(connected ? 'testing.iconPassed' : 'descriptionForeground'));
+        this.iconPath = new vscode.ThemeIcon('database', new vscode.ThemeColor(connection.production ? 'errorForeground' : connected ? connectionColorTheme(connection.color) : 'descriptionForeground'));
         this.tooltip = new vscode.MarkdownString([
             `**${connection.name}**`,
             '',
@@ -53,11 +53,29 @@ class ConnectionNode extends vscode.TreeItem {
             `Database: ${connection.database}`,
             `User: ${connection.username}`,
             `Schema: ${connection.defaultSchema ?? 'public'}`,
+            `Environment: ${connection.production ? 'production' : 'non-production'}`,
             `Status: ${connected ? 'connected' : 'disconnected'}`
         ].join('\n\n'));
     }
 }
 exports.ConnectionNode = ConnectionNode;
+function connectionColorTheme(color) {
+    switch (color) {
+        case 'red':
+            return 'charts.red';
+        case 'yellow':
+            return 'charts.yellow';
+        case 'green':
+            return 'charts.green';
+        case 'blue':
+            return 'charts.blue';
+        case 'purple':
+            return 'charts.purple';
+        case 'gray':
+        default:
+            return 'descriptionForeground';
+    }
+}
 class CatalogNode extends vscode.TreeItem {
     connection;
     kind = 'catalog';
@@ -112,11 +130,61 @@ class FolderNode extends vscode.TreeItem {
         this.folder = folder;
         this.tableName = tableName;
         this.id = `folder:${connection.id}:${schema}:${folder}:${tableName ?? ''}`;
-        this.contextValue = folder.toLowerCase().replace(/\s+/g, '-');
+        this.contextValue = folder === 'Functions'
+            ? 'function-folder'
+            : folder === 'Procedures'
+                ? 'procedure-folder'
+                : folder === 'Triggers'
+                    ? 'trigger-folder'
+                    : folder.toLowerCase().replace(/\s+/g, '-');
         this.iconPath = new vscode.ThemeIcon(folder === 'Materialized Views' ? 'symbol-structure' : 'folder');
     }
 }
 exports.FolderNode = FolderNode;
+class RoutineNode extends vscode.TreeItem {
+    connection;
+    routine;
+    kind = 'routine';
+    constructor(connection, routine) {
+        super(truncateMiddle(routine.name, 48), vscode.TreeItemCollapsibleState.None);
+        this.connection = connection;
+        this.routine = routine;
+        this.id = `routine:${connection.id}:${routine.kind}:${routine.schema}:${routine.name}`;
+        this.contextValue = routine.kind;
+        this.iconPath = new vscode.ThemeIcon(routine.kind === 'procedure' ? 'gear' : 'symbol-function');
+        this.tooltip = [
+            `${routine.schema}.${routine.name}`,
+            routine.kind === 'procedure' ? 'Procedure' : 'Function',
+            routine.returnType ? `Returns: ${routine.returnType}` : undefined,
+            routine.language ? `Language: ${routine.language}` : undefined,
+            routine.comment
+        ].filter(Boolean).join('\n');
+        this.command = { command: 'database.quickDocumentation', title: 'Quick Documentation', arguments: [this] };
+    }
+}
+exports.RoutineNode = RoutineNode;
+class TriggerNode extends vscode.TreeItem {
+    connection;
+    trigger;
+    kind = 'trigger';
+    constructor(connection, trigger) {
+        super(truncateMiddle(trigger.name, 48), vscode.TreeItemCollapsibleState.None);
+        this.connection = connection;
+        this.trigger = trigger;
+        this.id = `trigger:${connection.id}:${trigger.schema}:${trigger.table}:${trigger.name}`;
+        this.contextValue = 'trigger';
+        this.iconPath = new vscode.ThemeIcon('debug-breakpoint-log');
+        this.tooltip = [
+            `${trigger.schema}.${trigger.table}.${trigger.name}`,
+            trigger.timing ? `Timing: ${trigger.timing}` : undefined,
+            trigger.orientation ? `Orientation: ${trigger.orientation}` : undefined,
+            trigger.events?.length ? `Events: ${trigger.events.join(', ')}` : undefined,
+            trigger.enabled ? `Enabled: ${trigger.enabled}` : undefined
+        ].filter(Boolean).join('\n');
+        this.command = { command: 'database.quickDocumentation', title: 'Quick Documentation', arguments: [this] };
+    }
+}
+exports.TriggerNode = TriggerNode;
 class TableNode extends vscode.TreeItem {
     connection;
     table;

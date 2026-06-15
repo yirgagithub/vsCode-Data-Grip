@@ -21,6 +21,13 @@ vi.mock('pg', () => {
       return { rows: [{ version: 'PostgreSQL 16' }], fields: [], rowCount: 1 };
     });
 
+    async connect() {
+      return {
+        query: this.query,
+        release: vi.fn(async () => undefined)
+      };
+    }
+
     end = vi.fn(async () => undefined);
 
     constructor(public readonly config: { ssl?: unknown }) {
@@ -81,6 +88,62 @@ describe('PostgresDriver DDL generation', () => {
 
     expect(ddl).toContain('"select" text not null');
     expect(ddl).toContain('"has""quote" integer');
+  });
+
+  it('wraps paged selects with limit plus one and offset for fetch-more paging', async () => {
+    const driver = new PostgresDriver();
+    await driver.connect(config({ sslMode: 'prefer' }));
+
+    await driver.executeStatements(
+      { connectionId: 'local', sql: 'select * from users', maxRows: 10, offset: 20 },
+      ['select * from users']
+    );
+
+    expect(String(pgMock.queries.at(-1)?.sql)).toContain('limit 11 offset 20');
+  });
+});
+
+describe('PostgresDriver routine metadata', () => {
+  beforeEach(() => {
+    pgMock.failSsl = false;
+    pgMock.queries.length = 0;
+    pgMock.pools.length = 0;
+  });
+
+  it('queries routines and triggers from pg catalogs', async () => {
+    const driver = new PostgresDriver();
+    await driver.connect(config({ sslMode: 'prefer' }));
+
+    await driver.getFunctions('local', 'public');
+    await driver.getProcedures('local', 'public');
+    await driver.getTriggers('local', 'public');
+
+    const queries = pgMock.queries.map((entry) => String(entry.sql));
+    expect(queries.some((sql) => sql.includes('pg_proc') && sql.includes("prokind = 'f'"))).toBe(true);
+    expect(queries.some((sql) => sql.includes('pg_proc') && sql.includes("prokind = 'p'"))).toBe(true);
+    expect(queries.some((sql) => sql.includes('pg_trigger') && sql.includes('not t.tgisinternal'))).toBe(true);
+  });
+});
+
+describe('PostgresDriver session monitor', () => {
+  beforeEach(() => {
+    pgMock.failSsl = false;
+    pgMock.queries.length = 0;
+    pgMock.pools.length = 0;
+  });
+
+  it('lists sessions and issues cancel or terminate commands', async () => {
+    const driver = new PostgresDriver();
+    await driver.connect(config({ sslMode: 'prefer' }));
+
+    await driver.getActiveSessions('local');
+    await driver.cancelSession('local', 123);
+    await driver.terminateSession('local', 456);
+
+    const queries = pgMock.queries.map((entry) => ({ sql: String(entry.sql), params: entry.params }));
+    expect(queries.some((entry) => entry.sql.includes('pg_stat_activity'))).toBe(true);
+    expect(queries.some((entry) => entry.sql.includes('pg_cancel_backend') && entry.params[0]?.[0] === 123)).toBe(true);
+    expect(queries.some((entry) => entry.sql.includes('pg_terminate_backend') && entry.params[0]?.[0] === 456)).toBe(true);
   });
 });
 

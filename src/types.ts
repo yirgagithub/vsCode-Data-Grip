@@ -1,4 +1,4 @@
-export type DatabaseType = 'postgres' | 'redshift';
+export type DatabaseType = 'postgres' | 'redshift' | 'mysql';
 
 export type ConnectionColor = 'red' | 'yellow' | 'green' | 'blue' | 'purple' | 'gray';
 
@@ -19,6 +19,17 @@ export interface ConnectionConfig {
   queryTimeoutMs?: number;
   production?: boolean;
   readOnlyDefault?: boolean;
+  sshTunnel?: SshTunnelConfig;
+}
+
+export interface SshTunnelConfig {
+  enabled: boolean;
+  host: string;
+  port?: number;
+  username: string;
+  privateKeyPath?: string;
+  localHost?: string;
+  localPort?: number;
 }
 
 export interface ConnectionConfigWithPassword extends ConnectionConfig {
@@ -46,6 +57,8 @@ export interface QueryField {
 export interface ExecuteQueryParams {
   connectionId: string;
   sql: string;
+  transactionMode?: 'auto' | 'manual';
+  offset?: number;
   onProgress?: (progress: QueryExecutionProgress) => void;
   source?: {
     origin?: QueryExecutionOrigin;
@@ -87,6 +100,7 @@ export interface QueryExecutionResult {
   fields: QueryField[];
   rows: Record<string, unknown>[];
   rowCount: number;
+  hasMore?: boolean;
   command?: string;
   durationMs: number;
   notices?: string[];
@@ -182,6 +196,42 @@ export interface ViewInfo {
   type: 'view' | 'materialized_view';
 }
 
+export interface RoutineInfo {
+  schema: string;
+  name: string;
+  kind: 'function' | 'procedure';
+  returnType?: string;
+  language?: string;
+  comment?: string;
+}
+
+export interface TriggerInfo {
+  schema: string;
+  table: string;
+  name: string;
+  timing?: string;
+  events?: string[];
+  orientation?: string;
+  enabled?: string;
+}
+
+export interface ActiveSessionInfo {
+  pid: number;
+  user?: string;
+  database?: string;
+  application?: string;
+  client?: string;
+  state?: string;
+  query?: string;
+  startedAt?: string;
+  transactionStartedAt?: string;
+  stateChangedAt?: string;
+  waitEventType?: string;
+  waitEvent?: string;
+  isCurrent?: boolean;
+  isIdleInTransaction?: boolean;
+}
+
 export interface ColumnInfo {
   schema: string;
   table: string;
@@ -258,6 +308,7 @@ export interface ResultSet {
   fields: QueryField[];
   rows: Record<string, unknown>[];
   rowCount: number;
+  hasMore?: boolean;
   maxRows?: number;
   command?: string;
   durationMs: number;
@@ -315,9 +366,14 @@ export interface QueryResultTab {
   executionTimeMs?: number;
   rowCount?: number;
   maxRows?: number;
+  rowOffset?: number;
   error?: QueryError;
   resultSets: ResultSet[];
   plan?: QueryPlanResult;
+  transaction?: {
+    mode: 'auto' | 'manual';
+    open: boolean;
+  };
   activeResultSetIndex: number;
   filters: GridFilterState;
   sort: SortSpec[];

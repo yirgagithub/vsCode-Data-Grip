@@ -58,22 +58,33 @@ class QueryExecutor {
         const started = Date.now();
         const tabId = (0, id_1.createId)('tab');
         const resultSets = [];
+        const transactionMode = this.connectionManager.getTransactionMode(params.connectionId);
+        let effectiveTransactionMode = params.transactionMode ?? transactionMode;
         try {
             if (!this.connectionManager.isConnected(params.connectionId)) {
                 await this.connectionManager.connect(params.connectionId);
             }
+            if (config.readOnlyDefault && !isReadOnlySql(params.sql)) {
+                throw new Error('This connection is read-only by default and only accepts SELECT-style queries.');
+            }
             await this.confirmDestructiveIfNeeded(config.production === true, params.sql);
+            if (effectiveTransactionMode === 'manual' && !this.connectionManager.isTransactionOpen(params.connectionId)) {
+                await this.connectionManager.beginTransaction(params.connectionId);
+            }
             const statements = (0, sqlSplitter_1.splitSqlStatements)(params.sql);
             const sqlParts = statements.length ? statements.map((statement) => statement.sql) : [params.sql];
             const results = await this.connectionManager.getDriver(config.type).executeStatements(params, sqlParts);
             for (const [index, result] of results.entries()) {
+                const maxRows = params.maxRows && params.maxRows > 0 ? Math.floor(params.maxRows) : undefined;
+                const rows = maxRows ? result.rows.slice(0, maxRows) : result.rows;
                 resultSets.push({
                     id: result.executionId,
                     title: sqlParts.length > 1 ? `Result ${index + 1}` : this.resultTitle(sqlParts[index] ?? params.sql, params.source?.fileName),
                     fields: result.fields,
-                    rows: result.rows,
-                    rowCount: result.rowCount,
-                    maxRows: params.maxRows,
+                    rows,
+                    rowCount: rows.length,
+                    maxRows,
+                    hasMore: maxRows ? result.rowCount > rows.length : false,
                     command: result.command,
                     durationMs: result.durationMs
                 });
@@ -120,7 +131,12 @@ class QueryExecutor {
                 executionTimeMs: durationMs,
                 rowCount: resultSets.reduce((total, set) => total + set.rowCount, 0),
                 maxRows: params.maxRows,
+                rowOffset: params.offset && params.offset > 0 ? Math.floor(params.offset) : 0,
                 resultSets,
+                transaction: {
+                    mode: effectiveTransactionMode,
+                    open: this.connectionManager.isTransactionOpen(config.id)
+                },
                 activeResultSetIndex: 0,
                 filters: [],
                 sort: [],
@@ -170,8 +186,13 @@ class QueryExecutor {
                 executionFinishedAt: Date.now(),
                 executionTimeMs: Date.now() - started,
                 maxRows: params.maxRows,
+                rowOffset: params.offset && params.offset > 0 ? Math.floor(params.offset) : 0,
                 error: queryError,
                 resultSets: [],
+                transaction: {
+                    mode: effectiveTransactionMode,
+                    open: this.connectionManager.isTransactionOpen(config.id)
+                },
                 activeResultSetIndex: 0,
                 filters: [],
                 sort: [],
@@ -234,4 +255,9 @@ class QueryExecutor {
     }
 }
 exports.QueryExecutor = QueryExecutor;
+function isReadOnlySql(sql) {
+    const statements = (0, sqlSplitter_1.splitSqlStatements)(sql).map((statement) => statement.sql.trim()).filter(Boolean);
+    const parts = statements.length ? statements : [sql.trim()].filter(Boolean);
+    return parts.every((statement) => /^(select|with|values|show|describe|explain)\b/i.test(statement));
+}
 //# sourceMappingURL=queryExecutor.js.map

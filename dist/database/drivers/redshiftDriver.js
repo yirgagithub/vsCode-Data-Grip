@@ -57,6 +57,53 @@ class RedshiftDriver extends postgresDriver_1.PostgresDriver {
        order by viewname`, [schema]);
         return result.rows;
     }
+    async getActiveSessions(connectionId) {
+        const pool = this.requirePool(connectionId);
+        try {
+            const result = await pool.query(`select pid,
+                user_name as user,
+                db_name as database,
+                '' as application,
+                remotehost as client,
+                status as state,
+                query as query,
+                starttime as "startedAt",
+                null as "transactionStartedAt",
+                null as "stateChangedAt",
+                null as "waitEventType",
+                null as "waitEvent",
+                pid = pg_backend_pid() as "isCurrent",
+                status = 'idle in transaction' as "isIdleInTransaction"
+         from stv_recents
+         where db_name = current_database()
+         order by starttime desc nulls last, pid desc`);
+            return result.rows.map((row) => ({
+                pid: Number(row.pid),
+                user: optionalString(row.user),
+                database: optionalString(row.database),
+                application: optionalString(row.application),
+                client: optionalString(row.client),
+                state: optionalString(row.state),
+                query: optionalString(row.query),
+                startedAt: optionalString(row.startedAt),
+                transactionStartedAt: optionalString(row.transactionStartedAt),
+                stateChangedAt: optionalString(row.stateChangedAt),
+                waitEventType: optionalString(row.waitEventType),
+                waitEvent: optionalString(row.waitEvent),
+                isCurrent: Boolean(row.isCurrent),
+                isIdleInTransaction: Boolean(row.isIdleInTransaction)
+            }));
+        }
+        catch {
+            return super.getActiveSessions(connectionId);
+        }
+    }
+    async cancelSession(connectionId, pid) {
+        await this.requirePool(connectionId).query('select pg_cancel_backend($1)', [pid]);
+    }
+    async terminateSession(connectionId, pid) {
+        await this.cancelSession(connectionId, pid);
+    }
     async getColumns(connectionId, schema, table) {
         const result = await this.requirePool(connectionId).query(`select table_schema as schema, table_name as table, column_name as name,
               ordinal_position as ordinal, data_type as "dataType",

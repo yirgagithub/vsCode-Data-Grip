@@ -37,23 +37,29 @@ exports.ResultsPanelProvider = void 0;
 const vscode = __importStar(require("vscode"));
 class ResultsPanelProvider {
     context;
+    connectionManager;
     sessionStore;
     executor;
     revealSource;
     onTabsChanged;
     runActiveEditorSelection;
+    onMutationRequest;
+    onCompareRequest;
     static viewType = 'sqlResults';
     view;
     tabs;
     activeTabId;
     activeConnectionId;
-    constructor(context, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection) {
+    constructor(context, connectionManager, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection, onMutationRequest, onCompareRequest) {
         this.context = context;
+        this.connectionManager = connectionManager;
         this.sessionStore = sessionStore;
         this.executor = executor;
         this.revealSource = revealSource;
         this.onTabsChanged = onTabsChanged;
         this.runActiveEditorSelection = runActiveEditorSelection;
+        this.onMutationRequest = onMutationRequest;
+        this.onCompareRequest = onCompareRequest;
         this.tabs = this.sessionStore.getTabs();
         this.activeTabId = this.tabs[0]?.id;
         this.activeConnectionId = this.tabs.find((tab) => tab.id === this.activeTabId)?.connectionId;
@@ -112,6 +118,9 @@ class ResultsPanelProvider {
     getTab(id) {
         return this.tabs.find((tab) => tab.id === id);
     }
+    getActiveTab() {
+        return this.getTab(this.activeTabId ?? '');
+    }
     async onMessage(message) {
         if (message.type === 'ready') {
             this.postHydrate();
@@ -151,6 +160,7 @@ class ResultsPanelProvider {
             const tab = this.getTab(message.tabId);
             if (tab) {
                 const maxRows = typeof message.maxRows === 'number' ? message.maxRows : message.maxRows === null ? undefined : tab.maxRows;
+                const offset = typeof message.offset === 'number' ? message.offset : message.offset === null ? 0 : tab.rowOffset ?? 0;
                 if (await this.runActiveEditorSelection?.(maxRows)) {
                     return;
                 }
@@ -163,6 +173,7 @@ class ResultsPanelProvider {
                     executionTimeMs: undefined,
                     rowCount: undefined,
                     maxRows,
+                    rowOffset: offset,
                     error: undefined,
                     resultSets: [],
                     activeResultSetIndex: 0,
@@ -172,6 +183,7 @@ class ResultsPanelProvider {
                     connectionId: tab.connectionId,
                     sql: tab.queryText,
                     maxRows,
+                    offset,
                     source: {
                         origin: tab.sourceOrigin,
                         fileName: tab.sourceFile,
@@ -184,15 +196,53 @@ class ResultsPanelProvider {
             }
             return;
         }
+        if (message.type === 'setTransactionMode') {
+            const tab = this.getTab(message.tabId);
+            if (tab) {
+                await this.applyTransactionMode(tab.connectionId, message.mode);
+            }
+            return;
+        }
+        if (message.type === 'commitTransaction') {
+            const tab = this.getTab(message.tabId);
+            if (tab) {
+                await this.connectionManager.commitTransaction(tab.connectionId);
+                await this.syncTransactionState(tab.connectionId);
+            }
+            return;
+        }
+        if (message.type === 'rollbackTransaction') {
+            const tab = this.getTab(message.tabId);
+            if (tab) {
+                await this.connectionManager.rollbackTransaction(tab.connectionId);
+                await this.syncTransactionState(tab.connectionId);
+            }
+            return;
+        }
         if (message.type === 'copy') {
             await vscode.env.clipboard.writeText(message.text);
+            return;
+        }
+        if (message.type === 'mutation') {
+            const tab = this.getTab(this.activeTabId ?? '');
+            if (tab) {
+                await this.onMutationRequest?.(tab, message);
+            }
+            return;
+        }
+        if (message.type === 'compareTabs') {
+            const tab = this.getTab(this.activeTabId ?? '');
+            if (tab) {
+                await this.onCompareRequest?.(tab, message.resultSetIndex);
+            }
+            return;
         }
     }
     post(message) {
         void this.view?.webview.postMessage(message);
     }
     postHydrate() {
-        const tabs = this.visibleTabs();
+        const tabs = this.visibleTabs().map((tab) => this.withTransactionState(tab));
         this.post({ type: 'hydrate', tabs, activeTabId: this.activeTabId && tabs.some((tab) => tab.id === this.activeTabId) ? this.activeTabId : tabs[0]?.id });
     }
     selectConnection(connectionId) {
@@ -207,6 +257,43 @@ class ResultsPanelProvider {
             return this.tabs;
         }
         return this.tabs.filter((tab) => tab.connectionId === this.activeConnectionId);
+    }
+    withTransactionState(tab) {
+        return {
+            ...tab,
+            transaction: {
+                mode: this.connectionManager.getTransactionMode(tab.connectionId),
+                open: this.connectionManager.isTransactionOpen(tab.connectionId)
+            }
+        };
+    }
+    async applyTransactionMode(connectionId, mode) {
+        this.connectionManager.setTransactionMode(connectionId, mode);
+        if (mode === 'manual') {
+            if (!this.connectionManager.isTransactionOpen(connectionId)) {
+                await this.connectionManager.beginTransaction(connectionId);
+            }
+        }
+        else if (this.connectionManager.isTransactionOpen(connectionId)) {
+            const answer = await vscode.window.showWarningMessage('Switching to auto-commit will close the current transaction.', { modal: true }, 'Commit', 'Rollback', 'Cancel');
+            if (answer === 'Cancel' || !answer) {
+                this.connectionManager.setTransactionMode(connectionId, 'manual');
+                return;
+            }
+            if (answer === 'Commit') {
+                await this.connectionManager.commitTransaction(connectionId);
+            }
+            else {
+                await this.connectionManager.rollbackTransaction(connectionId);
+            }
+        }
+        await this.syncTransactionState(connectionId);
+    }
+    async syncTransactionState(connectionId) {
+        this.tabs = this.tabs.map((tab) => tab.connectionId === connectionId ? this.withTransactionState(tab) : tab);
+        await this.sessionStore.saveTabs(this.tabs);
+        this.onTabsChanged?.(this.tabs);
+        this.postHydrate();
     }
     reusableTabFor(tab) {
         if (tab.pinned) {
@@ -229,7 +316,7 @@ class ResultsPanelProvider {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link href="${style}" rel="stylesheet">
   <title>SQL Results</title>

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { ConnectionManager } from '../database/connectionManager';
 import { buildTablePerformancePrepassFlags } from '../services/tablePerformanceAdvisorService';
 import { TablePerformancePrepassFlag, TableStatsInfo, TableWorkloadSummary } from '../types';
-import { CatalogNode, ColumnNode, ConnectionNode, DatabaseNode, FolderNode, SchemaNode, SchemasNode, TableNode, ViewNode } from './nodes';
+import { CatalogNode, ColumnNode, ConnectionNode, DatabaseNode, FolderNode, RoutineNode, SchemaNode, SchemasNode, TableNode, TriggerNode, ViewNode } from './nodes';
 
 const EMPTY_WORKLOAD: TableWorkloadSummary = {
   connectionId: '',
@@ -58,7 +58,10 @@ export class DatabaseTreeProvider implements vscode.TreeDataProvider<DatabaseNod
       return [
         new FolderNode(element.connection, element.schema.name, 'Tables'),
         new FolderNode(element.connection, element.schema.name, 'Materialized Views'),
-        new FolderNode(element.connection, element.schema.name, 'Views')
+        new FolderNode(element.connection, element.schema.name, 'Views'),
+        new FolderNode(element.connection, element.schema.name, 'Functions'),
+        new FolderNode(element.connection, element.schema.name, 'Procedures'),
+        new FolderNode(element.connection, element.schema.name, 'Triggers')
       ];
     }
 
@@ -86,6 +89,24 @@ export class DatabaseTreeProvider implements vscode.TreeDataProvider<DatabaseNod
       await this.ensureConnected(element.connection.id);
       const views = await this.connectionManager.getDriver(element.connection.type).getViews(element.connection.id, element.schema);
       return views.map((view) => new ViewNode(element.connection, view));
+    }
+
+    if (element instanceof FolderNode && element.folder === 'Functions') {
+      await this.ensureConnected(element.connection.id);
+      const routines = await this.connectionManager.getDriver(element.connection.type).getFunctions(element.connection.id, element.schema);
+      return routines.map((routine) => new RoutineNode(element.connection, routine));
+    }
+
+    if (element instanceof FolderNode && element.folder === 'Procedures') {
+      await this.ensureConnected(element.connection.id);
+      const routines = await this.connectionManager.getDriver(element.connection.type).getProcedures(element.connection.id, element.schema);
+      return routines.map((routine) => new RoutineNode(element.connection, routine));
+    }
+
+    if (element instanceof FolderNode && element.folder === 'Triggers') {
+      await this.ensureConnected(element.connection.id);
+      const triggers = await this.connectionManager.getDriver(element.connection.type).getTriggers(element.connection.id, element.schema);
+      return triggers.map((trigger) => new TriggerNode(element.connection, trigger));
     }
 
     if (element instanceof TableNode) {
