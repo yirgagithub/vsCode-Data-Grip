@@ -4,18 +4,23 @@ import { ConnectionStore } from '../persistence/connectionStore';
 import { PostgresDriver } from './drivers/postgresDriver';
 import { RedshiftDriver } from './drivers/redshiftDriver';
 import { DatabaseDriver } from './drivers/DatabaseDriver';
+import { MySQLDriver } from './drivers/mysqlDriver';
 import { createId } from '../utils/id';
 import { connectionDefaultsForType } from '../services/connectionDefaults';
+import { SshTunnelManager } from '../services/sshTunnelManager';
 
 export class ConnectionManager {
   private readonly drivers = new Map<DatabaseType, DatabaseDriver>();
   private readonly active = new Map<string, DbConnection>();
+  private readonly transactionModes = new Map<string, 'auto' | 'manual'>();
   private readonly activeConnectionEmitter = new vscode.EventEmitter<string>();
+  private readonly sshTunnelManager = new SshTunnelManager();
   readonly onDidChangeActiveConnections = this.activeConnectionEmitter.event;
 
   constructor(private readonly store: ConnectionStore) {
     this.drivers.set('postgres', new PostgresDriver());
     this.drivers.set('redshift', new RedshiftDriver());
+    this.drivers.set('mysql', new MySQLDriver());
   }
 
   getConnections(): ConnectionConfig[] {
@@ -73,21 +78,8 @@ export class ConnectionManager {
       return;
     }
 
-    if (activeConnection.config.type !== config.type) {
-      await this.getDriver(activeConnection.config.type).disconnect(config.id);
-    }
-
-    try {
-      const nextConfig = await this.getConnectionWithPassword(config.id);
-      const connection = await this.getDriver(nextConfig.type).connect(nextConfig);
-      this.active.set(config.id, connection);
-      await this.store.setSelectedConnectionId(config.id);
-      this.activeConnectionEmitter.fire(config.id);
-    } catch (error) {
-      this.active.delete(config.id);
-      this.activeConnectionEmitter.fire(config.id);
-      throw error;
-    }
+    await this.disconnect(config.id);
+    await this.connect(config.id);
   }
 
   async setSelectedConnection(id: string | undefined): Promise<void> {
@@ -101,13 +93,17 @@ export class ConnectionManager {
 
   async connect(id: string): Promise<DbConnection> {
     const config = await this.getConnectionWithPassword(id);
+    const driver = this.getDriver(config.type);
     try {
-      const connection = await this.getDriver(config.type).connect(config);
+      const tunneled = await this.sshTunnelManager.open(config);
+      await driver.connect(tunneled);
+      const connection: DbConnection = { id: config.id, config, connectedAt: Date.now() };
       this.active.set(id, connection);
       await this.store.setSelectedConnectionId(id);
       this.activeConnectionEmitter.fire(id);
       return connection;
     } catch (error) {
+      await this.sshTunnelManager.close(id).catch(() => undefined);
       if (this.active.has(id)) {
         this.active.delete(id);
         this.activeConnectionEmitter.fire(id);
@@ -122,7 +118,9 @@ export class ConnectionManager {
     if (config) {
       await this.getDriver(config.type).disconnect(id);
     }
+    await this.sshTunnelManager.close(id).catch(() => undefined);
     this.active.delete(id);
+    this.transactionModes.delete(id);
     if (wasConnected) {
       this.activeConnectionEmitter.fire(id);
     }
@@ -134,11 +132,59 @@ export class ConnectionManager {
   }
 
   async testConfig(config: ConnectionConfigWithPassword): Promise<string> {
-    const result = await this.getDriver(config.type).testConnection(config);
-    if (!result.ok) {
-      throw new Error(`Connection failed for ${config.username}@${config.host}:${config.port}/${config.database}: ${result.message}`);
+    const driver = this.getDriver(config.type);
+    const tunneled = await this.sshTunnelManager.open(config);
+    try {
+      const result = await driver.testConnection(tunneled);
+      if (!result.ok) {
+        throw new Error(`Connection failed for ${config.username}@${config.host}:${config.port}/${config.database}: ${result.message}`);
+      }
+      return result.serverVersion ?? result.message;
+    } finally {
+      await this.sshTunnelManager.close(config.id).catch(() => undefined);
     }
-    return result.serverVersion ?? result.message;
+  }
+
+  getTransactionMode(id: string): 'auto' | 'manual' {
+    return this.transactionModes.get(id) ?? 'auto';
+  }
+
+  setTransactionMode(id: string, mode: 'auto' | 'manual'): void {
+    if (mode === 'auto') {
+      this.transactionModes.delete(id);
+    } else {
+      this.transactionModes.set(id, mode);
+    }
+  }
+
+  isTransactionOpen(id: string): boolean {
+    const connection = this.getConnection(id);
+    return connection ? this.getDriver(connection.type).isTransactionOpen(id) : false;
+  }
+
+  async beginTransaction(id: string): Promise<void> {
+    const connection = this.getConnection(id);
+    if (!connection) {
+      throw new Error('Connection not found.');
+    }
+    await this.getDriver(connection.type).beginTransaction(id);
+    this.transactionModes.set(id, 'manual');
+  }
+
+  async commitTransaction(id: string): Promise<void> {
+    const connection = this.getConnection(id);
+    if (!connection) {
+      throw new Error('Connection not found.');
+    }
+    await this.getDriver(connection.type).commitTransaction(id);
+  }
+
+  async rollbackTransaction(id: string): Promise<void> {
+    const connection = this.getConnection(id);
+    if (!connection) {
+      throw new Error('Connection not found.');
+    }
+    await this.getDriver(connection.type).rollbackTransaction(id);
   }
 
   async pickConnection(): Promise<ConnectionConfig | undefined> {
@@ -154,7 +200,7 @@ export class ConnectionManager {
     const selectedId = this.store.getSelectedConnectionId();
     const picked = await vscode.window.showQuickPick(connections.map((connection) => ({
       label: truncateMiddle(connection.name, 48),
-      description: `${this.isConnected(connection.id) ? 'online' : 'offline'} - ${connection.type}`,
+      description: `${this.isConnected(connection.id) ? 'online' : 'offline'} - ${connection.type}${connection.production ? ' - prod' : ''}`,
       detail: `${connection.username}@${connection.host}:${connection.port}/${connection.database}`,
       connection
     })), { placeHolder: 'Select database connection' });
@@ -164,7 +210,8 @@ export class ConnectionManager {
   async promptConnection(existing?: ConnectionConfig): Promise<ConnectionConfigWithPassword | undefined> {
     const typePick = await vscode.window.showQuickPick([
       { label: 'PostgreSQL', type: 'postgres' as const },
-      { label: 'Amazon Redshift', type: 'redshift' as const }
+      { label: 'Amazon Redshift', type: 'redshift' as const },
+      { label: 'MySQL', type: 'mysql' as const }
     ], { placeHolder: 'Database type' });
     if (!typePick) {
       return undefined;

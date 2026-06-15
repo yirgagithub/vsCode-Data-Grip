@@ -1,7 +1,7 @@
 {
   "name": "vscode-data-grip",
   "displayName": "Data Grip",
-  "description": "An AI-native VS Code database client for PostgreSQL and Redshift.",
+  "description": "A VS Code database client for PostgreSQL, Redshift, and MySQL.",
   "version": "0.0.3",
   "publisher": "vs-code-database-client",
   "icon": "media/icon.png",
@@ -44,7 +44,14 @@
     "onCommand:database.visualExplainSql",
     "onCommand:database.visualExplainAnalyzeSql",
     "onCommand:database.profileTableData",
-    "onCommand:database.generateTableMaintenanceSql"
+    "onCommand:database.generateTableMaintenanceSql",
+    "onCommand:database.compareSchemas",
+    "onCommand:database.showErDiagram",
+    "onCommand:database.insertQuerySnippet",
+    "onCommand:database.goToDatabaseObject",
+    "onCommand:database.importTableData",
+    "onCommand:database.copyTableToConnection",
+    "onCommand:database.sessionMonitor"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -187,6 +194,48 @@
         "title": "Generate Maintenance SQL",
         "category": "Database",
         "icon": "$(warning)"
+      },
+      {
+        "command": "database.compareSchemas",
+        "title": "Compare Schemas...",
+        "category": "Database",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "database.showErDiagram",
+        "title": "Show ER Diagram",
+        "category": "Database",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "database.insertQuerySnippet",
+        "title": "Insert Query Snippet...",
+        "category": "Database",
+        "icon": "$(snippet)"
+      },
+      {
+        "command": "database.goToDatabaseObject",
+        "title": "Go to Database Object...",
+        "category": "Database",
+        "icon": "$(symbol-key)"
+      },
+      {
+        "command": "database.importTableData",
+        "title": "Import Table Data...",
+        "category": "Database",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "database.copyTableToConnection",
+        "title": "Copy Table to Connection...",
+        "category": "Database",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "database.sessionMonitor",
+        "title": "Session Monitor",
+        "category": "Database",
+        "icon": "$(pulse)"
       },
       {
         "command": "database.openTableData",
@@ -425,8 +474,13 @@
         },
         {
           "command": "database.quickDocumentation",
-          "when": "view == databaseExplorer && (viewItem == schema || viewItem == table || viewItem == view || viewItem == column)",
+          "when": "view == databaseExplorer && (viewItem == schema || viewItem == table || viewItem == view || viewItem == column || viewItem == function || viewItem == procedure || viewItem == trigger)",
           "group": "inspect@1"
+        },
+        {
+          "command": "database.sessionMonitor",
+          "when": "view == databaseExplorer && (viewItem == connection || viewItem == catalog)",
+          "group": "inspect@4"
         },
         {
           "submenu": "database.sqlScripts",
@@ -440,7 +494,7 @@
         },
         {
           "submenu": "database.tools",
-          "when": "view == databaseExplorer && (viewItem == connection || viewItem == catalog || viewItem == schema || viewItem == table || viewItem == view)",
+          "when": "view == databaseExplorer && (viewItem == connection || viewItem == catalog || viewItem == schema || viewItem == table || viewItem == view || viewItem == function || viewItem == procedure || viewItem == trigger)",
           "group": "tools@1"
         },
         {
@@ -469,24 +523,14 @@
           "group": "connection@5"
         },
         {
-          "command": "database.openTableData",
-          "when": "view == databaseExplorer && viewItem == table",
-          "group": "inline@1"
+          "command": "database.compareSchemas",
+          "when": "view == databaseExplorer && (viewItem == connection || viewItem == catalog || viewItem == schema)",
+          "group": "inspect@5"
         },
         {
-          "command": "database.analyzeTablePerformance",
-          "when": "view == databaseExplorer && viewItem == table && database.aiAvailable",
-          "group": "inline@2"
-        },
-        {
-          "command": "database.profileTableData",
-          "when": "view == databaseExplorer && viewItem == table",
-          "group": "inline@3"
-        },
-        {
-          "command": "database.generateTableMaintenanceSql",
-          "when": "view == databaseExplorer && viewItem == table",
-          "group": "inline@4"
+          "command": "database.showErDiagram",
+          "when": "view == databaseExplorer && (viewItem == connection || viewItem == catalog || viewItem == schema)",
+          "group": "inspect@6"
         },
         {
           "command": "database.dropObject",
@@ -497,11 +541,11 @@
       "database.new": [
         {
           "command": "database.openSqlConsole",
-          "group": "query@1"
+          "group": "query@0"
         },
         {
           "command": "database.openQueryFile",
-          "group": "query@2"
+          "group": "query@1"
         },
         {
           "command": "database.newColumn",
@@ -616,9 +660,14 @@
           "group": "data@4"
         },
         {
-          "command": "database.modifyTable",
+          "command": "database.importTableData",
           "when": "viewItem == table",
           "group": "data@5"
+        },
+        {
+          "command": "database.modifyTable",
+          "when": "viewItem == table",
+          "group": "data@6"
         },
         {
           "command": "database.renameObject",
@@ -641,6 +690,22 @@
         {
           "command": "database.showSqlMetadataStatus",
           "group": "inspect@3"
+        },
+        {
+          "command": "database.sessionMonitor",
+          "group": "inspect@4"
+        },
+        {
+          "command": "database.copyTableToConnection",
+          "group": "inspect@5"
+        },
+        {
+          "command": "database.compareSchemas",
+          "group": "inspect@6"
+        },
+        {
+          "command": "database.showErDiagram",
+          "group": "inspect@7"
         },
         {
           "command": "database.showQueryHistory",
@@ -688,14 +753,19 @@
           "group": "inspect@1"
         },
         {
-          "command": "database.visualExplainSql",
+          "command": "database.insertQuerySnippet",
           "when": "editorLangId == sql",
           "group": "inspect@2"
         },
         {
-          "command": "database.visualExplainAnalyzeSql",
+          "command": "database.visualExplainSql",
           "when": "editorLangId == sql",
           "group": "inspect@3"
+        },
+        {
+          "command": "database.visualExplainAnalyzeSql",
+          "when": "editorLangId == sql",
+          "group": "inspect@4"
         },
         {
           "command": "database.aiFixSql",
@@ -737,9 +807,14 @@
           "group": "inspect@1"
         },
         {
-          "command": "database.visualExplainSql",
+          "command": "database.insertQuerySnippet",
           "when": "editorLangId == sql",
           "group": "inspect@2"
+        },
+        {
+          "command": "database.visualExplainSql",
+          "when": "editorLangId == sql",
+          "group": "inspect@3"
         }
       ]
     },
@@ -875,7 +950,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "bundle:extension": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --external:pg-native --sourcemap --outfile=dist/extension.js",
+    "bundle:extension": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --external:pg --external:pg/* --external:pg-native --external:mysql2 --external:mysql2/* --external:sql-formatter --external:xlsx --sourcemap --outfile=dist/extension.js",
     "bundle:webview": "vite build --config vite.config.ts",
     "build": "npm run compile && npm run bundle:extension && npm run bundle:webview",
     "lint": "tsc -p ./ --noEmit",
@@ -888,9 +963,12 @@
   "dependencies": {
     "@observablehq/plot": "^0.6.17",
     "@vitejs/plugin-react": "^4.3.4",
+    "mysql2": "^3.22.5",
     "pg": "^8.16.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "sql-formatter": "^15.8.1",
+    "xlsx": "^0.18.5",
     "zustand": "^5.0.7"
   },
   "devDependencies": {

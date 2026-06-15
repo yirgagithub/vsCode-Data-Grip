@@ -85,7 +85,10 @@ class DatabaseTreeProvider {
             return [
                 new nodes_1.FolderNode(element.connection, element.schema.name, 'Tables'),
                 new nodes_1.FolderNode(element.connection, element.schema.name, 'Materialized Views'),
-                new nodes_1.FolderNode(element.connection, element.schema.name, 'Views')
+                new nodes_1.FolderNode(element.connection, element.schema.name, 'Views'),
+                new nodes_1.FolderNode(element.connection, element.schema.name, 'Functions'),
+                new nodes_1.FolderNode(element.connection, element.schema.name, 'Procedures'),
+                new nodes_1.FolderNode(element.connection, element.schema.name, 'Triggers')
             ];
         }
         if (element instanceof nodes_1.FolderNode && element.folder === 'Tables') {
@@ -110,6 +113,21 @@ class DatabaseTreeProvider {
             await this.ensureConnected(element.connection.id);
             const views = await this.connectionManager.getDriver(element.connection.type).getViews(element.connection.id, element.schema);
             return views.map((view) => new nodes_1.ViewNode(element.connection, view));
+        }
+        if (element instanceof nodes_1.FolderNode && element.folder === 'Functions') {
+            await this.ensureConnected(element.connection.id);
+            const routines = await this.connectionManager.getDriver(element.connection.type).getFunctions(element.connection.id, element.schema);
+            return routines.map((routine) => new nodes_1.RoutineNode(element.connection, routine));
+        }
+        if (element instanceof nodes_1.FolderNode && element.folder === 'Procedures') {
+            await this.ensureConnected(element.connection.id);
+            const routines = await this.connectionManager.getDriver(element.connection.type).getProcedures(element.connection.id, element.schema);
+            return routines.map((routine) => new nodes_1.RoutineNode(element.connection, routine));
+        }
+        if (element instanceof nodes_1.FolderNode && element.folder === 'Triggers') {
+            await this.ensureConnected(element.connection.id);
+            const triggers = await this.connectionManager.getDriver(element.connection.type).getTriggers(element.connection.id, element.schema);
+            return triggers.map((trigger) => new nodes_1.TriggerNode(element.connection, trigger));
         }
         if (element instanceof nodes_1.TableNode) {
             return [

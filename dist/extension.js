@@ -5,9 +5,6 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __commonJS = (cb, mod) => function __require() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-};
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -30,5104 +27,6 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// node_modules/postgres-array/index.js
-var require_postgres_array = __commonJS({
-  "node_modules/postgres-array/index.js"(exports2) {
-    "use strict";
-    exports2.parse = function(source, transform) {
-      return new ArrayParser(source, transform).parse();
-    };
-    var ArrayParser = class _ArrayParser {
-      constructor(source, transform) {
-        this.source = source;
-        this.transform = transform || identity;
-        this.position = 0;
-        this.entries = [];
-        this.recorded = [];
-        this.dimension = 0;
-      }
-      isEof() {
-        return this.position >= this.source.length;
-      }
-      nextCharacter() {
-        var character = this.source[this.position++];
-        if (character === "\\") {
-          return {
-            value: this.source[this.position++],
-            escaped: true
-          };
-        }
-        return {
-          value: character,
-          escaped: false
-        };
-      }
-      record(character) {
-        this.recorded.push(character);
-      }
-      newEntry(includeEmpty) {
-        var entry;
-        if (this.recorded.length > 0 || includeEmpty) {
-          entry = this.recorded.join("");
-          if (entry === "NULL" && !includeEmpty) {
-            entry = null;
-          }
-          if (entry !== null) entry = this.transform(entry);
-          this.entries.push(entry);
-          this.recorded = [];
-        }
-      }
-      consumeDimensions() {
-        if (this.source[0] === "[") {
-          while (!this.isEof()) {
-            var char = this.nextCharacter();
-            if (char.value === "=") break;
-          }
-        }
-      }
-      parse(nested) {
-        var character, parser, quote;
-        this.consumeDimensions();
-        while (!this.isEof()) {
-          character = this.nextCharacter();
-          if (character.value === "{" && !quote) {
-            this.dimension++;
-            if (this.dimension > 1) {
-              parser = new _ArrayParser(this.source.substr(this.position - 1), this.transform);
-              this.entries.push(parser.parse(true));
-              this.position += parser.position - 2;
-            }
-          } else if (character.value === "}" && !quote) {
-            this.dimension--;
-            if (!this.dimension) {
-              this.newEntry();
-              if (nested) return this.entries;
-            }
-          } else if (character.value === '"' && !character.escaped) {
-            if (quote) this.newEntry(true);
-            quote = !quote;
-          } else if (character.value === "," && !quote) {
-            this.newEntry();
-          } else {
-            this.record(character.value);
-          }
-        }
-        if (this.dimension !== 0) {
-          throw new Error("array dimension not balanced");
-        }
-        return this.entries;
-      }
-    };
-    function identity(value) {
-      return value;
-    }
-  }
-});
-
-// node_modules/pg-types/lib/arrayParser.js
-var require_arrayParser = __commonJS({
-  "node_modules/pg-types/lib/arrayParser.js"(exports2, module2) {
-    var array = require_postgres_array();
-    module2.exports = {
-      create: function(source, transform) {
-        return {
-          parse: function() {
-            return array.parse(source, transform);
-          }
-        };
-      }
-    };
-  }
-});
-
-// node_modules/postgres-date/index.js
-var require_postgres_date = __commonJS({
-  "node_modules/postgres-date/index.js"(exports2, module2) {
-    "use strict";
-    var DATE_TIME = /(\d{1,})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(\.\d{1,})?.*?( BC)?$/;
-    var DATE = /^(\d{1,})-(\d{2})-(\d{2})( BC)?$/;
-    var TIME_ZONE = /([Z+-])(\d{2})?:?(\d{2})?:?(\d{2})?/;
-    var INFINITY = /^-?infinity$/;
-    module2.exports = function parseDate(isoDate) {
-      if (INFINITY.test(isoDate)) {
-        return Number(isoDate.replace("i", "I"));
-      }
-      var matches = DATE_TIME.exec(isoDate);
-      if (!matches) {
-        return getDate(isoDate) || null;
-      }
-      var isBC = !!matches[8];
-      var year = parseInt(matches[1], 10);
-      if (isBC) {
-        year = bcYearToNegativeYear(year);
-      }
-      var month = parseInt(matches[2], 10) - 1;
-      var day = matches[3];
-      var hour = parseInt(matches[4], 10);
-      var minute = parseInt(matches[5], 10);
-      var second = parseInt(matches[6], 10);
-      var ms = matches[7];
-      ms = ms ? 1e3 * parseFloat(ms) : 0;
-      var date;
-      var offset = timeZoneOffset(isoDate);
-      if (offset != null) {
-        date = new Date(Date.UTC(year, month, day, hour, minute, second, ms));
-        if (is0To99(year)) {
-          date.setUTCFullYear(year);
-        }
-        if (offset !== 0) {
-          date.setTime(date.getTime() - offset);
-        }
-      } else {
-        date = new Date(year, month, day, hour, minute, second, ms);
-        if (is0To99(year)) {
-          date.setFullYear(year);
-        }
-      }
-      return date;
-    };
-    function getDate(isoDate) {
-      var matches = DATE.exec(isoDate);
-      if (!matches) {
-        return;
-      }
-      var year = parseInt(matches[1], 10);
-      var isBC = !!matches[4];
-      if (isBC) {
-        year = bcYearToNegativeYear(year);
-      }
-      var month = parseInt(matches[2], 10) - 1;
-      var day = matches[3];
-      var date = new Date(year, month, day);
-      if (is0To99(year)) {
-        date.setFullYear(year);
-      }
-      return date;
-    }
-    function timeZoneOffset(isoDate) {
-      if (isoDate.endsWith("+00")) {
-        return 0;
-      }
-      var zone = TIME_ZONE.exec(isoDate.split(" ")[1]);
-      if (!zone) return;
-      var type = zone[1];
-      if (type === "Z") {
-        return 0;
-      }
-      var sign = type === "-" ? -1 : 1;
-      var offset = parseInt(zone[2], 10) * 3600 + parseInt(zone[3] || 0, 10) * 60 + parseInt(zone[4] || 0, 10);
-      return offset * sign * 1e3;
-    }
-    function bcYearToNegativeYear(year) {
-      return -(year - 1);
-    }
-    function is0To99(num) {
-      return num >= 0 && num < 100;
-    }
-  }
-});
-
-// node_modules/xtend/mutable.js
-var require_mutable = __commonJS({
-  "node_modules/xtend/mutable.js"(exports2, module2) {
-    module2.exports = extend;
-    var hasOwnProperty = Object.prototype.hasOwnProperty;
-    function extend(target) {
-      for (var i = 1; i < arguments.length; i++) {
-        var source = arguments[i];
-        for (var key in source) {
-          if (hasOwnProperty.call(source, key)) {
-            target[key] = source[key];
-          }
-        }
-      }
-      return target;
-    }
-  }
-});
-
-// node_modules/postgres-interval/index.js
-var require_postgres_interval = __commonJS({
-  "node_modules/postgres-interval/index.js"(exports2, module2) {
-    "use strict";
-    var extend = require_mutable();
-    module2.exports = PostgresInterval;
-    function PostgresInterval(raw) {
-      if (!(this instanceof PostgresInterval)) {
-        return new PostgresInterval(raw);
-      }
-      extend(this, parse(raw));
-    }
-    var properties = ["seconds", "minutes", "hours", "days", "months", "years"];
-    PostgresInterval.prototype.toPostgres = function() {
-      var filtered = properties.filter(this.hasOwnProperty, this);
-      if (this.milliseconds && filtered.indexOf("seconds") < 0) {
-        filtered.push("seconds");
-      }
-      if (filtered.length === 0) return "0";
-      return filtered.map(function(property) {
-        var value = this[property] || 0;
-        if (property === "seconds" && this.milliseconds) {
-          value = (value + this.milliseconds / 1e3).toFixed(6).replace(/\.?0+$/, "");
-        }
-        return value + " " + property;
-      }, this).join(" ");
-    };
-    var propertiesISOEquivalent = {
-      years: "Y",
-      months: "M",
-      days: "D",
-      hours: "H",
-      minutes: "M",
-      seconds: "S"
-    };
-    var dateProperties = ["years", "months", "days"];
-    var timeProperties = ["hours", "minutes", "seconds"];
-    PostgresInterval.prototype.toISOString = PostgresInterval.prototype.toISO = function() {
-      var datePart = dateProperties.map(buildProperty, this).join("");
-      var timePart = timeProperties.map(buildProperty, this).join("");
-      return "P" + datePart + "T" + timePart;
-      function buildProperty(property) {
-        var value = this[property] || 0;
-        if (property === "seconds" && this.milliseconds) {
-          value = (value + this.milliseconds / 1e3).toFixed(6).replace(/0+$/, "");
-        }
-        return value + propertiesISOEquivalent[property];
-      }
-    };
-    var NUMBER = "([+-]?\\d+)";
-    var YEAR = NUMBER + "\\s+years?";
-    var MONTH = NUMBER + "\\s+mons?";
-    var DAY = NUMBER + "\\s+days?";
-    var TIME = "([+-])?([\\d]*):(\\d\\d):(\\d\\d)\\.?(\\d{1,6})?";
-    var INTERVAL = new RegExp([YEAR, MONTH, DAY, TIME].map(function(regexString) {
-      return "(" + regexString + ")?";
-    }).join("\\s*"));
-    var positions = {
-      years: 2,
-      months: 4,
-      days: 6,
-      hours: 9,
-      minutes: 10,
-      seconds: 11,
-      milliseconds: 12
-    };
-    var negatives = ["hours", "minutes", "seconds", "milliseconds"];
-    function parseMilliseconds(fraction) {
-      var microseconds = fraction + "000000".slice(fraction.length);
-      return parseInt(microseconds, 10) / 1e3;
-    }
-    function parse(interval) {
-      if (!interval) return {};
-      var matches = INTERVAL.exec(interval);
-      var isNegative = matches[8] === "-";
-      return Object.keys(positions).reduce(function(parsed, property) {
-        var position = positions[property];
-        var value = matches[position];
-        if (!value) return parsed;
-        value = property === "milliseconds" ? parseMilliseconds(value) : parseInt(value, 10);
-        if (!value) return parsed;
-        if (isNegative && ~negatives.indexOf(property)) {
-          value *= -1;
-        }
-        parsed[property] = value;
-        return parsed;
-      }, {});
-    }
-  }
-});
-
-// node_modules/postgres-bytea/index.js
-var require_postgres_bytea = __commonJS({
-  "node_modules/postgres-bytea/index.js"(exports2, module2) {
-    "use strict";
-    var bufferFrom = Buffer.from || Buffer;
-    module2.exports = function parseBytea(input) {
-      if (/^\\x/.test(input)) {
-        return bufferFrom(input.substr(2), "hex");
-      }
-      var output = "";
-      var i = 0;
-      while (i < input.length) {
-        if (input[i] !== "\\") {
-          output += input[i];
-          ++i;
-        } else {
-          if (/[0-7]{3}/.test(input.substr(i + 1, 3))) {
-            output += String.fromCharCode(parseInt(input.substr(i + 1, 3), 8));
-            i += 4;
-          } else {
-            var backslashes = 1;
-            while (i + backslashes < input.length && input[i + backslashes] === "\\") {
-              backslashes++;
-            }
-            for (var k = 0; k < Math.floor(backslashes / 2); ++k) {
-              output += "\\";
-            }
-            i += Math.floor(backslashes / 2) * 2;
-          }
-        }
-      }
-      return bufferFrom(output, "binary");
-    };
-  }
-});
-
-// node_modules/pg-types/lib/textParsers.js
-var require_textParsers = __commonJS({
-  "node_modules/pg-types/lib/textParsers.js"(exports2, module2) {
-    var array = require_postgres_array();
-    var arrayParser = require_arrayParser();
-    var parseDate = require_postgres_date();
-    var parseInterval = require_postgres_interval();
-    var parseByteA = require_postgres_bytea();
-    function allowNull(fn) {
-      return function nullAllowed(value) {
-        if (value === null) return value;
-        return fn(value);
-      };
-    }
-    function parseBool(value) {
-      if (value === null) return value;
-      return value === "TRUE" || value === "t" || value === "true" || value === "y" || value === "yes" || value === "on" || value === "1";
-    }
-    function parseBoolArray(value) {
-      if (!value) return null;
-      return array.parse(value, parseBool);
-    }
-    function parseBaseTenInt(string) {
-      return parseInt(string, 10);
-    }
-    function parseIntegerArray(value) {
-      if (!value) return null;
-      return array.parse(value, allowNull(parseBaseTenInt));
-    }
-    function parseBigIntegerArray(value) {
-      if (!value) return null;
-      return array.parse(value, allowNull(function(entry) {
-        return parseBigInteger(entry).trim();
-      }));
-    }
-    var parsePointArray = function(value) {
-      if (!value) {
-        return null;
-      }
-      var p = arrayParser.create(value, function(entry) {
-        if (entry !== null) {
-          entry = parsePoint(entry);
-        }
-        return entry;
-      });
-      return p.parse();
-    };
-    var parseFloatArray = function(value) {
-      if (!value) {
-        return null;
-      }
-      var p = arrayParser.create(value, function(entry) {
-        if (entry !== null) {
-          entry = parseFloat(entry);
-        }
-        return entry;
-      });
-      return p.parse();
-    };
-    var parseStringArray = function(value) {
-      if (!value) {
-        return null;
-      }
-      var p = arrayParser.create(value);
-      return p.parse();
-    };
-    var parseDateArray = function(value) {
-      if (!value) {
-        return null;
-      }
-      var p = arrayParser.create(value, function(entry) {
-        if (entry !== null) {
-          entry = parseDate(entry);
-        }
-        return entry;
-      });
-      return p.parse();
-    };
-    var parseIntervalArray = function(value) {
-      if (!value) {
-        return null;
-      }
-      var p = arrayParser.create(value, function(entry) {
-        if (entry !== null) {
-          entry = parseInterval(entry);
-        }
-        return entry;
-      });
-      return p.parse();
-    };
-    var parseByteAArray = function(value) {
-      if (!value) {
-        return null;
-      }
-      return array.parse(value, allowNull(parseByteA));
-    };
-    var parseInteger = function(value) {
-      return parseInt(value, 10);
-    };
-    var parseBigInteger = function(value) {
-      var valStr = String(value);
-      if (/^\d+$/.test(valStr)) {
-        return valStr;
-      }
-      return value;
-    };
-    var parseJsonArray = function(value) {
-      if (!value) {
-        return null;
-      }
-      return array.parse(value, allowNull(JSON.parse));
-    };
-    var parsePoint = function(value) {
-      if (value[0] !== "(") {
-        return null;
-      }
-      value = value.substring(1, value.length - 1).split(",");
-      return {
-        x: parseFloat(value[0]),
-        y: parseFloat(value[1])
-      };
-    };
-    var parseCircle = function(value) {
-      if (value[0] !== "<" && value[1] !== "(") {
-        return null;
-      }
-      var point = "(";
-      var radius = "";
-      var pointParsed = false;
-      for (var i = 2; i < value.length - 1; i++) {
-        if (!pointParsed) {
-          point += value[i];
-        }
-        if (value[i] === ")") {
-          pointParsed = true;
-          continue;
-        } else if (!pointParsed) {
-          continue;
-        }
-        if (value[i] === ",") {
-          continue;
-        }
-        radius += value[i];
-      }
-      var result = parsePoint(point);
-      result.radius = parseFloat(radius);
-      return result;
-    };
-    var init = function(register) {
-      register(20, parseBigInteger);
-      register(21, parseInteger);
-      register(23, parseInteger);
-      register(26, parseInteger);
-      register(700, parseFloat);
-      register(701, parseFloat);
-      register(16, parseBool);
-      register(1082, parseDate);
-      register(1114, parseDate);
-      register(1184, parseDate);
-      register(600, parsePoint);
-      register(651, parseStringArray);
-      register(718, parseCircle);
-      register(1e3, parseBoolArray);
-      register(1001, parseByteAArray);
-      register(1005, parseIntegerArray);
-      register(1007, parseIntegerArray);
-      register(1028, parseIntegerArray);
-      register(1016, parseBigIntegerArray);
-      register(1017, parsePointArray);
-      register(1021, parseFloatArray);
-      register(1022, parseFloatArray);
-      register(1231, parseFloatArray);
-      register(1014, parseStringArray);
-      register(1015, parseStringArray);
-      register(1008, parseStringArray);
-      register(1009, parseStringArray);
-      register(1040, parseStringArray);
-      register(1041, parseStringArray);
-      register(1115, parseDateArray);
-      register(1182, parseDateArray);
-      register(1185, parseDateArray);
-      register(1186, parseInterval);
-      register(1187, parseIntervalArray);
-      register(17, parseByteA);
-      register(114, JSON.parse.bind(JSON));
-      register(3802, JSON.parse.bind(JSON));
-      register(199, parseJsonArray);
-      register(3807, parseJsonArray);
-      register(3907, parseStringArray);
-      register(2951, parseStringArray);
-      register(791, parseStringArray);
-      register(1183, parseStringArray);
-      register(1270, parseStringArray);
-    };
-    module2.exports = {
-      init
-    };
-  }
-});
-
-// node_modules/pg-int8/index.js
-var require_pg_int8 = __commonJS({
-  "node_modules/pg-int8/index.js"(exports2, module2) {
-    "use strict";
-    var BASE = 1e6;
-    function readInt8(buffer) {
-      var high = buffer.readInt32BE(0);
-      var low = buffer.readUInt32BE(4);
-      var sign = "";
-      if (high < 0) {
-        high = ~high + (low === 0);
-        low = ~low + 1 >>> 0;
-        sign = "-";
-      }
-      var result = "";
-      var carry;
-      var t;
-      var digits;
-      var pad;
-      var l;
-      var i;
-      {
-        carry = high % BASE;
-        high = high / BASE >>> 0;
-        t = 4294967296 * carry + low;
-        low = t / BASE >>> 0;
-        digits = "" + (t - BASE * low);
-        if (low === 0 && high === 0) {
-          return sign + digits + result;
-        }
-        pad = "";
-        l = 6 - digits.length;
-        for (i = 0; i < l; i++) {
-          pad += "0";
-        }
-        result = pad + digits + result;
-      }
-      {
-        carry = high % BASE;
-        high = high / BASE >>> 0;
-        t = 4294967296 * carry + low;
-        low = t / BASE >>> 0;
-        digits = "" + (t - BASE * low);
-        if (low === 0 && high === 0) {
-          return sign + digits + result;
-        }
-        pad = "";
-        l = 6 - digits.length;
-        for (i = 0; i < l; i++) {
-          pad += "0";
-        }
-        result = pad + digits + result;
-      }
-      {
-        carry = high % BASE;
-        high = high / BASE >>> 0;
-        t = 4294967296 * carry + low;
-        low = t / BASE >>> 0;
-        digits = "" + (t - BASE * low);
-        if (low === 0 && high === 0) {
-          return sign + digits + result;
-        }
-        pad = "";
-        l = 6 - digits.length;
-        for (i = 0; i < l; i++) {
-          pad += "0";
-        }
-        result = pad + digits + result;
-      }
-      {
-        carry = high % BASE;
-        t = 4294967296 * carry + low;
-        digits = "" + t % BASE;
-        return sign + digits + result;
-      }
-    }
-    module2.exports = readInt8;
-  }
-});
-
-// node_modules/pg-types/lib/binaryParsers.js
-var require_binaryParsers = __commonJS({
-  "node_modules/pg-types/lib/binaryParsers.js"(exports2, module2) {
-    var parseInt64 = require_pg_int8();
-    var parseBits = function(data, bits, offset, invert, callback) {
-      offset = offset || 0;
-      invert = invert || false;
-      callback = callback || function(lastValue, newValue, bits2) {
-        return lastValue * Math.pow(2, bits2) + newValue;
-      };
-      var offsetBytes = offset >> 3;
-      var inv = function(value) {
-        if (invert) {
-          return ~value & 255;
-        }
-        return value;
-      };
-      var mask = 255;
-      var firstBits = 8 - offset % 8;
-      if (bits < firstBits) {
-        mask = 255 << 8 - bits & 255;
-        firstBits = bits;
-      }
-      if (offset) {
-        mask = mask >> offset % 8;
-      }
-      var result = 0;
-      if (offset % 8 + bits >= 8) {
-        result = callback(0, inv(data[offsetBytes]) & mask, firstBits);
-      }
-      var bytes = bits + offset >> 3;
-      for (var i = offsetBytes + 1; i < bytes; i++) {
-        result = callback(result, inv(data[i]), 8);
-      }
-      var lastBits = (bits + offset) % 8;
-      if (lastBits > 0) {
-        result = callback(result, inv(data[bytes]) >> 8 - lastBits, lastBits);
-      }
-      return result;
-    };
-    var parseFloatFromBits = function(data, precisionBits, exponentBits) {
-      var bias = Math.pow(2, exponentBits - 1) - 1;
-      var sign = parseBits(data, 1);
-      var exponent = parseBits(data, exponentBits, 1);
-      if (exponent === 0) {
-        return 0;
-      }
-      var precisionBitsCounter = 1;
-      var parsePrecisionBits = function(lastValue, newValue, bits) {
-        if (lastValue === 0) {
-          lastValue = 1;
-        }
-        for (var i = 1; i <= bits; i++) {
-          precisionBitsCounter /= 2;
-          if ((newValue & 1 << bits - i) > 0) {
-            lastValue += precisionBitsCounter;
-          }
-        }
-        return lastValue;
-      };
-      var mantissa = parseBits(data, precisionBits, exponentBits + 1, false, parsePrecisionBits);
-      if (exponent == Math.pow(2, exponentBits + 1) - 1) {
-        if (mantissa === 0) {
-          return sign === 0 ? Infinity : -Infinity;
-        }
-        return NaN;
-      }
-      return (sign === 0 ? 1 : -1) * Math.pow(2, exponent - bias) * mantissa;
-    };
-    var parseInt16 = function(value) {
-      if (parseBits(value, 1) == 1) {
-        return -1 * (parseBits(value, 15, 1, true) + 1);
-      }
-      return parseBits(value, 15, 1);
-    };
-    var parseInt32 = function(value) {
-      if (parseBits(value, 1) == 1) {
-        return -1 * (parseBits(value, 31, 1, true) + 1);
-      }
-      return parseBits(value, 31, 1);
-    };
-    var parseFloat32 = function(value) {
-      return parseFloatFromBits(value, 23, 8);
-    };
-    var parseFloat64 = function(value) {
-      return parseFloatFromBits(value, 52, 11);
-    };
-    var parseNumeric = function(value) {
-      var sign = parseBits(value, 16, 32);
-      if (sign == 49152) {
-        return NaN;
-      }
-      var weight = Math.pow(1e4, parseBits(value, 16, 16));
-      var result = 0;
-      var digits = [];
-      var ndigits = parseBits(value, 16);
-      for (var i = 0; i < ndigits; i++) {
-        result += parseBits(value, 16, 64 + 16 * i) * weight;
-        weight /= 1e4;
-      }
-      var scale = Math.pow(10, parseBits(value, 16, 48));
-      return (sign === 0 ? 1 : -1) * Math.round(result * scale) / scale;
-    };
-    var parseDate = function(isUTC, value) {
-      var sign = parseBits(value, 1);
-      var rawValue = parseBits(value, 63, 1);
-      var result = new Date((sign === 0 ? 1 : -1) * rawValue / 1e3 + 9466848e5);
-      if (!isUTC) {
-        result.setTime(result.getTime() + result.getTimezoneOffset() * 6e4);
-      }
-      result.usec = rawValue % 1e3;
-      result.getMicroSeconds = function() {
-        return this.usec;
-      };
-      result.setMicroSeconds = function(value2) {
-        this.usec = value2;
-      };
-      result.getUTCMicroSeconds = function() {
-        return this.usec;
-      };
-      return result;
-    };
-    var parseArray = function(value) {
-      var dim = parseBits(value, 32);
-      var flags = parseBits(value, 32, 32);
-      var elementType = parseBits(value, 32, 64);
-      var offset = 96;
-      var dims = [];
-      for (var i = 0; i < dim; i++) {
-        dims[i] = parseBits(value, 32, offset);
-        offset += 32;
-        offset += 32;
-      }
-      var parseElement = function(elementType2) {
-        var length = parseBits(value, 32, offset);
-        offset += 32;
-        if (length == 4294967295) {
-          return null;
-        }
-        var result;
-        if (elementType2 == 23 || elementType2 == 20) {
-          result = parseBits(value, length * 8, offset);
-          offset += length * 8;
-          return result;
-        } else if (elementType2 == 25) {
-          result = value.toString(this.encoding, offset >> 3, (offset += length << 3) >> 3);
-          return result;
-        } else {
-          console.log("ERROR: ElementType not implemented: " + elementType2);
-        }
-      };
-      var parse = function(dimension, elementType2) {
-        var array = [];
-        var i2;
-        if (dimension.length > 1) {
-          var count = dimension.shift();
-          for (i2 = 0; i2 < count; i2++) {
-            array[i2] = parse(dimension, elementType2);
-          }
-          dimension.unshift(count);
-        } else {
-          for (i2 = 0; i2 < dimension[0]; i2++) {
-            array[i2] = parseElement(elementType2);
-          }
-        }
-        return array;
-      };
-      return parse(dims, elementType);
-    };
-    var parseText = function(value) {
-      return value.toString("utf8");
-    };
-    var parseBool = function(value) {
-      if (value === null) return null;
-      return parseBits(value, 8) > 0;
-    };
-    var init = function(register) {
-      register(20, parseInt64);
-      register(21, parseInt16);
-      register(23, parseInt32);
-      register(26, parseInt32);
-      register(1700, parseNumeric);
-      register(700, parseFloat32);
-      register(701, parseFloat64);
-      register(16, parseBool);
-      register(1114, parseDate.bind(null, false));
-      register(1184, parseDate.bind(null, true));
-      register(1e3, parseArray);
-      register(1007, parseArray);
-      register(1016, parseArray);
-      register(1008, parseArray);
-      register(1009, parseArray);
-      register(25, parseText);
-    };
-    module2.exports = {
-      init
-    };
-  }
-});
-
-// node_modules/pg-types/lib/builtins.js
-var require_builtins = __commonJS({
-  "node_modules/pg-types/lib/builtins.js"(exports2, module2) {
-    module2.exports = {
-      BOOL: 16,
-      BYTEA: 17,
-      CHAR: 18,
-      INT8: 20,
-      INT2: 21,
-      INT4: 23,
-      REGPROC: 24,
-      TEXT: 25,
-      OID: 26,
-      TID: 27,
-      XID: 28,
-      CID: 29,
-      JSON: 114,
-      XML: 142,
-      PG_NODE_TREE: 194,
-      SMGR: 210,
-      PATH: 602,
-      POLYGON: 604,
-      CIDR: 650,
-      FLOAT4: 700,
-      FLOAT8: 701,
-      ABSTIME: 702,
-      RELTIME: 703,
-      TINTERVAL: 704,
-      CIRCLE: 718,
-      MACADDR8: 774,
-      MONEY: 790,
-      MACADDR: 829,
-      INET: 869,
-      ACLITEM: 1033,
-      BPCHAR: 1042,
-      VARCHAR: 1043,
-      DATE: 1082,
-      TIME: 1083,
-      TIMESTAMP: 1114,
-      TIMESTAMPTZ: 1184,
-      INTERVAL: 1186,
-      TIMETZ: 1266,
-      BIT: 1560,
-      VARBIT: 1562,
-      NUMERIC: 1700,
-      REFCURSOR: 1790,
-      REGPROCEDURE: 2202,
-      REGOPER: 2203,
-      REGOPERATOR: 2204,
-      REGCLASS: 2205,
-      REGTYPE: 2206,
-      UUID: 2950,
-      TXID_SNAPSHOT: 2970,
-      PG_LSN: 3220,
-      PG_NDISTINCT: 3361,
-      PG_DEPENDENCIES: 3402,
-      TSVECTOR: 3614,
-      TSQUERY: 3615,
-      GTSVECTOR: 3642,
-      REGCONFIG: 3734,
-      REGDICTIONARY: 3769,
-      JSONB: 3802,
-      REGNAMESPACE: 4089,
-      REGROLE: 4096
-    };
-  }
-});
-
-// node_modules/pg-types/index.js
-var require_pg_types = __commonJS({
-  "node_modules/pg-types/index.js"(exports2) {
-    var textParsers = require_textParsers();
-    var binaryParsers = require_binaryParsers();
-    var arrayParser = require_arrayParser();
-    var builtinTypes = require_builtins();
-    exports2.getTypeParser = getTypeParser;
-    exports2.setTypeParser = setTypeParser;
-    exports2.arrayParser = arrayParser;
-    exports2.builtins = builtinTypes;
-    var typeParsers = {
-      text: {},
-      binary: {}
-    };
-    function noParse(val) {
-      return String(val);
-    }
-    function getTypeParser(oid, format) {
-      format = format || "text";
-      if (!typeParsers[format]) {
-        return noParse;
-      }
-      return typeParsers[format][oid] || noParse;
-    }
-    function setTypeParser(oid, format, parseFn) {
-      if (typeof format == "function") {
-        parseFn = format;
-        format = "text";
-      }
-      typeParsers[format][oid] = parseFn;
-    }
-    textParsers.init(function(oid, converter) {
-      typeParsers.text[oid] = converter;
-    });
-    binaryParsers.init(function(oid, converter) {
-      typeParsers.binary[oid] = converter;
-    });
-  }
-});
-
-// node_modules/pg/lib/defaults.js
-var require_defaults = __commonJS({
-  "node_modules/pg/lib/defaults.js"(exports2, module2) {
-    "use strict";
-    var user;
-    try {
-      user = process.platform === "win32" ? process.env.USERNAME : process.env.USER;
-    } catch {
-    }
-    module2.exports = {
-      // database host. defaults to localhost
-      host: "localhost",
-      // database user's name
-      user,
-      // name of database to connect
-      database: void 0,
-      // database user's password
-      password: null,
-      // a Postgres connection string to be used instead of setting individual connection items
-      // NOTE:  Setting this value will cause it to override any other value (such as database or user) defined
-      // in the defaults object.
-      connectionString: void 0,
-      // database port
-      port: 5432,
-      // number of rows to return at a time from a prepared statement's
-      // portal. 0 will return all rows at once
-      rows: 0,
-      // binary result mode
-      binary: false,
-      // Connection pool options - see https://github.com/brianc/node-pg-pool
-      // number of connections to use in connection pool
-      // 0 will disable connection pooling
-      max: 10,
-      // max milliseconds a client can go unused before it is removed
-      // from the pool and destroyed
-      idleTimeoutMillis: 3e4,
-      client_encoding: "",
-      ssl: false,
-      application_name: void 0,
-      fallback_application_name: void 0,
-      options: void 0,
-      parseInputDatesAsUTC: false,
-      // max milliseconds any query using this connection will execute for before timing out in error.
-      // false=unlimited
-      statement_timeout: false,
-      // Abort any statement that waits longer than the specified duration in milliseconds while attempting to acquire a lock.
-      // false=unlimited
-      lock_timeout: false,
-      // Terminate any session with an open transaction that has been idle for longer than the specified duration in milliseconds
-      // false=unlimited
-      idle_in_transaction_session_timeout: false,
-      // max milliseconds to wait for query to complete (client side)
-      query_timeout: false,
-      connect_timeout: 0,
-      keepalives: 1,
-      keepalives_idle: 0
-    };
-    var pgTypes = require_pg_types();
-    var parseBigInteger = pgTypes.getTypeParser(20, "text");
-    var parseBigIntegerArray = pgTypes.getTypeParser(1016, "text");
-    module2.exports.__defineSetter__("parseInt8", function(val) {
-      pgTypes.setTypeParser(20, "text", val ? pgTypes.getTypeParser(23, "text") : parseBigInteger);
-      pgTypes.setTypeParser(1016, "text", val ? pgTypes.getTypeParser(1007, "text") : parseBigIntegerArray);
-    });
-  }
-});
-
-// node_modules/pg/lib/utils.js
-var require_utils = __commonJS({
-  "node_modules/pg/lib/utils.js"(exports2, module2) {
-    "use strict";
-    var defaults2 = require_defaults();
-    var util = require("util");
-    var { isDate } = util.types || util;
-    function escapeElement(elementRepresentation) {
-      const escaped = elementRepresentation.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-      return '"' + escaped + '"';
-    }
-    function arrayString(val) {
-      let result = "{";
-      for (let i = 0; i < val.length; i++) {
-        if (i > 0) {
-          result = result + ",";
-        }
-        if (val[i] === null || typeof val[i] === "undefined") {
-          result = result + "NULL";
-        } else if (Array.isArray(val[i])) {
-          result = result + arrayString(val[i]);
-        } else if (ArrayBuffer.isView(val[i])) {
-          let item = val[i];
-          if (!(item instanceof Buffer)) {
-            const buf = Buffer.from(item.buffer, item.byteOffset, item.byteLength);
-            if (buf.length === item.byteLength) {
-              item = buf;
-            } else {
-              item = buf.slice(item.byteOffset, item.byteOffset + item.byteLength);
-            }
-          }
-          result += "\\\\x" + item.toString("hex");
-        } else {
-          result += escapeElement(prepareValue(val[i]));
-        }
-      }
-      result = result + "}";
-      return result;
-    }
-    var prepareValue = function(val, seen) {
-      if (val == null) {
-        return null;
-      }
-      if (typeof val === "object") {
-        if (val instanceof Buffer) {
-          return val;
-        }
-        if (ArrayBuffer.isView(val)) {
-          const buf = Buffer.from(val.buffer, val.byteOffset, val.byteLength);
-          if (buf.length === val.byteLength) {
-            return buf;
-          }
-          return buf.slice(val.byteOffset, val.byteOffset + val.byteLength);
-        }
-        if (isDate(val)) {
-          if (defaults2.parseInputDatesAsUTC) {
-            return dateToStringUTC(val);
-          } else {
-            return dateToString(val);
-          }
-        }
-        if (Array.isArray(val)) {
-          return arrayString(val);
-        }
-        return prepareObject(val, seen);
-      }
-      return val.toString();
-    };
-    function prepareObject(val, seen) {
-      if (val && typeof val.toPostgres === "function") {
-        seen = seen || [];
-        if (seen.indexOf(val) !== -1) {
-          throw new Error('circular reference detected while preparing "' + val + '" for query');
-        }
-        seen.push(val);
-        return prepareValue(val.toPostgres(prepareValue), seen);
-      }
-      return JSON.stringify(val);
-    }
-    function dateToString(date) {
-      let offset = -date.getTimezoneOffset();
-      let year = date.getFullYear();
-      const isBCYear = year < 1;
-      if (isBCYear) year = Math.abs(year) + 1;
-      let ret = String(year).padStart(4, "0") + "-" + String(date.getMonth() + 1).padStart(2, "0") + "-" + String(date.getDate()).padStart(2, "0") + "T" + String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0") + ":" + String(date.getSeconds()).padStart(2, "0") + "." + String(date.getMilliseconds()).padStart(3, "0");
-      if (offset < 0) {
-        ret += "-";
-        offset *= -1;
-      } else {
-        ret += "+";
-      }
-      ret += String(Math.floor(offset / 60)).padStart(2, "0") + ":" + String(offset % 60).padStart(2, "0");
-      if (isBCYear) ret += " BC";
-      return ret;
-    }
-    function dateToStringUTC(date) {
-      let year = date.getUTCFullYear();
-      const isBCYear = year < 1;
-      if (isBCYear) year = Math.abs(year) + 1;
-      let ret = String(year).padStart(4, "0") + "-" + String(date.getUTCMonth() + 1).padStart(2, "0") + "-" + String(date.getUTCDate()).padStart(2, "0") + "T" + String(date.getUTCHours()).padStart(2, "0") + ":" + String(date.getUTCMinutes()).padStart(2, "0") + ":" + String(date.getUTCSeconds()).padStart(2, "0") + "." + String(date.getUTCMilliseconds()).padStart(3, "0");
-      ret += "+00:00";
-      if (isBCYear) ret += " BC";
-      return ret;
-    }
-    function normalizeQueryConfig(config, values, callback) {
-      config = typeof config === "string" ? { text: config } : config;
-      if (values) {
-        if (typeof values === "function") {
-          config.callback = values;
-        } else {
-          config.values = values;
-        }
-      }
-      if (callback) {
-        config.callback = callback;
-      }
-      return config;
-    }
-    var escapeIdentifier2 = function(str) {
-      return '"' + str.replace(/"/g, '""') + '"';
-    };
-    var escapeLiteral2 = function(str) {
-      let hasBackslash = false;
-      let escaped = "'";
-      if (str == null) {
-        return "''";
-      }
-      if (typeof str !== "string") {
-        return "''";
-      }
-      for (let i = 0; i < str.length; i++) {
-        const c = str[i];
-        if (c === "'") {
-          escaped += c + c;
-        } else if (c === "\\") {
-          escaped += c + c;
-          hasBackslash = true;
-        } else {
-          escaped += c;
-        }
-      }
-      escaped += "'";
-      if (hasBackslash === true) {
-        escaped = " E" + escaped;
-      }
-      return escaped;
-    };
-    module2.exports = {
-      prepareValue: function prepareValueWrapper(value) {
-        return prepareValue(value);
-      },
-      normalizeQueryConfig,
-      escapeIdentifier: escapeIdentifier2,
-      escapeLiteral: escapeLiteral2
-    };
-  }
-});
-
-// node_modules/pg/lib/crypto/utils-legacy.js
-var require_utils_legacy = __commonJS({
-  "node_modules/pg/lib/crypto/utils-legacy.js"(exports2, module2) {
-    "use strict";
-    var nodeCrypto = require("crypto");
-    function md5(string) {
-      return nodeCrypto.createHash("md5").update(string, "utf-8").digest("hex");
-    }
-    function postgresMd5PasswordHash(user, password, salt) {
-      const inner = md5(password + user);
-      const outer = md5(Buffer.concat([Buffer.from(inner), salt]));
-      return "md5" + outer;
-    }
-    function sha256(text) {
-      return nodeCrypto.createHash("sha256").update(text).digest();
-    }
-    function hashByName(hashName, text) {
-      hashName = hashName.replace(/(\D)-/, "$1");
-      return nodeCrypto.createHash(hashName).update(text).digest();
-    }
-    function hmacSha256(key, msg) {
-      return nodeCrypto.createHmac("sha256", key).update(msg).digest();
-    }
-    async function deriveKey(password, salt, iterations) {
-      return nodeCrypto.pbkdf2Sync(password, salt, iterations, 32, "sha256");
-    }
-    module2.exports = {
-      postgresMd5PasswordHash,
-      randomBytes: nodeCrypto.randomBytes,
-      deriveKey,
-      sha256,
-      hashByName,
-      hmacSha256,
-      md5
-    };
-  }
-});
-
-// node_modules/pg/lib/crypto/utils-webcrypto.js
-var require_utils_webcrypto = __commonJS({
-  "node_modules/pg/lib/crypto/utils-webcrypto.js"(exports2, module2) {
-    var nodeCrypto = require("crypto");
-    module2.exports = {
-      postgresMd5PasswordHash,
-      randomBytes,
-      deriveKey,
-      sha256,
-      hashByName,
-      hmacSha256,
-      md5
-    };
-    var webCrypto = nodeCrypto.webcrypto || globalThis.crypto;
-    var subtleCrypto = webCrypto.subtle;
-    var textEncoder = new TextEncoder();
-    function randomBytes(length) {
-      return webCrypto.getRandomValues(Buffer.alloc(length));
-    }
-    async function md5(string) {
-      try {
-        return nodeCrypto.createHash("md5").update(string, "utf-8").digest("hex");
-      } catch (e) {
-        const data = typeof string === "string" ? textEncoder.encode(string) : string;
-        const hash = await subtleCrypto.digest("MD5", data);
-        return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
-      }
-    }
-    async function postgresMd5PasswordHash(user, password, salt) {
-      const inner = await md5(password + user);
-      const outer = await md5(Buffer.concat([Buffer.from(inner), salt]));
-      return "md5" + outer;
-    }
-    async function sha256(text) {
-      return await subtleCrypto.digest("SHA-256", text);
-    }
-    async function hashByName(hashName, text) {
-      return await subtleCrypto.digest(hashName, text);
-    }
-    async function hmacSha256(keyBuffer, msg) {
-      const key = await subtleCrypto.importKey("raw", keyBuffer, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-      return await subtleCrypto.sign("HMAC", key, textEncoder.encode(msg));
-    }
-    async function deriveKey(password, salt, iterations) {
-      const key = await subtleCrypto.importKey("raw", textEncoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-      const params = { name: "PBKDF2", hash: "SHA-256", salt, iterations };
-      return await subtleCrypto.deriveBits(params, key, 32 * 8, ["deriveBits"]);
-    }
-  }
-});
-
-// node_modules/pg/lib/crypto/utils.js
-var require_utils2 = __commonJS({
-  "node_modules/pg/lib/crypto/utils.js"(exports2, module2) {
-    "use strict";
-    var useLegacyCrypto = parseInt(process.versions && process.versions.node && process.versions.node.split(".")[0]) < 15;
-    if (useLegacyCrypto) {
-      module2.exports = require_utils_legacy();
-    } else {
-      module2.exports = require_utils_webcrypto();
-    }
-  }
-});
-
-// node_modules/pg/lib/crypto/cert-signatures.js
-var require_cert_signatures = __commonJS({
-  "node_modules/pg/lib/crypto/cert-signatures.js"(exports2, module2) {
-    function x509Error(msg, cert) {
-      return new Error("SASL channel binding: " + msg + " when parsing public certificate " + cert.toString("base64"));
-    }
-    function readASN1Length(data, index) {
-      let length = data[index++];
-      if (length < 128) return { length, index };
-      const lengthBytes = length & 127;
-      if (lengthBytes > 4) throw x509Error("bad length", data);
-      length = 0;
-      for (let i = 0; i < lengthBytes; i++) {
-        length = length << 8 | data[index++];
-      }
-      return { length, index };
-    }
-    function readASN1OID(data, index) {
-      if (data[index++] !== 6) throw x509Error("non-OID data", data);
-      const { length: OIDLength, index: indexAfterOIDLength } = readASN1Length(data, index);
-      index = indexAfterOIDLength;
-      const lastIndex = index + OIDLength;
-      const byte1 = data[index++];
-      let oid = (byte1 / 40 >> 0) + "." + byte1 % 40;
-      while (index < lastIndex) {
-        let value = 0;
-        while (index < lastIndex) {
-          const nextByte = data[index++];
-          value = value << 7 | nextByte & 127;
-          if (nextByte < 128) break;
-        }
-        oid += "." + value;
-      }
-      return { oid, index };
-    }
-    function expectASN1Seq(data, index) {
-      if (data[index++] !== 48) throw x509Error("non-sequence data", data);
-      return readASN1Length(data, index);
-    }
-    function signatureAlgorithmHashFromCertificate(data, index) {
-      if (index === void 0) index = 0;
-      index = expectASN1Seq(data, index).index;
-      const { length: certInfoLength, index: indexAfterCertInfoLength } = expectASN1Seq(data, index);
-      index = indexAfterCertInfoLength + certInfoLength;
-      index = expectASN1Seq(data, index).index;
-      const { oid, index: indexAfterOID } = readASN1OID(data, index);
-      switch (oid) {
-        case "1.2.840.113549.1.1.4":
-          return "MD5";
-        case "1.2.840.113549.1.1.5":
-          return "SHA-1";
-        case "1.2.840.113549.1.1.11":
-          return "SHA-256";
-        case "1.2.840.113549.1.1.12":
-          return "SHA-384";
-        case "1.2.840.113549.1.1.13":
-          return "SHA-512";
-        case "1.2.840.113549.1.1.14":
-          return "SHA-224";
-        case "1.2.840.113549.1.1.15":
-          return "SHA512-224";
-        case "1.2.840.113549.1.1.16":
-          return "SHA512-256";
-        case "1.2.840.10045.4.1":
-          return "SHA-1";
-        case "1.2.840.10045.4.3.1":
-          return "SHA-224";
-        case "1.2.840.10045.4.3.2":
-          return "SHA-256";
-        case "1.2.840.10045.4.3.3":
-          return "SHA-384";
-        case "1.2.840.10045.4.3.4":
-          return "SHA-512";
-        case "1.2.840.113549.1.1.10": {
-          index = indexAfterOID;
-          index = expectASN1Seq(data, index).index;
-          if (data[index++] !== 160) throw x509Error("non-tag data", data);
-          index = readASN1Length(data, index).index;
-          index = expectASN1Seq(data, index).index;
-          const { oid: hashOID } = readASN1OID(data, index);
-          switch (hashOID) {
-            case "1.2.840.113549.2.5":
-              return "MD5";
-            case "1.3.14.3.2.26":
-              return "SHA-1";
-            case "2.16.840.1.101.3.4.2.1":
-              return "SHA-256";
-            case "2.16.840.1.101.3.4.2.2":
-              return "SHA-384";
-            case "2.16.840.1.101.3.4.2.3":
-              return "SHA-512";
-          }
-          throw x509Error("unknown hash OID " + hashOID, data);
-        }
-        case "1.3.101.110":
-        case "1.3.101.112":
-          return "SHA-512";
-        case "1.3.101.111":
-        case "1.3.101.113":
-          throw x509Error("Ed448 certificate channel binding is not currently supported by Postgres");
-      }
-      throw x509Error("unknown OID " + oid, data);
-    }
-    module2.exports = { signatureAlgorithmHashFromCertificate };
-  }
-});
-
-// node_modules/pg/lib/crypto/sasl.js
-var require_sasl = __commonJS({
-  "node_modules/pg/lib/crypto/sasl.js"(exports2, module2) {
-    "use strict";
-    var crypto2 = require_utils2();
-    var { signatureAlgorithmHashFromCertificate } = require_cert_signatures();
-    function startSession(mechanisms, stream) {
-      const candidates = ["SCRAM-SHA-256"];
-      if (stream) candidates.unshift("SCRAM-SHA-256-PLUS");
-      const mechanism = candidates.find((candidate) => mechanisms.includes(candidate));
-      if (!mechanism) {
-        throw new Error("SASL: Only mechanism(s) " + candidates.join(" and ") + " are supported");
-      }
-      if (mechanism === "SCRAM-SHA-256-PLUS" && typeof stream.getPeerCertificate !== "function") {
-        throw new Error("SASL: Mechanism SCRAM-SHA-256-PLUS requires a certificate");
-      }
-      const clientNonce = crypto2.randomBytes(18).toString("base64");
-      const gs2Header = mechanism === "SCRAM-SHA-256-PLUS" ? "p=tls-server-end-point" : stream ? "y" : "n";
-      return {
-        mechanism,
-        clientNonce,
-        response: gs2Header + ",,n=*,r=" + clientNonce,
-        message: "SASLInitialResponse"
-      };
-    }
-    async function continueSession(session, password, serverData, stream) {
-      if (session.message !== "SASLInitialResponse") {
-        throw new Error("SASL: Last message was not SASLInitialResponse");
-      }
-      if (typeof password !== "string") {
-        throw new Error("SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a string");
-      }
-      if (password === "") {
-        throw new Error("SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a non-empty string");
-      }
-      if (typeof serverData !== "string") {
-        throw new Error("SASL: SCRAM-SERVER-FIRST-MESSAGE: serverData must be a string");
-      }
-      const sv = parseServerFirstMessage(serverData);
-      if (!sv.nonce.startsWith(session.clientNonce)) {
-        throw new Error("SASL: SCRAM-SERVER-FIRST-MESSAGE: server nonce does not start with client nonce");
-      } else if (sv.nonce.length === session.clientNonce.length) {
-        throw new Error("SASL: SCRAM-SERVER-FIRST-MESSAGE: server nonce is too short");
-      }
-      const clientFirstMessageBare = "n=*,r=" + session.clientNonce;
-      const serverFirstMessage = "r=" + sv.nonce + ",s=" + sv.salt + ",i=" + sv.iteration;
-      let channelBinding = stream ? "eSws" : "biws";
-      if (session.mechanism === "SCRAM-SHA-256-PLUS") {
-        const peerCert = stream.getPeerCertificate().raw;
-        let hashName = signatureAlgorithmHashFromCertificate(peerCert);
-        if (hashName === "MD5" || hashName === "SHA-1") hashName = "SHA-256";
-        const certHash = await crypto2.hashByName(hashName, peerCert);
-        const bindingData = Buffer.concat([Buffer.from("p=tls-server-end-point,,"), Buffer.from(certHash)]);
-        channelBinding = bindingData.toString("base64");
-      }
-      const clientFinalMessageWithoutProof = "c=" + channelBinding + ",r=" + sv.nonce;
-      const authMessage = clientFirstMessageBare + "," + serverFirstMessage + "," + clientFinalMessageWithoutProof;
-      const saltBytes = Buffer.from(sv.salt, "base64");
-      const saltedPassword = await crypto2.deriveKey(password, saltBytes, sv.iteration);
-      const clientKey = await crypto2.hmacSha256(saltedPassword, "Client Key");
-      const storedKey = await crypto2.sha256(clientKey);
-      const clientSignature = await crypto2.hmacSha256(storedKey, authMessage);
-      const clientProof = xorBuffers(Buffer.from(clientKey), Buffer.from(clientSignature)).toString("base64");
-      const serverKey = await crypto2.hmacSha256(saltedPassword, "Server Key");
-      const serverSignatureBytes = await crypto2.hmacSha256(serverKey, authMessage);
-      session.message = "SASLResponse";
-      session.serverSignature = Buffer.from(serverSignatureBytes).toString("base64");
-      session.response = clientFinalMessageWithoutProof + ",p=" + clientProof;
-    }
-    function finalizeSession(session, serverData) {
-      if (session.message !== "SASLResponse") {
-        throw new Error("SASL: Last message was not SASLResponse");
-      }
-      if (typeof serverData !== "string") {
-        throw new Error("SASL: SCRAM-SERVER-FINAL-MESSAGE: serverData must be a string");
-      }
-      const { serverSignature } = parseServerFinalMessage(serverData);
-      if (serverSignature !== session.serverSignature) {
-        throw new Error("SASL: SCRAM-SERVER-FINAL-MESSAGE: server signature does not match");
-      }
-    }
-    function isPrintableChars(text) {
-      if (typeof text !== "string") {
-        throw new TypeError("SASL: text must be a string");
-      }
-      return text.split("").map((_, i) => text.charCodeAt(i)).every((c) => c >= 33 && c <= 43 || c >= 45 && c <= 126);
-    }
-    function isBase64(text) {
-      return /^(?:[a-zA-Z0-9+/]{4})*(?:[a-zA-Z0-9+/]{2}==|[a-zA-Z0-9+/]{3}=)?$/.test(text);
-    }
-    function parseAttributePairs(text) {
-      if (typeof text !== "string") {
-        throw new TypeError("SASL: attribute pairs text must be a string");
-      }
-      return new Map(
-        text.split(",").map((attrValue) => {
-          if (!/^.=/.test(attrValue)) {
-            throw new Error("SASL: Invalid attribute pair entry");
-          }
-          const name = attrValue[0];
-          const value = attrValue.substring(2);
-          return [name, value];
-        })
-      );
-    }
-    function parseServerFirstMessage(data) {
-      const attrPairs = parseAttributePairs(data);
-      const nonce = attrPairs.get("r");
-      if (!nonce) {
-        throw new Error("SASL: SCRAM-SERVER-FIRST-MESSAGE: nonce missing");
-      } else if (!isPrintableChars(nonce)) {
-        throw new Error("SASL: SCRAM-SERVER-FIRST-MESSAGE: nonce must only contain printable characters");
-      }
-      const salt = attrPairs.get("s");
-      if (!salt) {
-        throw new Error("SASL: SCRAM-SERVER-FIRST-MESSAGE: salt missing");
-      } else if (!isBase64(salt)) {
-        throw new Error("SASL: SCRAM-SERVER-FIRST-MESSAGE: salt must be base64");
-      }
-      const iterationText = attrPairs.get("i");
-      if (!iterationText) {
-        throw new Error("SASL: SCRAM-SERVER-FIRST-MESSAGE: iteration missing");
-      } else if (!/^[1-9][0-9]*$/.test(iterationText)) {
-        throw new Error("SASL: SCRAM-SERVER-FIRST-MESSAGE: invalid iteration count");
-      }
-      const iteration = parseInt(iterationText, 10);
-      return {
-        nonce,
-        salt,
-        iteration
-      };
-    }
-    function parseServerFinalMessage(serverData) {
-      const attrPairs = parseAttributePairs(serverData);
-      const serverSignature = attrPairs.get("v");
-      if (!serverSignature) {
-        throw new Error("SASL: SCRAM-SERVER-FINAL-MESSAGE: server signature is missing");
-      } else if (!isBase64(serverSignature)) {
-        throw new Error("SASL: SCRAM-SERVER-FINAL-MESSAGE: server signature must be base64");
-      }
-      return {
-        serverSignature
-      };
-    }
-    function xorBuffers(a, b) {
-      if (!Buffer.isBuffer(a)) {
-        throw new TypeError("first argument must be a Buffer");
-      }
-      if (!Buffer.isBuffer(b)) {
-        throw new TypeError("second argument must be a Buffer");
-      }
-      if (a.length !== b.length) {
-        throw new Error("Buffer lengths must match");
-      }
-      if (a.length === 0) {
-        throw new Error("Buffers cannot be empty");
-      }
-      return Buffer.from(a.map((_, i) => a[i] ^ b[i]));
-    }
-    module2.exports = {
-      startSession,
-      continueSession,
-      finalizeSession
-    };
-  }
-});
-
-// node_modules/pg/lib/type-overrides.js
-var require_type_overrides = __commonJS({
-  "node_modules/pg/lib/type-overrides.js"(exports2, module2) {
-    "use strict";
-    var types2 = require_pg_types();
-    function TypeOverrides2(userTypes) {
-      this._types = userTypes || types2;
-      this.text = {};
-      this.binary = {};
-    }
-    TypeOverrides2.prototype.getOverrides = function(format) {
-      switch (format) {
-        case "text":
-          return this.text;
-        case "binary":
-          return this.binary;
-        default:
-          return {};
-      }
-    };
-    TypeOverrides2.prototype.setTypeParser = function(oid, format, parseFn) {
-      if (typeof format === "function") {
-        parseFn = format;
-        format = "text";
-      }
-      this.getOverrides(format)[oid] = parseFn;
-    };
-    TypeOverrides2.prototype.getTypeParser = function(oid, format) {
-      format = format || "text";
-      return this.getOverrides(format)[oid] || this._types.getTypeParser(oid, format);
-    };
-    module2.exports = TypeOverrides2;
-  }
-});
-
-// node_modules/pg-connection-string/index.js
-var require_pg_connection_string = __commonJS({
-  "node_modules/pg-connection-string/index.js"(exports2, module2) {
-    "use strict";
-    function parse(str, options = {}) {
-      if (str.charAt(0) === "/") {
-        const config2 = str.split(" ");
-        return { host: config2[0], database: config2[1] };
-      }
-      const config = {};
-      let result;
-      let dummyHost = false;
-      if (/ |%[^a-f0-9]|%[a-f0-9][^a-f0-9]/i.test(str)) {
-        str = encodeURI(str).replace(/%25(\d\d)/g, "%$1");
-      }
-      try {
-        try {
-          result = new URL(str, "postgres://base");
-        } catch (e) {
-          result = new URL(str.replace("@/", "@___DUMMY___/"), "postgres://base");
-          dummyHost = true;
-        }
-      } catch (err) {
-        err.input && (err.input = "*****REDACTED*****");
-        throw err;
-      }
-      for (const entry of result.searchParams.entries()) {
-        config[entry[0]] = entry[1];
-      }
-      config.user = config.user || decodeURIComponent(result.username);
-      config.password = config.password || decodeURIComponent(result.password);
-      if (result.protocol == "socket:") {
-        config.host = decodeURI(result.pathname);
-        config.database = result.searchParams.get("db");
-        config.client_encoding = result.searchParams.get("encoding");
-        return config;
-      }
-      const hostname = dummyHost ? "" : result.hostname;
-      if (!config.host) {
-        config.host = decodeURIComponent(hostname);
-      } else if (hostname && /^%2f/i.test(hostname)) {
-        result.pathname = hostname + result.pathname;
-      }
-      if (!config.port) {
-        config.port = result.port;
-      }
-      const pathname = result.pathname.slice(1) || null;
-      config.database = pathname ? decodeURI(pathname) : null;
-      if (config.ssl === "true" || config.ssl === "1") {
-        config.ssl = true;
-      }
-      if (config.ssl === "0") {
-        config.ssl = false;
-      }
-      if (config.sslcert || config.sslkey || config.sslrootcert || config.sslmode) {
-        config.ssl = {};
-      }
-      const fs = config.sslcert || config.sslkey || config.sslrootcert ? require("fs") : null;
-      if (config.sslcert) {
-        config.ssl.cert = fs.readFileSync(config.sslcert).toString();
-      }
-      if (config.sslkey) {
-        config.ssl.key = fs.readFileSync(config.sslkey).toString();
-      }
-      if (config.sslrootcert) {
-        config.ssl.ca = fs.readFileSync(config.sslrootcert).toString();
-      }
-      if (options.useLibpqCompat && config.uselibpqcompat) {
-        throw new Error("Both useLibpqCompat and uselibpqcompat are set. Please use only one of them.");
-      }
-      if (config.uselibpqcompat === "true" || options.useLibpqCompat) {
-        switch (config.sslmode) {
-          case "disable": {
-            config.ssl = false;
-            break;
-          }
-          case "prefer": {
-            config.ssl.rejectUnauthorized = false;
-            break;
-          }
-          case "require": {
-            if (config.sslrootcert) {
-              config.ssl.checkServerIdentity = function() {
-              };
-            } else {
-              config.ssl.rejectUnauthorized = false;
-            }
-            break;
-          }
-          case "verify-ca": {
-            if (!config.ssl.ca) {
-              throw new Error(
-                "SECURITY WARNING: Using sslmode=verify-ca requires specifying a CA with sslrootcert. If a public CA is used, verify-ca allows connections to a server that somebody else may have registered with the CA, making you vulnerable to Man-in-the-Middle attacks. Either specify a custom CA certificate with sslrootcert parameter or use sslmode=verify-full for proper security."
-              );
-            }
-            config.ssl.checkServerIdentity = function() {
-            };
-            break;
-          }
-          case "verify-full": {
-            break;
-          }
-        }
-      } else {
-        switch (config.sslmode) {
-          case "disable": {
-            config.ssl = false;
-            break;
-          }
-          case "prefer":
-          case "require":
-          case "verify-ca":
-          case "verify-full": {
-            if (config.sslmode !== "verify-full") {
-              deprecatedSslModeWarning(config.sslmode);
-            }
-            break;
-          }
-          case "no-verify": {
-            config.ssl.rejectUnauthorized = false;
-            break;
-          }
-        }
-      }
-      return config;
-    }
-    function toConnectionOptions(sslConfig) {
-      const connectionOptions = Object.entries(sslConfig).reduce((c, [key, value]) => {
-        if (value !== void 0 && value !== null) {
-          c[key] = value;
-        }
-        return c;
-      }, {});
-      return connectionOptions;
-    }
-    function toClientConfig(config) {
-      const poolConfig = Object.entries(config).reduce((c, [key, value]) => {
-        if (key === "ssl") {
-          const sslConfig = value;
-          if (typeof sslConfig === "boolean") {
-            c[key] = sslConfig;
-          }
-          if (typeof sslConfig === "object") {
-            c[key] = toConnectionOptions(sslConfig);
-          }
-        } else if (value !== void 0 && value !== null) {
-          if (key === "port") {
-            if (value !== "") {
-              const v = parseInt(value, 10);
-              if (isNaN(v)) {
-                throw new Error(`Invalid ${key}: ${value}`);
-              }
-              c[key] = v;
-            }
-          } else {
-            c[key] = value;
-          }
-        }
-        return c;
-      }, {});
-      return poolConfig;
-    }
-    function parseIntoClientConfig(str) {
-      return toClientConfig(parse(str));
-    }
-    function deprecatedSslModeWarning(sslmode) {
-      if (!deprecatedSslModeWarning.warned && typeof process !== "undefined" && process.emitWarning) {
-        deprecatedSslModeWarning.warned = true;
-        process.emitWarning(`SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
-In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
-
-To prepare for this change:
-- If you want the current behavior, explicitly use 'sslmode=verify-full'
-- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=${sslmode}'
-
-See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.`);
-      }
-    }
-    module2.exports = parse;
-    parse.parse = parse;
-    parse.toClientConfig = toClientConfig;
-    parse.parseIntoClientConfig = parseIntoClientConfig;
-  }
-});
-
-// node_modules/pg/lib/connection-parameters.js
-var require_connection_parameters = __commonJS({
-  "node_modules/pg/lib/connection-parameters.js"(exports2, module2) {
-    "use strict";
-    var dns = require("dns");
-    var defaults2 = require_defaults();
-    var parse = require_pg_connection_string().parse;
-    var val = function(key, config, envVar) {
-      if (config[key]) {
-        return config[key];
-      }
-      if (envVar === void 0) {
-        envVar = process.env["PG" + key.toUpperCase()];
-      } else if (envVar === false) {
-      } else {
-        envVar = process.env[envVar];
-      }
-      return envVar || defaults2[key];
-    };
-    var readSSLConfigFromEnvironment = function() {
-      switch (process.env.PGSSLMODE) {
-        case "disable":
-          return false;
-        case "prefer":
-        case "require":
-        case "verify-ca":
-        case "verify-full":
-          return true;
-        case "no-verify":
-          return { rejectUnauthorized: false };
-      }
-      return defaults2.ssl;
-    };
-    var quoteParamValue = function(value) {
-      return "'" + ("" + value).replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'";
-    };
-    var add = function(params, config, paramName) {
-      const value = config[paramName];
-      if (value !== void 0 && value !== null) {
-        params.push(paramName + "=" + quoteParamValue(value));
-      }
-    };
-    var ConnectionParameters = class {
-      constructor(config) {
-        config = typeof config === "string" ? parse(config) : config || {};
-        if (config.connectionString) {
-          config = Object.assign({}, config, parse(config.connectionString));
-        }
-        this.user = val("user", config);
-        this.database = val("database", config);
-        if (this.database === void 0) {
-          this.database = this.user;
-        }
-        this.port = parseInt(val("port", config), 10);
-        this.host = val("host", config);
-        Object.defineProperty(this, "password", {
-          configurable: true,
-          enumerable: false,
-          writable: true,
-          value: val("password", config)
-        });
-        this.binary = val("binary", config);
-        this.options = val("options", config);
-        this.ssl = typeof config.ssl === "undefined" ? readSSLConfigFromEnvironment() : config.ssl;
-        if (typeof this.ssl === "string") {
-          if (this.ssl === "true") {
-            this.ssl = true;
-          }
-        }
-        if (this.ssl === "no-verify") {
-          this.ssl = { rejectUnauthorized: false };
-        }
-        if (this.ssl && this.ssl.key) {
-          Object.defineProperty(this.ssl, "key", {
-            enumerable: false
-          });
-        }
-        this.client_encoding = val("client_encoding", config);
-        this.replication = val("replication", config);
-        this.isDomainSocket = !(this.host || "").indexOf("/");
-        this.application_name = val("application_name", config, "PGAPPNAME");
-        this.fallback_application_name = val("fallback_application_name", config, false);
-        this.statement_timeout = val("statement_timeout", config, false);
-        this.lock_timeout = val("lock_timeout", config, false);
-        this.idle_in_transaction_session_timeout = val("idle_in_transaction_session_timeout", config, false);
-        this.query_timeout = val("query_timeout", config, false);
-        if (config.connectionTimeoutMillis === void 0) {
-          this.connect_timeout = process.env.PGCONNECT_TIMEOUT || 0;
-        } else {
-          this.connect_timeout = Math.floor(config.connectionTimeoutMillis / 1e3);
-        }
-        if (config.keepAlive === false) {
-          this.keepalives = 0;
-        } else if (config.keepAlive === true) {
-          this.keepalives = 1;
-        }
-        if (typeof config.keepAliveInitialDelayMillis === "number") {
-          this.keepalives_idle = Math.floor(config.keepAliveInitialDelayMillis / 1e3);
-        }
-      }
-      getLibpqConnectionString(cb) {
-        const params = [];
-        add(params, this, "user");
-        add(params, this, "password");
-        add(params, this, "port");
-        add(params, this, "application_name");
-        add(params, this, "fallback_application_name");
-        add(params, this, "connect_timeout");
-        add(params, this, "options");
-        const ssl = typeof this.ssl === "object" ? this.ssl : this.ssl ? { sslmode: this.ssl } : {};
-        add(params, ssl, "sslmode");
-        add(params, ssl, "sslca");
-        add(params, ssl, "sslkey");
-        add(params, ssl, "sslcert");
-        add(params, ssl, "sslrootcert");
-        if (this.database) {
-          params.push("dbname=" + quoteParamValue(this.database));
-        }
-        if (this.replication) {
-          params.push("replication=" + quoteParamValue(this.replication));
-        }
-        if (this.host) {
-          params.push("host=" + quoteParamValue(this.host));
-        }
-        if (this.isDomainSocket) {
-          return cb(null, params.join(" "));
-        }
-        if (this.client_encoding) {
-          params.push("client_encoding=" + quoteParamValue(this.client_encoding));
-        }
-        dns.lookup(this.host, function(err, address) {
-          if (err) return cb(err, null);
-          params.push("hostaddr=" + quoteParamValue(address));
-          return cb(null, params.join(" "));
-        });
-      }
-    };
-    module2.exports = ConnectionParameters;
-  }
-});
-
-// node_modules/pg/lib/result.js
-var require_result = __commonJS({
-  "node_modules/pg/lib/result.js"(exports2, module2) {
-    "use strict";
-    var types2 = require_pg_types();
-    var matchRegexp = /^([A-Za-z]+)(?: (\d+))?(?: (\d+))?/;
-    var Result2 = class {
-      constructor(rowMode, types3) {
-        this.command = null;
-        this.rowCount = null;
-        this.oid = null;
-        this.rows = [];
-        this.fields = [];
-        this._parsers = void 0;
-        this._types = types3;
-        this.RowCtor = null;
-        this.rowAsArray = rowMode === "array";
-        if (this.rowAsArray) {
-          this.parseRow = this._parseRowAsArray;
-        }
-        this._prebuiltEmptyResultObject = null;
-      }
-      // adds a command complete message
-      addCommandComplete(msg) {
-        let match;
-        if (msg.text) {
-          match = matchRegexp.exec(msg.text);
-        } else {
-          match = matchRegexp.exec(msg.command);
-        }
-        if (match) {
-          this.command = match[1];
-          if (match[3]) {
-            this.oid = parseInt(match[2], 10);
-            this.rowCount = parseInt(match[3], 10);
-          } else if (match[2]) {
-            this.rowCount = parseInt(match[2], 10);
-          }
-        }
-      }
-      _parseRowAsArray(rowData) {
-        const row = new Array(rowData.length);
-        for (let i = 0, len = rowData.length; i < len; i++) {
-          const rawValue = rowData[i];
-          if (rawValue !== null) {
-            row[i] = this._parsers[i](rawValue);
-          } else {
-            row[i] = null;
-          }
-        }
-        return row;
-      }
-      parseRow(rowData) {
-        const row = { ...this._prebuiltEmptyResultObject };
-        for (let i = 0, len = rowData.length; i < len; i++) {
-          const rawValue = rowData[i];
-          const field = this.fields[i].name;
-          if (rawValue !== null) {
-            const v = this.fields[i].format === "binary" ? Buffer.from(rawValue) : rawValue;
-            row[field] = this._parsers[i](v);
-          } else {
-            row[field] = null;
-          }
-        }
-        return row;
-      }
-      addRow(row) {
-        this.rows.push(row);
-      }
-      addFields(fieldDescriptions) {
-        this.fields = fieldDescriptions;
-        if (this.fields.length) {
-          this._parsers = new Array(fieldDescriptions.length);
-        }
-        const row = {};
-        for (let i = 0; i < fieldDescriptions.length; i++) {
-          const desc = fieldDescriptions[i];
-          row[desc.name] = null;
-          if (this._types) {
-            this._parsers[i] = this._types.getTypeParser(desc.dataTypeID, desc.format || "text");
-          } else {
-            this._parsers[i] = types2.getTypeParser(desc.dataTypeID, desc.format || "text");
-          }
-        }
-        this._prebuiltEmptyResultObject = { ...row };
-      }
-    };
-    module2.exports = Result2;
-  }
-});
-
-// node_modules/pg/lib/query.js
-var require_query = __commonJS({
-  "node_modules/pg/lib/query.js"(exports2, module2) {
-    "use strict";
-    var { EventEmitter: EventEmitter4 } = require("events");
-    var Result2 = require_result();
-    var utils = require_utils();
-    var Query2 = class extends EventEmitter4 {
-      constructor(config, values, callback) {
-        super();
-        config = utils.normalizeQueryConfig(config, values, callback);
-        this.text = config.text;
-        this.values = config.values;
-        this.rows = config.rows;
-        this.types = config.types;
-        this.name = config.name;
-        this.queryMode = config.queryMode;
-        this.binary = config.binary;
-        this.portal = config.portal || "";
-        this.callback = config.callback;
-        this._rowMode = config.rowMode;
-        if (process.domain && config.callback) {
-          this.callback = process.domain.bind(config.callback);
-        }
-        this._result = new Result2(this._rowMode, this.types);
-        this._results = this._result;
-        this._canceledDueToError = false;
-      }
-      requiresPreparation() {
-        if (this.queryMode === "extended") {
-          return true;
-        }
-        if (this.name) {
-          return true;
-        }
-        if (this.rows) {
-          return true;
-        }
-        if (!this.text) {
-          return false;
-        }
-        if (!this.values) {
-          return false;
-        }
-        return this.values.length > 0;
-      }
-      _checkForMultirow() {
-        if (this._result.command) {
-          if (!Array.isArray(this._results)) {
-            this._results = [this._result];
-          }
-          this._result = new Result2(this._rowMode, this._result._types);
-          this._results.push(this._result);
-        }
-      }
-      // associates row metadata from the supplied
-      // message with this query object
-      // metadata used when parsing row results
-      handleRowDescription(msg) {
-        this._checkForMultirow();
-        this._result.addFields(msg.fields);
-        this._accumulateRows = this.callback || !this.listeners("row").length;
-      }
-      handleDataRow(msg) {
-        let row;
-        if (this._canceledDueToError) {
-          return;
-        }
-        try {
-          row = this._result.parseRow(msg.fields);
-        } catch (err) {
-          this._canceledDueToError = err;
-          return;
-        }
-        this.emit("row", row, this._result);
-        if (this._accumulateRows) {
-          this._result.addRow(row);
-        }
-      }
-      handleCommandComplete(msg, connection) {
-        this._checkForMultirow();
-        this._result.addCommandComplete(msg);
-        if (this.rows) {
-          connection.sync();
-        }
-      }
-      // if a named prepared statement is created with empty query text
-      // the backend will send an emptyQuery message but *not* a command complete message
-      // since we pipeline sync immediately after execute we don't need to do anything here
-      // unless we have rows specified, in which case we did not pipeline the initial sync call
-      handleEmptyQuery(connection) {
-        if (this.rows) {
-          connection.sync();
-        }
-      }
-      handleError(err, connection) {
-        if (this._canceledDueToError) {
-          err = this._canceledDueToError;
-          this._canceledDueToError = false;
-        }
-        if (this.callback) {
-          return this.callback(err);
-        }
-        this.emit("error", err);
-      }
-      handleReadyForQuery(con) {
-        if (this._canceledDueToError) {
-          return this.handleError(this._canceledDueToError, con);
-        }
-        if (this.callback) {
-          try {
-            this.callback(null, this._results);
-          } catch (err) {
-            process.nextTick(() => {
-              throw err;
-            });
-          }
-        }
-        this.emit("end", this._results);
-      }
-      submit(connection) {
-        if (typeof this.text !== "string" && typeof this.name !== "string") {
-          return new Error("A query must have either text or a name. Supplying neither is unsupported.");
-        }
-        const previous = connection.parsedStatements[this.name];
-        if (this.text && previous && this.text !== previous) {
-          return new Error(`Prepared statements must be unique - '${this.name}' was used for a different statement`);
-        }
-        if (this.values && !Array.isArray(this.values)) {
-          return new Error("Query values must be an array");
-        }
-        if (this.requiresPreparation()) {
-          connection.stream.cork && connection.stream.cork();
-          try {
-            this.prepare(connection);
-          } finally {
-            connection.stream.uncork && connection.stream.uncork();
-          }
-        } else {
-          connection.query(this.text);
-        }
-        return null;
-      }
-      hasBeenParsed(connection) {
-        return this.name && connection.parsedStatements[this.name];
-      }
-      handlePortalSuspended(connection) {
-        this._getRows(connection, this.rows);
-      }
-      _getRows(connection, rows) {
-        connection.execute({
-          portal: this.portal,
-          rows
-        });
-        if (!rows) {
-          connection.sync();
-        } else {
-          connection.flush();
-        }
-      }
-      // http://developer.postgresql.org/pgdocs/postgres/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY
-      prepare(connection) {
-        if (!this.hasBeenParsed(connection)) {
-          connection.parse({
-            text: this.text,
-            name: this.name,
-            types: this.types
-          });
-        }
-        try {
-          connection.bind({
-            portal: this.portal,
-            statement: this.name,
-            values: this.values,
-            binary: this.binary,
-            valueMapper: utils.prepareValue
-          });
-        } catch (err) {
-          this.handleError(err, connection);
-          return;
-        }
-        connection.describe({
-          type: "P",
-          name: this.portal || ""
-        });
-        this._getRows(connection, this.rows);
-      }
-      handleCopyInResponse(connection) {
-        connection.sendCopyFail("No source stream defined");
-      }
-      handleCopyData(msg, connection) {
-      }
-    };
-    module2.exports = Query2;
-  }
-});
-
-// node_modules/pg-protocol/dist/messages.js
-var require_messages = __commonJS({
-  "node_modules/pg-protocol/dist/messages.js"(exports2) {
-    "use strict";
-    Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.NoticeMessage = exports2.DataRowMessage = exports2.CommandCompleteMessage = exports2.ReadyForQueryMessage = exports2.NotificationResponseMessage = exports2.BackendKeyDataMessage = exports2.AuthenticationMD5Password = exports2.ParameterStatusMessage = exports2.ParameterDescriptionMessage = exports2.RowDescriptionMessage = exports2.Field = exports2.CopyResponse = exports2.CopyDataMessage = exports2.DatabaseError = exports2.copyDone = exports2.emptyQuery = exports2.replicationStart = exports2.portalSuspended = exports2.noData = exports2.closeComplete = exports2.bindComplete = exports2.parseComplete = void 0;
-    exports2.parseComplete = {
-      name: "parseComplete",
-      length: 5
-    };
-    exports2.bindComplete = {
-      name: "bindComplete",
-      length: 5
-    };
-    exports2.closeComplete = {
-      name: "closeComplete",
-      length: 5
-    };
-    exports2.noData = {
-      name: "noData",
-      length: 5
-    };
-    exports2.portalSuspended = {
-      name: "portalSuspended",
-      length: 5
-    };
-    exports2.replicationStart = {
-      name: "replicationStart",
-      length: 4
-    };
-    exports2.emptyQuery = {
-      name: "emptyQuery",
-      length: 4
-    };
-    exports2.copyDone = {
-      name: "copyDone",
-      length: 4
-    };
-    var DatabaseError2 = class extends Error {
-      constructor(message, length, name) {
-        super(message);
-        this.length = length;
-        this.name = name;
-      }
-    };
-    exports2.DatabaseError = DatabaseError2;
-    var CopyDataMessage = class {
-      constructor(length, chunk) {
-        this.length = length;
-        this.chunk = chunk;
-        this.name = "copyData";
-      }
-    };
-    exports2.CopyDataMessage = CopyDataMessage;
-    var CopyResponse = class {
-      constructor(length, name, binary, columnCount) {
-        this.length = length;
-        this.name = name;
-        this.binary = binary;
-        this.columnTypes = new Array(columnCount);
-      }
-    };
-    exports2.CopyResponse = CopyResponse;
-    var Field = class {
-      constructor(name, tableID, columnID, dataTypeID, dataTypeSize, dataTypeModifier, format) {
-        this.name = name;
-        this.tableID = tableID;
-        this.columnID = columnID;
-        this.dataTypeID = dataTypeID;
-        this.dataTypeSize = dataTypeSize;
-        this.dataTypeModifier = dataTypeModifier;
-        this.format = format;
-      }
-    };
-    exports2.Field = Field;
-    var RowDescriptionMessage = class {
-      constructor(length, fieldCount) {
-        this.length = length;
-        this.fieldCount = fieldCount;
-        this.name = "rowDescription";
-        this.fields = new Array(this.fieldCount);
-      }
-    };
-    exports2.RowDescriptionMessage = RowDescriptionMessage;
-    var ParameterDescriptionMessage = class {
-      constructor(length, parameterCount) {
-        this.length = length;
-        this.parameterCount = parameterCount;
-        this.name = "parameterDescription";
-        this.dataTypeIDs = new Array(this.parameterCount);
-      }
-    };
-    exports2.ParameterDescriptionMessage = ParameterDescriptionMessage;
-    var ParameterStatusMessage = class {
-      constructor(length, parameterName, parameterValue) {
-        this.length = length;
-        this.parameterName = parameterName;
-        this.parameterValue = parameterValue;
-        this.name = "parameterStatus";
-      }
-    };
-    exports2.ParameterStatusMessage = ParameterStatusMessage;
-    var AuthenticationMD5Password = class {
-      constructor(length, salt) {
-        this.length = length;
-        this.salt = salt;
-        this.name = "authenticationMD5Password";
-      }
-    };
-    exports2.AuthenticationMD5Password = AuthenticationMD5Password;
-    var BackendKeyDataMessage = class {
-      constructor(length, processID, secretKey) {
-        this.length = length;
-        this.processID = processID;
-        this.secretKey = secretKey;
-        this.name = "backendKeyData";
-      }
-    };
-    exports2.BackendKeyDataMessage = BackendKeyDataMessage;
-    var NotificationResponseMessage = class {
-      constructor(length, processId, channel, payload) {
-        this.length = length;
-        this.processId = processId;
-        this.channel = channel;
-        this.payload = payload;
-        this.name = "notification";
-      }
-    };
-    exports2.NotificationResponseMessage = NotificationResponseMessage;
-    var ReadyForQueryMessage = class {
-      constructor(length, status) {
-        this.length = length;
-        this.status = status;
-        this.name = "readyForQuery";
-      }
-    };
-    exports2.ReadyForQueryMessage = ReadyForQueryMessage;
-    var CommandCompleteMessage = class {
-      constructor(length, text) {
-        this.length = length;
-        this.text = text;
-        this.name = "commandComplete";
-      }
-    };
-    exports2.CommandCompleteMessage = CommandCompleteMessage;
-    var DataRowMessage = class {
-      constructor(length, fields) {
-        this.length = length;
-        this.fields = fields;
-        this.name = "dataRow";
-        this.fieldCount = fields.length;
-      }
-    };
-    exports2.DataRowMessage = DataRowMessage;
-    var NoticeMessage = class {
-      constructor(length, message) {
-        this.length = length;
-        this.message = message;
-        this.name = "notice";
-      }
-    };
-    exports2.NoticeMessage = NoticeMessage;
-  }
-});
-
-// node_modules/pg-protocol/dist/buffer-writer.js
-var require_buffer_writer = __commonJS({
-  "node_modules/pg-protocol/dist/buffer-writer.js"(exports2) {
-    "use strict";
-    Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.Writer = void 0;
-    var Writer = class {
-      constructor(size = 256) {
-        this.size = size;
-        this.offset = 5;
-        this.headerPosition = 0;
-        this.buffer = Buffer.allocUnsafe(size);
-      }
-      ensure(size) {
-        const remaining = this.buffer.length - this.offset;
-        if (remaining < size) {
-          const oldBuffer = this.buffer;
-          const newSize = oldBuffer.length + (oldBuffer.length >> 1) + size;
-          this.buffer = Buffer.allocUnsafe(newSize);
-          oldBuffer.copy(this.buffer);
-        }
-      }
-      addInt32(num) {
-        this.ensure(4);
-        this.buffer[this.offset++] = num >>> 24 & 255;
-        this.buffer[this.offset++] = num >>> 16 & 255;
-        this.buffer[this.offset++] = num >>> 8 & 255;
-        this.buffer[this.offset++] = num >>> 0 & 255;
-        return this;
-      }
-      addInt16(num) {
-        this.ensure(2);
-        this.buffer[this.offset++] = num >>> 8 & 255;
-        this.buffer[this.offset++] = num >>> 0 & 255;
-        return this;
-      }
-      addCString(string) {
-        if (!string) {
-          this.ensure(1);
-        } else {
-          const len = Buffer.byteLength(string);
-          this.ensure(len + 1);
-          this.buffer.write(string, this.offset, "utf-8");
-          this.offset += len;
-        }
-        this.buffer[this.offset++] = 0;
-        return this;
-      }
-      addString(string = "") {
-        const len = Buffer.byteLength(string);
-        this.ensure(len);
-        this.buffer.write(string, this.offset);
-        this.offset += len;
-        return this;
-      }
-      add(otherBuffer) {
-        this.ensure(otherBuffer.length);
-        otherBuffer.copy(this.buffer, this.offset);
-        this.offset += otherBuffer.length;
-        return this;
-      }
-      join(code) {
-        if (code) {
-          this.buffer[this.headerPosition] = code;
-          const length = this.offset - (this.headerPosition + 1);
-          this.buffer.writeInt32BE(length, this.headerPosition + 1);
-        }
-        return this.buffer.slice(code ? 0 : 5, this.offset);
-      }
-      flush(code) {
-        const result = this.join(code);
-        this.offset = 5;
-        this.headerPosition = 0;
-        this.buffer = Buffer.allocUnsafe(this.size);
-        return result;
-      }
-    };
-    exports2.Writer = Writer;
-  }
-});
-
-// node_modules/pg-protocol/dist/serializer.js
-var require_serializer = __commonJS({
-  "node_modules/pg-protocol/dist/serializer.js"(exports2) {
-    "use strict";
-    Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.serialize = void 0;
-    var buffer_writer_1 = require_buffer_writer();
-    var writer = new buffer_writer_1.Writer();
-    var startup = (opts) => {
-      writer.addInt16(3).addInt16(0);
-      for (const key of Object.keys(opts)) {
-        writer.addCString(key).addCString(opts[key]);
-      }
-      writer.addCString("client_encoding").addCString("UTF8");
-      const bodyBuffer = writer.addCString("").flush();
-      const length = bodyBuffer.length + 4;
-      return new buffer_writer_1.Writer().addInt32(length).add(bodyBuffer).flush();
-    };
-    var requestSsl = () => {
-      const response = Buffer.allocUnsafe(8);
-      response.writeInt32BE(8, 0);
-      response.writeInt32BE(80877103, 4);
-      return response;
-    };
-    var password = (password2) => {
-      return writer.addCString(password2).flush(
-        112
-        /* code.startup */
-      );
-    };
-    var sendSASLInitialResponseMessage = function(mechanism, initialResponse) {
-      writer.addCString(mechanism).addInt32(Buffer.byteLength(initialResponse)).addString(initialResponse);
-      return writer.flush(
-        112
-        /* code.startup */
-      );
-    };
-    var sendSCRAMClientFinalMessage = function(additionalData) {
-      return writer.addString(additionalData).flush(
-        112
-        /* code.startup */
-      );
-    };
-    var query = (text) => {
-      return writer.addCString(text).flush(
-        81
-        /* code.query */
-      );
-    };
-    var emptyArray = [];
-    var parse = (query2) => {
-      const name = query2.name || "";
-      if (name.length > 63) {
-        console.error("Warning! Postgres only supports 63 characters for query names.");
-        console.error("You supplied %s (%s)", name, name.length);
-        console.error("This can cause conflicts and silent errors executing queries");
-      }
-      const types2 = query2.types || emptyArray;
-      const len = types2.length;
-      const buffer = writer.addCString(name).addCString(query2.text).addInt16(len);
-      for (let i = 0; i < len; i++) {
-        buffer.addInt32(types2[i]);
-      }
-      return writer.flush(
-        80
-        /* code.parse */
-      );
-    };
-    var paramWriter = new buffer_writer_1.Writer();
-    var writeValues = function(values, valueMapper) {
-      for (let i = 0; i < values.length; i++) {
-        const mappedVal = valueMapper ? valueMapper(values[i], i) : values[i];
-        if (mappedVal == null) {
-          writer.addInt16(
-            0
-            /* ParamType.STRING */
-          );
-          paramWriter.addInt32(-1);
-        } else if (mappedVal instanceof Buffer) {
-          writer.addInt16(
-            1
-            /* ParamType.BINARY */
-          );
-          paramWriter.addInt32(mappedVal.length);
-          paramWriter.add(mappedVal);
-        } else {
-          writer.addInt16(
-            0
-            /* ParamType.STRING */
-          );
-          paramWriter.addInt32(Buffer.byteLength(mappedVal));
-          paramWriter.addString(mappedVal);
-        }
-      }
-    };
-    var bind = (config = {}) => {
-      const portal = config.portal || "";
-      const statement = config.statement || "";
-      const binary = config.binary || false;
-      const values = config.values || emptyArray;
-      const len = values.length;
-      writer.addCString(portal).addCString(statement);
-      writer.addInt16(len);
-      writeValues(values, config.valueMapper);
-      writer.addInt16(len);
-      writer.add(paramWriter.flush());
-      writer.addInt16(1);
-      writer.addInt16(
-        binary ? 1 : 0
-        /* ParamType.STRING */
-      );
-      return writer.flush(
-        66
-        /* code.bind */
-      );
-    };
-    var emptyExecute = Buffer.from([69, 0, 0, 0, 9, 0, 0, 0, 0, 0]);
-    var execute = (config) => {
-      if (!config || !config.portal && !config.rows) {
-        return emptyExecute;
-      }
-      const portal = config.portal || "";
-      const rows = config.rows || 0;
-      const portalLength = Buffer.byteLength(portal);
-      const len = 4 + portalLength + 1 + 4;
-      const buff = Buffer.allocUnsafe(1 + len);
-      buff[0] = 69;
-      buff.writeInt32BE(len, 1);
-      buff.write(portal, 5, "utf-8");
-      buff[portalLength + 5] = 0;
-      buff.writeUInt32BE(rows, buff.length - 4);
-      return buff;
-    };
-    var cancel = (processID, secretKey) => {
-      const buffer = Buffer.allocUnsafe(16);
-      buffer.writeInt32BE(16, 0);
-      buffer.writeInt16BE(1234, 4);
-      buffer.writeInt16BE(5678, 6);
-      buffer.writeInt32BE(processID, 8);
-      buffer.writeInt32BE(secretKey, 12);
-      return buffer;
-    };
-    var cstringMessage = (code, string) => {
-      const stringLen = Buffer.byteLength(string);
-      const len = 4 + stringLen + 1;
-      const buffer = Buffer.allocUnsafe(1 + len);
-      buffer[0] = code;
-      buffer.writeInt32BE(len, 1);
-      buffer.write(string, 5, "utf-8");
-      buffer[len] = 0;
-      return buffer;
-    };
-    var emptyDescribePortal = writer.addCString("P").flush(
-      68
-      /* code.describe */
-    );
-    var emptyDescribeStatement = writer.addCString("S").flush(
-      68
-      /* code.describe */
-    );
-    var describe = (msg) => {
-      return msg.name ? cstringMessage(68, `${msg.type}${msg.name || ""}`) : msg.type === "P" ? emptyDescribePortal : emptyDescribeStatement;
-    };
-    var close = (msg) => {
-      const text = `${msg.type}${msg.name || ""}`;
-      return cstringMessage(67, text);
-    };
-    var copyData = (chunk) => {
-      return writer.add(chunk).flush(
-        100
-        /* code.copyFromChunk */
-      );
-    };
-    var copyFail = (message) => {
-      return cstringMessage(102, message);
-    };
-    var codeOnlyBuffer = (code) => Buffer.from([code, 0, 0, 0, 4]);
-    var flushBuffer = codeOnlyBuffer(
-      72
-      /* code.flush */
-    );
-    var syncBuffer = codeOnlyBuffer(
-      83
-      /* code.sync */
-    );
-    var endBuffer = codeOnlyBuffer(
-      88
-      /* code.end */
-    );
-    var copyDoneBuffer = codeOnlyBuffer(
-      99
-      /* code.copyDone */
-    );
-    var serialize = {
-      startup,
-      password,
-      requestSsl,
-      sendSASLInitialResponseMessage,
-      sendSCRAMClientFinalMessage,
-      query,
-      parse,
-      bind,
-      execute,
-      describe,
-      close,
-      flush: () => flushBuffer,
-      sync: () => syncBuffer,
-      end: () => endBuffer,
-      copyData,
-      copyDone: () => copyDoneBuffer,
-      copyFail,
-      cancel
-    };
-    exports2.serialize = serialize;
-  }
-});
-
-// node_modules/pg-protocol/dist/buffer-reader.js
-var require_buffer_reader = __commonJS({
-  "node_modules/pg-protocol/dist/buffer-reader.js"(exports2) {
-    "use strict";
-    Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.BufferReader = void 0;
-    var BufferReader = class {
-      constructor(offset = 0) {
-        this.offset = offset;
-        this.buffer = Buffer.allocUnsafe(0);
-        this.encoding = "utf-8";
-      }
-      setBuffer(offset, buffer) {
-        this.offset = offset;
-        this.buffer = buffer;
-      }
-      int16() {
-        const result = this.buffer.readInt16BE(this.offset);
-        this.offset += 2;
-        return result;
-      }
-      byte() {
-        const result = this.buffer[this.offset];
-        this.offset++;
-        return result;
-      }
-      int32() {
-        const result = this.buffer.readInt32BE(this.offset);
-        this.offset += 4;
-        return result;
-      }
-      uint32() {
-        const result = this.buffer.readUInt32BE(this.offset);
-        this.offset += 4;
-        return result;
-      }
-      string(length) {
-        const result = this.buffer.toString(this.encoding, this.offset, this.offset + length);
-        this.offset += length;
-        return result;
-      }
-      cstring() {
-        const start = this.offset;
-        let end = start;
-        while (this.buffer[end++] !== 0) {
-        }
-        this.offset = end;
-        return this.buffer.toString(this.encoding, start, end - 1);
-      }
-      bytes(length) {
-        const result = this.buffer.slice(this.offset, this.offset + length);
-        this.offset += length;
-        return result;
-      }
-    };
-    exports2.BufferReader = BufferReader;
-  }
-});
-
-// node_modules/pg-protocol/dist/parser.js
-var require_parser = __commonJS({
-  "node_modules/pg-protocol/dist/parser.js"(exports2) {
-    "use strict";
-    Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.Parser = void 0;
-    var messages_1 = require_messages();
-    var buffer_reader_1 = require_buffer_reader();
-    var CODE_LENGTH = 1;
-    var LEN_LENGTH = 4;
-    var HEADER_LENGTH = CODE_LENGTH + LEN_LENGTH;
-    var LATEINIT_LENGTH = -1;
-    var emptyBuffer = Buffer.allocUnsafe(0);
-    var Parser = class {
-      constructor(opts) {
-        this.buffer = emptyBuffer;
-        this.bufferLength = 0;
-        this.bufferOffset = 0;
-        this.reader = new buffer_reader_1.BufferReader();
-        if ((opts === null || opts === void 0 ? void 0 : opts.mode) === "binary") {
-          throw new Error("Binary mode not supported yet");
-        }
-        this.mode = (opts === null || opts === void 0 ? void 0 : opts.mode) || "text";
-      }
-      parse(buffer, callback) {
-        this.mergeBuffer(buffer);
-        const bufferFullLength = this.bufferOffset + this.bufferLength;
-        let offset = this.bufferOffset;
-        while (offset + HEADER_LENGTH <= bufferFullLength) {
-          const code = this.buffer[offset];
-          const length = this.buffer.readUInt32BE(offset + CODE_LENGTH);
-          const fullMessageLength = CODE_LENGTH + length;
-          if (fullMessageLength + offset <= bufferFullLength) {
-            const message = this.handlePacket(offset + HEADER_LENGTH, code, length, this.buffer);
-            callback(message);
-            offset += fullMessageLength;
-          } else {
-            break;
-          }
-        }
-        if (offset === bufferFullLength) {
-          this.buffer = emptyBuffer;
-          this.bufferLength = 0;
-          this.bufferOffset = 0;
-        } else {
-          this.bufferLength = bufferFullLength - offset;
-          this.bufferOffset = offset;
-        }
-      }
-      mergeBuffer(buffer) {
-        if (this.bufferLength > 0) {
-          const newLength = this.bufferLength + buffer.byteLength;
-          const newFullLength = newLength + this.bufferOffset;
-          if (newFullLength > this.buffer.byteLength) {
-            let newBuffer;
-            if (newLength <= this.buffer.byteLength && this.bufferOffset >= this.bufferLength) {
-              newBuffer = this.buffer;
-            } else {
-              let newBufferLength = this.buffer.byteLength * 2;
-              while (newLength >= newBufferLength) {
-                newBufferLength *= 2;
-              }
-              newBuffer = Buffer.allocUnsafe(newBufferLength);
-            }
-            this.buffer.copy(newBuffer, 0, this.bufferOffset, this.bufferOffset + this.bufferLength);
-            this.buffer = newBuffer;
-            this.bufferOffset = 0;
-          }
-          buffer.copy(this.buffer, this.bufferOffset + this.bufferLength);
-          this.bufferLength = newLength;
-        } else {
-          this.buffer = buffer;
-          this.bufferOffset = 0;
-          this.bufferLength = buffer.byteLength;
-        }
-      }
-      handlePacket(offset, code, length, bytes) {
-        const { reader } = this;
-        reader.setBuffer(offset, bytes);
-        let message;
-        switch (code) {
-          case 50:
-            message = messages_1.bindComplete;
-            break;
-          case 49:
-            message = messages_1.parseComplete;
-            break;
-          case 51:
-            message = messages_1.closeComplete;
-            break;
-          case 110:
-            message = messages_1.noData;
-            break;
-          case 115:
-            message = messages_1.portalSuspended;
-            break;
-          case 99:
-            message = messages_1.copyDone;
-            break;
-          case 87:
-            message = messages_1.replicationStart;
-            break;
-          case 73:
-            message = messages_1.emptyQuery;
-            break;
-          case 68:
-            message = parseDataRowMessage(reader);
-            break;
-          case 67:
-            message = parseCommandCompleteMessage(reader);
-            break;
-          case 90:
-            message = parseReadyForQueryMessage(reader);
-            break;
-          case 65:
-            message = parseNotificationMessage(reader);
-            break;
-          case 82:
-            message = parseAuthenticationResponse(reader, length);
-            break;
-          case 83:
-            message = parseParameterStatusMessage(reader);
-            break;
-          case 75:
-            message = parseBackendKeyData(reader);
-            break;
-          case 69:
-            message = parseErrorMessage(reader, "error");
-            break;
-          case 78:
-            message = parseErrorMessage(reader, "notice");
-            break;
-          case 84:
-            message = parseRowDescriptionMessage(reader);
-            break;
-          case 116:
-            message = parseParameterDescriptionMessage(reader);
-            break;
-          case 71:
-            message = parseCopyInMessage(reader);
-            break;
-          case 72:
-            message = parseCopyOutMessage(reader);
-            break;
-          case 100:
-            message = parseCopyData(reader, length);
-            break;
-          default:
-            return new messages_1.DatabaseError("received invalid response: " + code.toString(16), length, "error");
-        }
-        reader.setBuffer(0, emptyBuffer);
-        message.length = length;
-        return message;
-      }
-    };
-    exports2.Parser = Parser;
-    var parseReadyForQueryMessage = (reader) => {
-      const status = reader.string(1);
-      return new messages_1.ReadyForQueryMessage(LATEINIT_LENGTH, status);
-    };
-    var parseCommandCompleteMessage = (reader) => {
-      const text = reader.cstring();
-      return new messages_1.CommandCompleteMessage(LATEINIT_LENGTH, text);
-    };
-    var parseCopyData = (reader, length) => {
-      const chunk = reader.bytes(length - 4);
-      return new messages_1.CopyDataMessage(LATEINIT_LENGTH, chunk);
-    };
-    var parseCopyInMessage = (reader) => parseCopyMessage(reader, "copyInResponse");
-    var parseCopyOutMessage = (reader) => parseCopyMessage(reader, "copyOutResponse");
-    var parseCopyMessage = (reader, messageName) => {
-      const isBinary = reader.byte() !== 0;
-      const columnCount = reader.int16();
-      const message = new messages_1.CopyResponse(LATEINIT_LENGTH, messageName, isBinary, columnCount);
-      for (let i = 0; i < columnCount; i++) {
-        message.columnTypes[i] = reader.int16();
-      }
-      return message;
-    };
-    var parseNotificationMessage = (reader) => {
-      const processId = reader.int32();
-      const channel = reader.cstring();
-      const payload = reader.cstring();
-      return new messages_1.NotificationResponseMessage(LATEINIT_LENGTH, processId, channel, payload);
-    };
-    var parseRowDescriptionMessage = (reader) => {
-      const fieldCount = reader.int16();
-      const message = new messages_1.RowDescriptionMessage(LATEINIT_LENGTH, fieldCount);
-      for (let i = 0; i < fieldCount; i++) {
-        message.fields[i] = parseField(reader);
-      }
-      return message;
-    };
-    var parseField = (reader) => {
-      const name = reader.cstring();
-      const tableID = reader.uint32();
-      const columnID = reader.int16();
-      const dataTypeID = reader.uint32();
-      const dataTypeSize = reader.int16();
-      const dataTypeModifier = reader.int32();
-      const mode = reader.int16() === 0 ? "text" : "binary";
-      return new messages_1.Field(name, tableID, columnID, dataTypeID, dataTypeSize, dataTypeModifier, mode);
-    };
-    var parseParameterDescriptionMessage = (reader) => {
-      const parameterCount = reader.int16();
-      const message = new messages_1.ParameterDescriptionMessage(LATEINIT_LENGTH, parameterCount);
-      for (let i = 0; i < parameterCount; i++) {
-        message.dataTypeIDs[i] = reader.int32();
-      }
-      return message;
-    };
-    var parseDataRowMessage = (reader) => {
-      const fieldCount = reader.int16();
-      const fields = new Array(fieldCount);
-      for (let i = 0; i < fieldCount; i++) {
-        const len = reader.int32();
-        fields[i] = len === -1 ? null : reader.string(len);
-      }
-      return new messages_1.DataRowMessage(LATEINIT_LENGTH, fields);
-    };
-    var parseParameterStatusMessage = (reader) => {
-      const name = reader.cstring();
-      const value = reader.cstring();
-      return new messages_1.ParameterStatusMessage(LATEINIT_LENGTH, name, value);
-    };
-    var parseBackendKeyData = (reader) => {
-      const processID = reader.int32();
-      const secretKey = reader.int32();
-      return new messages_1.BackendKeyDataMessage(LATEINIT_LENGTH, processID, secretKey);
-    };
-    var parseAuthenticationResponse = (reader, length) => {
-      const code = reader.int32();
-      const message = {
-        name: "authenticationOk",
-        length
-      };
-      switch (code) {
-        case 0:
-          break;
-        case 3:
-          if (message.length === 8) {
-            message.name = "authenticationCleartextPassword";
-          }
-          break;
-        case 5:
-          if (message.length === 12) {
-            message.name = "authenticationMD5Password";
-            const salt = reader.bytes(4);
-            return new messages_1.AuthenticationMD5Password(LATEINIT_LENGTH, salt);
-          }
-          break;
-        case 10:
-          {
-            message.name = "authenticationSASL";
-            message.mechanisms = [];
-            let mechanism;
-            do {
-              mechanism = reader.cstring();
-              if (mechanism) {
-                message.mechanisms.push(mechanism);
-              }
-            } while (mechanism);
-          }
-          break;
-        case 11:
-          message.name = "authenticationSASLContinue";
-          message.data = reader.string(length - 8);
-          break;
-        case 12:
-          message.name = "authenticationSASLFinal";
-          message.data = reader.string(length - 8);
-          break;
-        default:
-          throw new Error("Unknown authenticationOk message type " + code);
-      }
-      return message;
-    };
-    var parseErrorMessage = (reader, name) => {
-      const fields = {};
-      let fieldType = reader.string(1);
-      while (fieldType !== "\0") {
-        fields[fieldType] = reader.cstring();
-        fieldType = reader.string(1);
-      }
-      const messageValue = fields.M;
-      const message = name === "notice" ? new messages_1.NoticeMessage(LATEINIT_LENGTH, messageValue) : new messages_1.DatabaseError(messageValue, LATEINIT_LENGTH, name);
-      message.severity = fields.S;
-      message.code = fields.C;
-      message.detail = fields.D;
-      message.hint = fields.H;
-      message.position = fields.P;
-      message.internalPosition = fields.p;
-      message.internalQuery = fields.q;
-      message.where = fields.W;
-      message.schema = fields.s;
-      message.table = fields.t;
-      message.column = fields.c;
-      message.dataType = fields.d;
-      message.constraint = fields.n;
-      message.file = fields.F;
-      message.line = fields.L;
-      message.routine = fields.R;
-      return message;
-    };
-  }
-});
-
-// node_modules/pg-protocol/dist/index.js
-var require_dist = __commonJS({
-  "node_modules/pg-protocol/dist/index.js"(exports2) {
-    "use strict";
-    Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.DatabaseError = exports2.serialize = exports2.parse = void 0;
-    var messages_1 = require_messages();
-    Object.defineProperty(exports2, "DatabaseError", { enumerable: true, get: function() {
-      return messages_1.DatabaseError;
-    } });
-    var serializer_1 = require_serializer();
-    Object.defineProperty(exports2, "serialize", { enumerable: true, get: function() {
-      return serializer_1.serialize;
-    } });
-    var parser_1 = require_parser();
-    function parse(stream, callback) {
-      const parser = new parser_1.Parser();
-      stream.on("data", (buffer) => parser.parse(buffer, callback));
-      return new Promise((resolve) => stream.on("end", () => resolve()));
-    }
-    exports2.parse = parse;
-  }
-});
-
-// node_modules/pg-cloudflare/dist/empty.js
-var require_empty = __commonJS({
-  "node_modules/pg-cloudflare/dist/empty.js"(exports2) {
-    "use strict";
-    Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.default = {};
-  }
-});
-
-// node_modules/pg/lib/stream.js
-var require_stream = __commonJS({
-  "node_modules/pg/lib/stream.js"(exports2, module2) {
-    var { getStream, getSecureStream } = getStreamFuncs();
-    module2.exports = {
-      /**
-       * Get a socket stream compatible with the current runtime environment.
-       * @returns {Duplex}
-       */
-      getStream,
-      /**
-       * Get a TLS secured socket, compatible with the current environment,
-       * using the socket and other settings given in `options`.
-       * @returns {Duplex}
-       */
-      getSecureStream
-    };
-    function getNodejsStreamFuncs() {
-      function getStream2(ssl) {
-        const net = require("net");
-        return new net.Socket();
-      }
-      function getSecureStream2(options) {
-        const tls = require("tls");
-        return tls.connect(options);
-      }
-      return {
-        getStream: getStream2,
-        getSecureStream: getSecureStream2
-      };
-    }
-    function getCloudflareStreamFuncs() {
-      function getStream2(ssl) {
-        const { CloudflareSocket } = require_empty();
-        return new CloudflareSocket(ssl);
-      }
-      function getSecureStream2(options) {
-        options.socket.startTls(options);
-        return options.socket;
-      }
-      return {
-        getStream: getStream2,
-        getSecureStream: getSecureStream2
-      };
-    }
-    function isCloudflareRuntime() {
-      if (typeof navigator === "object" && navigator !== null && typeof navigator.userAgent === "string") {
-        return navigator.userAgent === "Cloudflare-Workers";
-      }
-      if (typeof Response === "function") {
-        const resp = new Response(null, { cf: { thing: true } });
-        if (typeof resp.cf === "object" && resp.cf !== null && resp.cf.thing) {
-          return true;
-        }
-      }
-      return false;
-    }
-    function getStreamFuncs() {
-      if (isCloudflareRuntime()) {
-        return getCloudflareStreamFuncs();
-      }
-      return getNodejsStreamFuncs();
-    }
-  }
-});
-
-// node_modules/pg/lib/connection.js
-var require_connection = __commonJS({
-  "node_modules/pg/lib/connection.js"(exports2, module2) {
-    "use strict";
-    var EventEmitter4 = require("events").EventEmitter;
-    var { parse, serialize } = require_dist();
-    var { getStream, getSecureStream } = require_stream();
-    var flushBuffer = serialize.flush();
-    var syncBuffer = serialize.sync();
-    var endBuffer = serialize.end();
-    var Connection2 = class extends EventEmitter4 {
-      constructor(config) {
-        super();
-        config = config || {};
-        this.stream = config.stream || getStream(config.ssl);
-        if (typeof this.stream === "function") {
-          this.stream = this.stream(config);
-        }
-        this._keepAlive = config.keepAlive;
-        this._keepAliveInitialDelayMillis = config.keepAliveInitialDelayMillis;
-        this.parsedStatements = {};
-        this.ssl = config.ssl || false;
-        this._ending = false;
-        this._emitMessage = false;
-        const self = this;
-        this.on("newListener", function(eventName) {
-          if (eventName === "message") {
-            self._emitMessage = true;
-          }
-        });
-      }
-      connect(port, host) {
-        const self = this;
-        this._connecting = true;
-        this.stream.setNoDelay(true);
-        this.stream.connect(port, host);
-        this.stream.once("connect", function() {
-          if (self._keepAlive) {
-            self.stream.setKeepAlive(true, self._keepAliveInitialDelayMillis);
-          }
-          self.emit("connect");
-        });
-        const reportStreamError = function(error) {
-          if (self._ending && (error.code === "ECONNRESET" || error.code === "EPIPE")) {
-            return;
-          }
-          self.emit("error", error);
-        };
-        this.stream.on("error", reportStreamError);
-        this.stream.on("close", function() {
-          self.emit("end");
-        });
-        if (!this.ssl) {
-          return this.attachListeners(this.stream);
-        }
-        this.stream.once("data", function(buffer) {
-          const responseCode = buffer.toString("utf8");
-          switch (responseCode) {
-            case "S":
-              break;
-            case "N":
-              self.stream.end();
-              return self.emit("error", new Error("The server does not support SSL connections"));
-            default:
-              self.stream.end();
-              return self.emit("error", new Error("There was an error establishing an SSL connection"));
-          }
-          const options = {
-            socket: self.stream
-          };
-          if (self.ssl !== true) {
-            Object.assign(options, self.ssl);
-            if ("key" in self.ssl) {
-              options.key = self.ssl.key;
-            }
-          }
-          const net = require("net");
-          if (net.isIP && net.isIP(host) === 0) {
-            options.servername = host;
-          }
-          try {
-            self.stream = getSecureStream(options);
-          } catch (err) {
-            return self.emit("error", err);
-          }
-          self.attachListeners(self.stream);
-          self.stream.on("error", reportStreamError);
-          self.emit("sslconnect");
-        });
-      }
-      attachListeners(stream) {
-        parse(stream, (msg) => {
-          const eventName = msg.name === "error" ? "errorMessage" : msg.name;
-          if (this._emitMessage) {
-            this.emit("message", msg);
-          }
-          this.emit(eventName, msg);
-        });
-      }
-      requestSsl() {
-        this.stream.write(serialize.requestSsl());
-      }
-      startup(config) {
-        this.stream.write(serialize.startup(config));
-      }
-      cancel(processID, secretKey) {
-        this._send(serialize.cancel(processID, secretKey));
-      }
-      password(password) {
-        this._send(serialize.password(password));
-      }
-      sendSASLInitialResponseMessage(mechanism, initialResponse) {
-        this._send(serialize.sendSASLInitialResponseMessage(mechanism, initialResponse));
-      }
-      sendSCRAMClientFinalMessage(additionalData) {
-        this._send(serialize.sendSCRAMClientFinalMessage(additionalData));
-      }
-      _send(buffer) {
-        if (!this.stream.writable) {
-          return false;
-        }
-        return this.stream.write(buffer);
-      }
-      query(text) {
-        this._send(serialize.query(text));
-      }
-      // send parse message
-      parse(query) {
-        this._send(serialize.parse(query));
-      }
-      // send bind message
-      bind(config) {
-        this._send(serialize.bind(config));
-      }
-      // send execute message
-      execute(config) {
-        this._send(serialize.execute(config));
-      }
-      flush() {
-        if (this.stream.writable) {
-          this.stream.write(flushBuffer);
-        }
-      }
-      sync() {
-        this._ending = true;
-        this._send(syncBuffer);
-      }
-      ref() {
-        this.stream.ref();
-      }
-      unref() {
-        this.stream.unref();
-      }
-      end() {
-        this._ending = true;
-        if (!this._connecting || !this.stream.writable) {
-          this.stream.end();
-          return;
-        }
-        return this.stream.write(endBuffer, () => {
-          this.stream.end();
-        });
-      }
-      close(msg) {
-        this._send(serialize.close(msg));
-      }
-      describe(msg) {
-        this._send(serialize.describe(msg));
-      }
-      sendCopyFromChunk(chunk) {
-        this._send(serialize.copyData(chunk));
-      }
-      endCopyFrom() {
-        this._send(serialize.copyDone());
-      }
-      sendCopyFail(msg) {
-        this._send(serialize.copyFail(msg));
-      }
-    };
-    module2.exports = Connection2;
-  }
-});
-
-// node_modules/split2/index.js
-var require_split2 = __commonJS({
-  "node_modules/split2/index.js"(exports2, module2) {
-    "use strict";
-    var { Transform } = require("stream");
-    var { StringDecoder } = require("string_decoder");
-    var kLast = Symbol("last");
-    var kDecoder = Symbol("decoder");
-    function transform(chunk, enc, cb) {
-      let list;
-      if (this.overflow) {
-        const buf = this[kDecoder].write(chunk);
-        list = buf.split(this.matcher);
-        if (list.length === 1) return cb();
-        list.shift();
-        this.overflow = false;
-      } else {
-        this[kLast] += this[kDecoder].write(chunk);
-        list = this[kLast].split(this.matcher);
-      }
-      this[kLast] = list.pop();
-      for (let i = 0; i < list.length; i++) {
-        try {
-          push(this, this.mapper(list[i]));
-        } catch (error) {
-          return cb(error);
-        }
-      }
-      this.overflow = this[kLast].length > this.maxLength;
-      if (this.overflow && !this.skipOverflow) {
-        cb(new Error("maximum buffer reached"));
-        return;
-      }
-      cb();
-    }
-    function flush(cb) {
-      this[kLast] += this[kDecoder].end();
-      if (this[kLast]) {
-        try {
-          push(this, this.mapper(this[kLast]));
-        } catch (error) {
-          return cb(error);
-        }
-      }
-      cb();
-    }
-    function push(self, val) {
-      if (val !== void 0) {
-        self.push(val);
-      }
-    }
-    function noop(incoming) {
-      return incoming;
-    }
-    function split(matcher, mapper, options) {
-      matcher = matcher || /\r?\n/;
-      mapper = mapper || noop;
-      options = options || {};
-      switch (arguments.length) {
-        case 1:
-          if (typeof matcher === "function") {
-            mapper = matcher;
-            matcher = /\r?\n/;
-          } else if (typeof matcher === "object" && !(matcher instanceof RegExp) && !matcher[Symbol.split]) {
-            options = matcher;
-            matcher = /\r?\n/;
-          }
-          break;
-        case 2:
-          if (typeof matcher === "function") {
-            options = mapper;
-            mapper = matcher;
-            matcher = /\r?\n/;
-          } else if (typeof mapper === "object") {
-            options = mapper;
-            mapper = noop;
-          }
-      }
-      options = Object.assign({}, options);
-      options.autoDestroy = true;
-      options.transform = transform;
-      options.flush = flush;
-      options.readableObjectMode = true;
-      const stream = new Transform(options);
-      stream[kLast] = "";
-      stream[kDecoder] = new StringDecoder("utf8");
-      stream.matcher = matcher;
-      stream.mapper = mapper;
-      stream.maxLength = options.maxLength;
-      stream.skipOverflow = options.skipOverflow || false;
-      stream.overflow = false;
-      stream._destroy = function(err, cb) {
-        this._writableState.errorEmitted = false;
-        cb(err);
-      };
-      return stream;
-    }
-    module2.exports = split;
-  }
-});
-
-// node_modules/pgpass/lib/helper.js
-var require_helper = __commonJS({
-  "node_modules/pgpass/lib/helper.js"(exports2, module2) {
-    "use strict";
-    var path = require("path");
-    var Stream = require("stream").Stream;
-    var split = require_split2();
-    var util = require("util");
-    var defaultPort = 5432;
-    var isWin = process.platform === "win32";
-    var warnStream = process.stderr;
-    var S_IRWXG = 56;
-    var S_IRWXO = 7;
-    var S_IFMT = 61440;
-    var S_IFREG = 32768;
-    function isRegFile(mode) {
-      return (mode & S_IFMT) == S_IFREG;
-    }
-    var fieldNames = ["host", "port", "database", "user", "password"];
-    var nrOfFields = fieldNames.length;
-    var passKey = fieldNames[nrOfFields - 1];
-    function warn() {
-      var isWritable = warnStream instanceof Stream && true === warnStream.writable;
-      if (isWritable) {
-        var args = Array.prototype.slice.call(arguments).concat("\n");
-        warnStream.write(util.format.apply(util, args));
-      }
-    }
-    Object.defineProperty(module2.exports, "isWin", {
-      get: function() {
-        return isWin;
-      },
-      set: function(val) {
-        isWin = val;
-      }
-    });
-    module2.exports.warnTo = function(stream) {
-      var old = warnStream;
-      warnStream = stream;
-      return old;
-    };
-    module2.exports.getFileName = function(rawEnv) {
-      var env6 = rawEnv || process.env;
-      var file = env6.PGPASSFILE || (isWin ? path.join(env6.APPDATA || "./", "postgresql", "pgpass.conf") : path.join(env6.HOME || "./", ".pgpass"));
-      return file;
-    };
-    module2.exports.usePgPass = function(stats, fname) {
-      if (Object.prototype.hasOwnProperty.call(process.env, "PGPASSWORD")) {
-        return false;
-      }
-      if (isWin) {
-        return true;
-      }
-      fname = fname || "<unkn>";
-      if (!isRegFile(stats.mode)) {
-        warn('WARNING: password file "%s" is not a plain file', fname);
-        return false;
-      }
-      if (stats.mode & (S_IRWXG | S_IRWXO)) {
-        warn('WARNING: password file "%s" has group or world access; permissions should be u=rw (0600) or less', fname);
-        return false;
-      }
-      return true;
-    };
-    var matcher = module2.exports.match = function(connInfo, entry) {
-      return fieldNames.slice(0, -1).reduce(function(prev, field, idx) {
-        if (idx == 1) {
-          if (Number(connInfo[field] || defaultPort) === Number(entry[field])) {
-            return prev && true;
-          }
-        }
-        return prev && (entry[field] === "*" || entry[field] === connInfo[field]);
-      }, true);
-    };
-    module2.exports.getPassword = function(connInfo, stream, cb) {
-      var pass;
-      var lineStream = stream.pipe(split());
-      function onLine(line) {
-        var entry = parseLine(line);
-        if (entry && isValidEntry(entry) && matcher(connInfo, entry)) {
-          pass = entry[passKey];
-          lineStream.end();
-        }
-      }
-      var onEnd = function() {
-        stream.destroy();
-        cb(pass);
-      };
-      var onErr = function(err) {
-        stream.destroy();
-        warn("WARNING: error on reading file: %s", err);
-        cb(void 0);
-      };
-      stream.on("error", onErr);
-      lineStream.on("data", onLine).on("end", onEnd).on("error", onErr);
-    };
-    var parseLine = module2.exports.parseLine = function(line) {
-      if (line.length < 11 || line.match(/^\s+#/)) {
-        return null;
-      }
-      var curChar = "";
-      var prevChar = "";
-      var fieldIdx = 0;
-      var startIdx = 0;
-      var endIdx = 0;
-      var obj = {};
-      var isLastField = false;
-      var addToObj = function(idx, i0, i1) {
-        var field = line.substring(i0, i1);
-        if (!Object.hasOwnProperty.call(process.env, "PGPASS_NO_DEESCAPE")) {
-          field = field.replace(/\\([:\\])/g, "$1");
-        }
-        obj[fieldNames[idx]] = field;
-      };
-      for (var i = 0; i < line.length - 1; i += 1) {
-        curChar = line.charAt(i + 1);
-        prevChar = line.charAt(i);
-        isLastField = fieldIdx == nrOfFields - 1;
-        if (isLastField) {
-          addToObj(fieldIdx, startIdx);
-          break;
-        }
-        if (i >= 0 && curChar == ":" && prevChar !== "\\") {
-          addToObj(fieldIdx, startIdx, i + 1);
-          startIdx = i + 2;
-          fieldIdx += 1;
-        }
-      }
-      obj = Object.keys(obj).length === nrOfFields ? obj : null;
-      return obj;
-    };
-    var isValidEntry = module2.exports.isValidEntry = function(entry) {
-      var rules = {
-        // host
-        0: function(x) {
-          return x.length > 0;
-        },
-        // port
-        1: function(x) {
-          if (x === "*") {
-            return true;
-          }
-          x = Number(x);
-          return isFinite(x) && x > 0 && x < 9007199254740992 && Math.floor(x) === x;
-        },
-        // database
-        2: function(x) {
-          return x.length > 0;
-        },
-        // username
-        3: function(x) {
-          return x.length > 0;
-        },
-        // password
-        4: function(x) {
-          return x.length > 0;
-        }
-      };
-      for (var idx = 0; idx < fieldNames.length; idx += 1) {
-        var rule = rules[idx];
-        var value = entry[fieldNames[idx]] || "";
-        var res = rule(value);
-        if (!res) {
-          return false;
-        }
-      }
-      return true;
-    };
-  }
-});
-
-// node_modules/pgpass/lib/index.js
-var require_lib = __commonJS({
-  "node_modules/pgpass/lib/index.js"(exports2, module2) {
-    "use strict";
-    var path = require("path");
-    var fs = require("fs");
-    var helper = require_helper();
-    module2.exports = function(connInfo, cb) {
-      var file = helper.getFileName();
-      fs.stat(file, function(err, stat) {
-        if (err || !helper.usePgPass(stat, file)) {
-          return cb(void 0);
-        }
-        var st = fs.createReadStream(file);
-        helper.getPassword(connInfo, st, cb);
-      });
-    };
-    module2.exports.warnTo = helper.warnTo;
-  }
-});
-
-// node_modules/pg/lib/client.js
-var require_client = __commonJS({
-  "node_modules/pg/lib/client.js"(exports2, module2) {
-    var EventEmitter4 = require("events").EventEmitter;
-    var utils = require_utils();
-    var nodeUtils = require("util");
-    var sasl = require_sasl();
-    var TypeOverrides2 = require_type_overrides();
-    var ConnectionParameters = require_connection_parameters();
-    var Query2 = require_query();
-    var defaults2 = require_defaults();
-    var Connection2 = require_connection();
-    var crypto2 = require_utils2();
-    var activeQueryDeprecationNotice = nodeUtils.deprecate(
-      () => {
-      },
-      "Client.activeQuery is deprecated and will be removed in pg@9.0"
-    );
-    var queryQueueDeprecationNotice = nodeUtils.deprecate(
-      () => {
-      },
-      "Client.queryQueue is deprecated and will be removed in pg@9.0."
-    );
-    var pgPassDeprecationNotice = nodeUtils.deprecate(
-      () => {
-      },
-      "pgpass support is deprecated and will be removed in pg@9.0. You can provide an async function as the password property to the Client/Pool constructor that returns a password instead. Within this function you can call the pgpass module in your own code."
-    );
-    var byoPromiseDeprecationNotice = nodeUtils.deprecate(
-      () => {
-      },
-      "Passing a custom Promise implementation to the Client/Pool constructor is deprecated and will be removed in pg@9.0."
-    );
-    var queryQueueLengthDeprecationNotice = nodeUtils.deprecate(
-      () => {
-      },
-      "Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead."
-    );
-    var Client2 = class extends EventEmitter4 {
-      constructor(config) {
-        super();
-        this.connectionParameters = new ConnectionParameters(config);
-        this.user = this.connectionParameters.user;
-        this.database = this.connectionParameters.database;
-        this.port = this.connectionParameters.port;
-        this.host = this.connectionParameters.host;
-        Object.defineProperty(this, "password", {
-          configurable: true,
-          enumerable: false,
-          writable: true,
-          value: this.connectionParameters.password
-        });
-        this.replication = this.connectionParameters.replication;
-        const c = config || {};
-        if (c.Promise) {
-          byoPromiseDeprecationNotice();
-        }
-        this._Promise = c.Promise || global.Promise;
-        this._types = new TypeOverrides2(c.types);
-        this._ending = false;
-        this._ended = false;
-        this._connecting = false;
-        this._connected = false;
-        this._connectionError = false;
-        this._queryable = true;
-        this._activeQuery = null;
-        this.enableChannelBinding = Boolean(c.enableChannelBinding);
-        this.connection = c.connection || new Connection2({
-          stream: c.stream,
-          ssl: this.connectionParameters.ssl,
-          keepAlive: c.keepAlive || false,
-          keepAliveInitialDelayMillis: c.keepAliveInitialDelayMillis || 0,
-          encoding: this.connectionParameters.client_encoding || "utf8"
-        });
-        this._queryQueue = [];
-        this.binary = c.binary || defaults2.binary;
-        this.processID = null;
-        this.secretKey = null;
-        this.ssl = this.connectionParameters.ssl || false;
-        if (this.ssl && this.ssl.key) {
-          Object.defineProperty(this.ssl, "key", {
-            enumerable: false
-          });
-        }
-        this._connectionTimeoutMillis = c.connectionTimeoutMillis || 0;
-      }
-      get activeQuery() {
-        activeQueryDeprecationNotice();
-        return this._activeQuery;
-      }
-      set activeQuery(val) {
-        activeQueryDeprecationNotice();
-        this._activeQuery = val;
-      }
-      _getActiveQuery() {
-        return this._activeQuery;
-      }
-      _errorAllQueries(err) {
-        const enqueueError = (query) => {
-          process.nextTick(() => {
-            query.handleError(err, this.connection);
-          });
-        };
-        const activeQuery = this._getActiveQuery();
-        if (activeQuery) {
-          enqueueError(activeQuery);
-          this._activeQuery = null;
-        }
-        this._queryQueue.forEach(enqueueError);
-        this._queryQueue.length = 0;
-      }
-      _connect(callback) {
-        const self = this;
-        const con = this.connection;
-        this._connectionCallback = callback;
-        if (this._connecting || this._connected) {
-          const err = new Error("Client has already been connected. You cannot reuse a client.");
-          process.nextTick(() => {
-            callback(err);
-          });
-          return;
-        }
-        this._connecting = true;
-        if (this._connectionTimeoutMillis > 0) {
-          this.connectionTimeoutHandle = setTimeout(() => {
-            con._ending = true;
-            con.stream.destroy(new Error("timeout expired"));
-          }, this._connectionTimeoutMillis);
-          if (this.connectionTimeoutHandle.unref) {
-            this.connectionTimeoutHandle.unref();
-          }
-        }
-        if (this.host && this.host.indexOf("/") === 0) {
-          con.connect(this.host + "/.s.PGSQL." + this.port);
-        } else {
-          con.connect(this.port, this.host);
-        }
-        con.on("connect", function() {
-          if (self.ssl) {
-            con.requestSsl();
-          } else {
-            con.startup(self.getStartupConf());
-          }
-        });
-        con.on("sslconnect", function() {
-          con.startup(self.getStartupConf());
-        });
-        this._attachListeners(con);
-        con.once("end", () => {
-          const error = this._ending ? new Error("Connection terminated") : new Error("Connection terminated unexpectedly");
-          clearTimeout(this.connectionTimeoutHandle);
-          this._errorAllQueries(error);
-          this._ended = true;
-          if (!this._ending) {
-            if (this._connecting && !this._connectionError) {
-              if (this._connectionCallback) {
-                this._connectionCallback(error);
-              } else {
-                this._handleErrorEvent(error);
-              }
-            } else if (!this._connectionError) {
-              this._handleErrorEvent(error);
-            }
-          }
-          process.nextTick(() => {
-            this.emit("end");
-          });
-        });
-      }
-      connect(callback) {
-        if (callback) {
-          this._connect(callback);
-          return;
-        }
-        return new this._Promise((resolve, reject) => {
-          this._connect((error) => {
-            if (error) {
-              reject(error);
-            } else {
-              resolve(this);
-            }
-          });
-        });
-      }
-      _attachListeners(con) {
-        con.on("authenticationCleartextPassword", this._handleAuthCleartextPassword.bind(this));
-        con.on("authenticationMD5Password", this._handleAuthMD5Password.bind(this));
-        con.on("authenticationSASL", this._handleAuthSASL.bind(this));
-        con.on("authenticationSASLContinue", this._handleAuthSASLContinue.bind(this));
-        con.on("authenticationSASLFinal", this._handleAuthSASLFinal.bind(this));
-        con.on("backendKeyData", this._handleBackendKeyData.bind(this));
-        con.on("error", this._handleErrorEvent.bind(this));
-        con.on("errorMessage", this._handleErrorMessage.bind(this));
-        con.on("readyForQuery", this._handleReadyForQuery.bind(this));
-        con.on("notice", this._handleNotice.bind(this));
-        con.on("rowDescription", this._handleRowDescription.bind(this));
-        con.on("dataRow", this._handleDataRow.bind(this));
-        con.on("portalSuspended", this._handlePortalSuspended.bind(this));
-        con.on("emptyQuery", this._handleEmptyQuery.bind(this));
-        con.on("commandComplete", this._handleCommandComplete.bind(this));
-        con.on("parseComplete", this._handleParseComplete.bind(this));
-        con.on("copyInResponse", this._handleCopyInResponse.bind(this));
-        con.on("copyData", this._handleCopyData.bind(this));
-        con.on("notification", this._handleNotification.bind(this));
-      }
-      _getPassword(cb) {
-        const con = this.connection;
-        if (typeof this.password === "function") {
-          this._Promise.resolve().then(() => this.password(this.connectionParameters)).then((pass) => {
-            if (pass !== void 0) {
-              if (typeof pass !== "string") {
-                con.emit("error", new TypeError("Password must be a string"));
-                return;
-              }
-              this.connectionParameters.password = this.password = pass;
-            } else {
-              this.connectionParameters.password = this.password = null;
-            }
-            cb();
-          }).catch((err) => {
-            con.emit("error", err);
-          });
-        } else if (this.password !== null) {
-          cb();
-        } else {
-          try {
-            const pgPass = require_lib();
-            pgPass(this.connectionParameters, (pass) => {
-              if (void 0 !== pass) {
-                pgPassDeprecationNotice();
-                this.connectionParameters.password = this.password = pass;
-              }
-              cb();
-            });
-          } catch (e) {
-            this.emit("error", e);
-          }
-        }
-      }
-      _handleAuthCleartextPassword(msg) {
-        this._getPassword(() => {
-          this.connection.password(this.password);
-        });
-      }
-      _handleAuthMD5Password(msg) {
-        this._getPassword(async () => {
-          try {
-            const hashedPassword = await crypto2.postgresMd5PasswordHash(this.user, this.password, msg.salt);
-            this.connection.password(hashedPassword);
-          } catch (e) {
-            this.emit("error", e);
-          }
-        });
-      }
-      _handleAuthSASL(msg) {
-        this._getPassword(() => {
-          try {
-            this.saslSession = sasl.startSession(msg.mechanisms, this.enableChannelBinding && this.connection.stream);
-            this.connection.sendSASLInitialResponseMessage(this.saslSession.mechanism, this.saslSession.response);
-          } catch (err) {
-            this.connection.emit("error", err);
-          }
-        });
-      }
-      async _handleAuthSASLContinue(msg) {
-        try {
-          await sasl.continueSession(
-            this.saslSession,
-            this.password,
-            msg.data,
-            this.enableChannelBinding && this.connection.stream
-          );
-          this.connection.sendSCRAMClientFinalMessage(this.saslSession.response);
-        } catch (err) {
-          this.connection.emit("error", err);
-        }
-      }
-      _handleAuthSASLFinal(msg) {
-        try {
-          sasl.finalizeSession(this.saslSession, msg.data);
-          this.saslSession = null;
-        } catch (err) {
-          this.connection.emit("error", err);
-        }
-      }
-      _handleBackendKeyData(msg) {
-        this.processID = msg.processID;
-        this.secretKey = msg.secretKey;
-      }
-      _handleReadyForQuery(msg) {
-        if (this._connecting) {
-          this._connecting = false;
-          this._connected = true;
-          clearTimeout(this.connectionTimeoutHandle);
-          if (this._connectionCallback) {
-            this._connectionCallback(null, this);
-            this._connectionCallback = null;
-          }
-          this.emit("connect");
-        }
-        const activeQuery = this._getActiveQuery();
-        this._activeQuery = null;
-        this.readyForQuery = true;
-        if (activeQuery) {
-          activeQuery.handleReadyForQuery(this.connection);
-        }
-        this._pulseQueryQueue();
-      }
-      // if we receive an error event or error message
-      // during the connection process we handle it here
-      _handleErrorWhileConnecting(err) {
-        if (this._connectionError) {
-          return;
-        }
-        this._connectionError = true;
-        clearTimeout(this.connectionTimeoutHandle);
-        if (this._connectionCallback) {
-          return this._connectionCallback(err);
-        }
-        this.emit("error", err);
-      }
-      // if we're connected and we receive an error event from the connection
-      // this means the socket is dead - do a hard abort of all queries and emit
-      // the socket error on the client as well
-      _handleErrorEvent(err) {
-        if (this._connecting) {
-          return this._handleErrorWhileConnecting(err);
-        }
-        this._queryable = false;
-        this._errorAllQueries(err);
-        this.emit("error", err);
-      }
-      // handle error messages from the postgres backend
-      _handleErrorMessage(msg) {
-        if (this._connecting) {
-          return this._handleErrorWhileConnecting(msg);
-        }
-        const activeQuery = this._getActiveQuery();
-        if (!activeQuery) {
-          this._handleErrorEvent(msg);
-          return;
-        }
-        this._activeQuery = null;
-        activeQuery.handleError(msg, this.connection);
-      }
-      _handleRowDescription(msg) {
-        const activeQuery = this._getActiveQuery();
-        if (activeQuery == null) {
-          const error = new Error("Received unexpected rowDescription message from backend.");
-          this._handleErrorEvent(error);
-          return;
-        }
-        activeQuery.handleRowDescription(msg);
-      }
-      _handleDataRow(msg) {
-        const activeQuery = this._getActiveQuery();
-        if (activeQuery == null) {
-          const error = new Error("Received unexpected dataRow message from backend.");
-          this._handleErrorEvent(error);
-          return;
-        }
-        activeQuery.handleDataRow(msg);
-      }
-      _handlePortalSuspended(msg) {
-        const activeQuery = this._getActiveQuery();
-        if (activeQuery == null) {
-          const error = new Error("Received unexpected portalSuspended message from backend.");
-          this._handleErrorEvent(error);
-          return;
-        }
-        activeQuery.handlePortalSuspended(this.connection);
-      }
-      _handleEmptyQuery(msg) {
-        const activeQuery = this._getActiveQuery();
-        if (activeQuery == null) {
-          const error = new Error("Received unexpected emptyQuery message from backend.");
-          this._handleErrorEvent(error);
-          return;
-        }
-        activeQuery.handleEmptyQuery(this.connection);
-      }
-      _handleCommandComplete(msg) {
-        const activeQuery = this._getActiveQuery();
-        if (activeQuery == null) {
-          const error = new Error("Received unexpected commandComplete message from backend.");
-          this._handleErrorEvent(error);
-          return;
-        }
-        activeQuery.handleCommandComplete(msg, this.connection);
-      }
-      _handleParseComplete() {
-        const activeQuery = this._getActiveQuery();
-        if (activeQuery == null) {
-          const error = new Error("Received unexpected parseComplete message from backend.");
-          this._handleErrorEvent(error);
-          return;
-        }
-        if (activeQuery.name) {
-          this.connection.parsedStatements[activeQuery.name] = activeQuery.text;
-        }
-      }
-      _handleCopyInResponse(msg) {
-        const activeQuery = this._getActiveQuery();
-        if (activeQuery == null) {
-          const error = new Error("Received unexpected copyInResponse message from backend.");
-          this._handleErrorEvent(error);
-          return;
-        }
-        activeQuery.handleCopyInResponse(this.connection);
-      }
-      _handleCopyData(msg) {
-        const activeQuery = this._getActiveQuery();
-        if (activeQuery == null) {
-          const error = new Error("Received unexpected copyData message from backend.");
-          this._handleErrorEvent(error);
-          return;
-        }
-        activeQuery.handleCopyData(msg, this.connection);
-      }
-      _handleNotification(msg) {
-        this.emit("notification", msg);
-      }
-      _handleNotice(msg) {
-        this.emit("notice", msg);
-      }
-      getStartupConf() {
-        const params = this.connectionParameters;
-        const data = {
-          user: params.user,
-          database: params.database
-        };
-        const appName = params.application_name || params.fallback_application_name;
-        if (appName) {
-          data.application_name = appName;
-        }
-        if (params.replication) {
-          data.replication = "" + params.replication;
-        }
-        if (params.statement_timeout) {
-          data.statement_timeout = String(parseInt(params.statement_timeout, 10));
-        }
-        if (params.lock_timeout) {
-          data.lock_timeout = String(parseInt(params.lock_timeout, 10));
-        }
-        if (params.idle_in_transaction_session_timeout) {
-          data.idle_in_transaction_session_timeout = String(parseInt(params.idle_in_transaction_session_timeout, 10));
-        }
-        if (params.options) {
-          data.options = params.options;
-        }
-        return data;
-      }
-      cancel(client, query) {
-        if (client.activeQuery === query) {
-          const con = this.connection;
-          if (this.host && this.host.indexOf("/") === 0) {
-            con.connect(this.host + "/.s.PGSQL." + this.port);
-          } else {
-            con.connect(this.port, this.host);
-          }
-          con.on("connect", function() {
-            con.cancel(client.processID, client.secretKey);
-          });
-        } else if (client._queryQueue.indexOf(query) !== -1) {
-          client._queryQueue.splice(client._queryQueue.indexOf(query), 1);
-        }
-      }
-      setTypeParser(oid, format, parseFn) {
-        return this._types.setTypeParser(oid, format, parseFn);
-      }
-      getTypeParser(oid, format) {
-        return this._types.getTypeParser(oid, format);
-      }
-      // escapeIdentifier and escapeLiteral moved to utility functions & exported
-      // on PG
-      // re-exported here for backwards compatibility
-      escapeIdentifier(str) {
-        return utils.escapeIdentifier(str);
-      }
-      escapeLiteral(str) {
-        return utils.escapeLiteral(str);
-      }
-      _pulseQueryQueue() {
-        if (this.readyForQuery === true) {
-          this._activeQuery = this._queryQueue.shift();
-          const activeQuery = this._getActiveQuery();
-          if (activeQuery) {
-            this.readyForQuery = false;
-            this.hasExecuted = true;
-            const queryError = activeQuery.submit(this.connection);
-            if (queryError) {
-              process.nextTick(() => {
-                activeQuery.handleError(queryError, this.connection);
-                this.readyForQuery = true;
-                this._pulseQueryQueue();
-              });
-            }
-          } else if (this.hasExecuted) {
-            this._activeQuery = null;
-            this.emit("drain");
-          }
-        }
-      }
-      query(config, values, callback) {
-        let query;
-        let result;
-        let readTimeout;
-        let readTimeoutTimer;
-        let queryCallback;
-        if (config === null || config === void 0) {
-          throw new TypeError("Client was passed a null or undefined query");
-        } else if (typeof config.submit === "function") {
-          readTimeout = config.query_timeout || this.connectionParameters.query_timeout;
-          result = query = config;
-          if (!query.callback) {
-            if (typeof values === "function") {
-              query.callback = values;
-            } else if (callback) {
-              query.callback = callback;
-            }
-          }
-        } else {
-          readTimeout = config.query_timeout || this.connectionParameters.query_timeout;
-          query = new Query2(config, values, callback);
-          if (!query.callback) {
-            result = new this._Promise((resolve, reject) => {
-              query.callback = (err, res) => err ? reject(err) : resolve(res);
-            }).catch((err) => {
-              Error.captureStackTrace(err);
-              throw err;
-            });
-          }
-        }
-        if (readTimeout) {
-          queryCallback = query.callback || (() => {
-          });
-          readTimeoutTimer = setTimeout(() => {
-            const error = new Error("Query read timeout");
-            process.nextTick(() => {
-              query.handleError(error, this.connection);
-            });
-            queryCallback(error);
-            query.callback = () => {
-            };
-            const index = this._queryQueue.indexOf(query);
-            if (index > -1) {
-              this._queryQueue.splice(index, 1);
-            }
-            this._pulseQueryQueue();
-          }, readTimeout);
-          query.callback = (err, res) => {
-            clearTimeout(readTimeoutTimer);
-            queryCallback(err, res);
-          };
-        }
-        if (this.binary && !query.binary) {
-          query.binary = true;
-        }
-        if (query._result && !query._result._types) {
-          query._result._types = this._types;
-        }
-        if (!this._queryable) {
-          process.nextTick(() => {
-            query.handleError(new Error("Client has encountered a connection error and is not queryable"), this.connection);
-          });
-          return result;
-        }
-        if (this._ending) {
-          process.nextTick(() => {
-            query.handleError(new Error("Client was closed and is not queryable"), this.connection);
-          });
-          return result;
-        }
-        if (this._queryQueue.length > 0) {
-          queryQueueLengthDeprecationNotice();
-        }
-        this._queryQueue.push(query);
-        this._pulseQueryQueue();
-        return result;
-      }
-      ref() {
-        this.connection.ref();
-      }
-      unref() {
-        this.connection.unref();
-      }
-      end(cb) {
-        this._ending = true;
-        if (!this.connection._connecting || this._ended) {
-          if (cb) {
-            cb();
-          } else {
-            return this._Promise.resolve();
-          }
-        }
-        if (this._getActiveQuery() || !this._queryable) {
-          this.connection.stream.destroy();
-        } else {
-          this.connection.end();
-        }
-        if (cb) {
-          this.connection.once("end", cb);
-        } else {
-          return new this._Promise((resolve) => {
-            this.connection.once("end", resolve);
-          });
-        }
-      }
-      get queryQueue() {
-        queryQueueDeprecationNotice();
-        return this._queryQueue;
-      }
-    };
-    Client2.Query = Query2;
-    module2.exports = Client2;
-  }
-});
-
-// node_modules/pg-pool/index.js
-var require_pg_pool = __commonJS({
-  "node_modules/pg-pool/index.js"(exports2, module2) {
-    "use strict";
-    var EventEmitter4 = require("events").EventEmitter;
-    var NOOP = function() {
-    };
-    var removeWhere = (list, predicate) => {
-      const i = list.findIndex(predicate);
-      return i === -1 ? void 0 : list.splice(i, 1)[0];
-    };
-    var IdleItem = class {
-      constructor(client, idleListener, timeoutId) {
-        this.client = client;
-        this.idleListener = idleListener;
-        this.timeoutId = timeoutId;
-      }
-    };
-    var PendingItem = class {
-      constructor(callback) {
-        this.callback = callback;
-      }
-    };
-    function throwOnDoubleRelease() {
-      throw new Error("Release called on client which has already been released to the pool.");
-    }
-    function promisify(Promise2, callback) {
-      if (callback) {
-        return { callback, result: void 0 };
-      }
-      let rej;
-      let res;
-      const cb = function(err, client) {
-        err ? rej(err) : res(client);
-      };
-      const result = new Promise2(function(resolve, reject) {
-        res = resolve;
-        rej = reject;
-      }).catch((err) => {
-        Error.captureStackTrace(err);
-        throw err;
-      });
-      return { callback: cb, result };
-    }
-    function makeIdleListener(pool, client) {
-      return function idleListener(err) {
-        err.client = client;
-        client.removeListener("error", idleListener);
-        client.on("error", () => {
-          pool.log("additional client error after disconnection due to error", err);
-        });
-        pool._remove(client);
-        pool.emit("error", err, client);
-      };
-    }
-    var Pool2 = class extends EventEmitter4 {
-      constructor(options, Client2) {
-        super();
-        this.options = Object.assign({}, options);
-        if (options != null && "password" in options) {
-          Object.defineProperty(this.options, "password", {
-            configurable: true,
-            enumerable: false,
-            writable: true,
-            value: options.password
-          });
-        }
-        if (options != null && options.ssl && options.ssl.key) {
-          Object.defineProperty(this.options.ssl, "key", {
-            enumerable: false
-          });
-        }
-        this.options.max = this.options.max || this.options.poolSize || 10;
-        this.options.min = this.options.min || 0;
-        this.options.maxUses = this.options.maxUses || Infinity;
-        this.options.allowExitOnIdle = this.options.allowExitOnIdle || false;
-        this.options.maxLifetimeSeconds = this.options.maxLifetimeSeconds || 0;
-        this.log = this.options.log || function() {
-        };
-        this.Client = this.options.Client || Client2 || require_lib2().Client;
-        this.Promise = this.options.Promise || global.Promise;
-        if (typeof this.options.idleTimeoutMillis === "undefined") {
-          this.options.idleTimeoutMillis = 1e4;
-        }
-        this._clients = [];
-        this._idle = [];
-        this._expired = /* @__PURE__ */ new WeakSet();
-        this._pendingQueue = [];
-        this._endCallback = void 0;
-        this.ending = false;
-        this.ended = false;
-      }
-      _promiseTry(f) {
-        const Promise2 = this.Promise;
-        if (typeof Promise2.try === "function") {
-          return Promise2.try(f);
-        }
-        return new Promise2((resolve) => resolve(f()));
-      }
-      _isFull() {
-        return this._clients.length >= this.options.max;
-      }
-      _isAboveMin() {
-        return this._clients.length > this.options.min;
-      }
-      _pulseQueue() {
-        this.log("pulse queue");
-        if (this.ended) {
-          this.log("pulse queue ended");
-          return;
-        }
-        if (this.ending) {
-          this.log("pulse queue on ending");
-          if (this._idle.length) {
-            this._idle.slice().map((item) => {
-              this._remove(item.client);
-            });
-          }
-          if (!this._clients.length) {
-            this.ended = true;
-            this._endCallback();
-          }
-          return;
-        }
-        if (!this._pendingQueue.length) {
-          this.log("no queued requests");
-          return;
-        }
-        if (!this._idle.length && this._isFull()) {
-          return;
-        }
-        const pendingItem = this._pendingQueue.shift();
-        if (this._idle.length) {
-          const idleItem = this._idle.pop();
-          clearTimeout(idleItem.timeoutId);
-          const client = idleItem.client;
-          client.ref && client.ref();
-          const idleListener = idleItem.idleListener;
-          return this._acquireClient(client, pendingItem, idleListener, false);
-        }
-        if (!this._isFull()) {
-          return this.newClient(pendingItem);
-        }
-        throw new Error("unexpected condition");
-      }
-      _remove(client, callback) {
-        const removed = removeWhere(this._idle, (item) => item.client === client);
-        if (removed !== void 0) {
-          clearTimeout(removed.timeoutId);
-        }
-        this._clients = this._clients.filter((c) => c !== client);
-        const context = this;
-        client.end(() => {
-          context.emit("remove", client);
-          if (typeof callback === "function") {
-            callback();
-          }
-        });
-      }
-      connect(cb) {
-        if (this.ending) {
-          const err = new Error("Cannot use a pool after calling end on the pool");
-          return cb ? cb(err) : this.Promise.reject(err);
-        }
-        const response = promisify(this.Promise, cb);
-        const result = response.result;
-        if (this._isFull() || this._idle.length) {
-          if (this._idle.length) {
-            process.nextTick(() => this._pulseQueue());
-          }
-          if (!this.options.connectionTimeoutMillis) {
-            this._pendingQueue.push(new PendingItem(response.callback));
-            return result;
-          }
-          const queueCallback = (err, res, done) => {
-            clearTimeout(tid);
-            response.callback(err, res, done);
-          };
-          const pendingItem = new PendingItem(queueCallback);
-          const tid = setTimeout(() => {
-            removeWhere(this._pendingQueue, (i) => i.callback === queueCallback);
-            pendingItem.timedOut = true;
-            response.callback(new Error("timeout exceeded when trying to connect"));
-          }, this.options.connectionTimeoutMillis);
-          if (tid.unref) {
-            tid.unref();
-          }
-          this._pendingQueue.push(pendingItem);
-          return result;
-        }
-        this.newClient(new PendingItem(response.callback));
-        return result;
-      }
-      newClient(pendingItem) {
-        const client = new this.Client(this.options);
-        this._clients.push(client);
-        const idleListener = makeIdleListener(this, client);
-        this.log("checking client timeout");
-        let tid;
-        let timeoutHit = false;
-        if (this.options.connectionTimeoutMillis) {
-          tid = setTimeout(() => {
-            if (client.connection) {
-              this.log("ending client due to timeout");
-              timeoutHit = true;
-              client.connection.stream.destroy();
-            } else if (!client.isConnected()) {
-              this.log("ending client due to timeout");
-              timeoutHit = true;
-              client.end();
-            }
-          }, this.options.connectionTimeoutMillis);
-        }
-        this.log("connecting new client");
-        client.connect((err) => {
-          if (tid) {
-            clearTimeout(tid);
-          }
-          client.on("error", idleListener);
-          if (err) {
-            this.log("client failed to connect", err);
-            this._clients = this._clients.filter((c) => c !== client);
-            if (timeoutHit) {
-              err = new Error("Connection terminated due to connection timeout", { cause: err });
-            }
-            this._pulseQueue();
-            if (!pendingItem.timedOut) {
-              pendingItem.callback(err, void 0, NOOP);
-            }
-          } else {
-            this.log("new client connected");
-            if (this.options.onConnect) {
-              this._promiseTry(() => this.options.onConnect(client)).then(
-                () => {
-                  this._afterConnect(client, pendingItem, idleListener);
-                },
-                (hookErr) => {
-                  this._clients = this._clients.filter((c) => c !== client);
-                  client.end(() => {
-                    this._pulseQueue();
-                    if (!pendingItem.timedOut) {
-                      pendingItem.callback(hookErr, void 0, NOOP);
-                    }
-                  });
-                }
-              );
-              return;
-            }
-            return this._afterConnect(client, pendingItem, idleListener);
-          }
-        });
-      }
-      _afterConnect(client, pendingItem, idleListener) {
-        if (this.options.maxLifetimeSeconds !== 0) {
-          const maxLifetimeTimeout = setTimeout(() => {
-            this.log("ending client due to expired lifetime");
-            this._expired.add(client);
-            const idleIndex = this._idle.findIndex((idleItem) => idleItem.client === client);
-            if (idleIndex !== -1) {
-              this._acquireClient(
-                client,
-                new PendingItem((err, client2, clientRelease) => clientRelease()),
-                idleListener,
-                false
-              );
-            }
-          }, this.options.maxLifetimeSeconds * 1e3);
-          maxLifetimeTimeout.unref();
-          client.once("end", () => clearTimeout(maxLifetimeTimeout));
-        }
-        return this._acquireClient(client, pendingItem, idleListener, true);
-      }
-      // acquire a client for a pending work item
-      _acquireClient(client, pendingItem, idleListener, isNew) {
-        if (isNew) {
-          this.emit("connect", client);
-        }
-        this.emit("acquire", client);
-        client.release = this._releaseOnce(client, idleListener);
-        client.removeListener("error", idleListener);
-        if (!pendingItem.timedOut) {
-          if (isNew && this.options.verify) {
-            this.options.verify(client, (err) => {
-              if (err) {
-                client.release(err);
-                return pendingItem.callback(err, void 0, NOOP);
-              }
-              pendingItem.callback(void 0, client, client.release);
-            });
-          } else {
-            pendingItem.callback(void 0, client, client.release);
-          }
-        } else {
-          if (isNew && this.options.verify) {
-            this.options.verify(client, client.release);
-          } else {
-            client.release();
-          }
-        }
-      }
-      // returns a function that wraps _release and throws if called more than once
-      _releaseOnce(client, idleListener) {
-        let released = false;
-        return (err) => {
-          if (released) {
-            throwOnDoubleRelease();
-          }
-          released = true;
-          this._release(client, idleListener, err);
-        };
-      }
-      // release a client back to the poll, include an error
-      // to remove it from the pool
-      _release(client, idleListener, err) {
-        client.on("error", idleListener);
-        client._poolUseCount = (client._poolUseCount || 0) + 1;
-        this.emit("release", err, client);
-        if (err || this.ending || !client._queryable || client._ending || client._poolUseCount >= this.options.maxUses) {
-          if (client._poolUseCount >= this.options.maxUses) {
-            this.log("remove expended client");
-          }
-          return this._remove(client, this._pulseQueue.bind(this));
-        }
-        const isExpired = this._expired.has(client);
-        if (isExpired) {
-          this.log("remove expired client");
-          this._expired.delete(client);
-          return this._remove(client, this._pulseQueue.bind(this));
-        }
-        let tid;
-        if (this.options.idleTimeoutMillis && this._isAboveMin()) {
-          tid = setTimeout(() => {
-            if (this._isAboveMin()) {
-              this.log("remove idle client");
-              this._remove(client, this._pulseQueue.bind(this));
-            }
-          }, this.options.idleTimeoutMillis);
-          if (this.options.allowExitOnIdle) {
-            tid.unref();
-          }
-        }
-        if (this.options.allowExitOnIdle) {
-          client.unref();
-        }
-        this._idle.push(new IdleItem(client, idleListener, tid));
-        this._pulseQueue();
-      }
-      query(text, values, cb) {
-        if (typeof text === "function") {
-          const response2 = promisify(this.Promise, text);
-          setImmediate(function() {
-            return response2.callback(new Error("Passing a function as the first parameter to pool.query is not supported"));
-          });
-          return response2.result;
-        }
-        if (typeof values === "function") {
-          cb = values;
-          values = void 0;
-        }
-        const response = promisify(this.Promise, cb);
-        cb = response.callback;
-        this.connect((err, client) => {
-          if (err) {
-            return cb(err);
-          }
-          let clientReleased = false;
-          const onError = (err2) => {
-            if (clientReleased) {
-              return;
-            }
-            clientReleased = true;
-            client.release(err2);
-            cb(err2);
-          };
-          client.once("error", onError);
-          this.log("dispatching query");
-          try {
-            client.query(text, values, (err2, res) => {
-              this.log("query dispatched");
-              client.removeListener("error", onError);
-              if (clientReleased) {
-                return;
-              }
-              clientReleased = true;
-              client.release(err2);
-              if (err2) {
-                return cb(err2);
-              }
-              return cb(void 0, res);
-            });
-          } catch (err2) {
-            client.release(err2);
-            return cb(err2);
-          }
-        });
-        return response.result;
-      }
-      end(cb) {
-        this.log("ending");
-        if (this.ending) {
-          const err = new Error("Called end on pool more than once");
-          return cb ? cb(err) : this.Promise.reject(err);
-        }
-        this.ending = true;
-        const promised = promisify(this.Promise, cb);
-        this._endCallback = promised.callback;
-        this._pulseQueue();
-        return promised.result;
-      }
-      get waitingCount() {
-        return this._pendingQueue.length;
-      }
-      get idleCount() {
-        return this._idle.length;
-      }
-      get expiredCount() {
-        return this._clients.reduce((acc, client) => acc + (this._expired.has(client) ? 1 : 0), 0);
-      }
-      get totalCount() {
-        return this._clients.length;
-      }
-    };
-    module2.exports = Pool2;
-  }
-});
-
-// node_modules/pg/lib/native/query.js
-var require_query2 = __commonJS({
-  "node_modules/pg/lib/native/query.js"(exports2, module2) {
-    "use strict";
-    var EventEmitter4 = require("events").EventEmitter;
-    var util = require("util");
-    var utils = require_utils();
-    var NativeQuery = module2.exports = function(config, values, callback) {
-      EventEmitter4.call(this);
-      config = utils.normalizeQueryConfig(config, values, callback);
-      this.text = config.text;
-      this.values = config.values;
-      this.name = config.name;
-      this.queryMode = config.queryMode;
-      this.callback = config.callback;
-      this.state = "new";
-      this._arrayMode = config.rowMode === "array";
-      this._emitRowEvents = false;
-      this.on(
-        "newListener",
-        function(event) {
-          if (event === "row") this._emitRowEvents = true;
-        }.bind(this)
-      );
-    };
-    util.inherits(NativeQuery, EventEmitter4);
-    var errorFieldMap = {
-      sqlState: "code",
-      statementPosition: "position",
-      messagePrimary: "message",
-      context: "where",
-      schemaName: "schema",
-      tableName: "table",
-      columnName: "column",
-      dataTypeName: "dataType",
-      constraintName: "constraint",
-      sourceFile: "file",
-      sourceLine: "line",
-      sourceFunction: "routine"
-    };
-    NativeQuery.prototype.handleError = function(err) {
-      const fields = this.native.pq.resultErrorFields();
-      if (fields) {
-        for (const key in fields) {
-          const normalizedFieldName = errorFieldMap[key] || key;
-          err[normalizedFieldName] = fields[key];
-        }
-      }
-      if (this.callback) {
-        this.callback(err);
-      } else {
-        this.emit("error", err);
-      }
-      this.state = "error";
-    };
-    NativeQuery.prototype.then = function(onSuccess, onFailure) {
-      return this._getPromise().then(onSuccess, onFailure);
-    };
-    NativeQuery.prototype.catch = function(callback) {
-      return this._getPromise().catch(callback);
-    };
-    NativeQuery.prototype._getPromise = function() {
-      if (this._promise) return this._promise;
-      this._promise = new Promise(
-        function(resolve, reject) {
-          this._once("end", resolve);
-          this._once("error", reject);
-        }.bind(this)
-      );
-      return this._promise;
-    };
-    NativeQuery.prototype.submit = function(client) {
-      this.state = "running";
-      const self = this;
-      this.native = client.native;
-      client.native.arrayMode = this._arrayMode;
-      let after = function(err, rows, results) {
-        client.native.arrayMode = false;
-        setImmediate(function() {
-          self.emit("_done");
-        });
-        if (err) {
-          return self.handleError(err);
-        }
-        if (self._emitRowEvents) {
-          if (results.length > 1) {
-            rows.forEach((rowOfRows, i) => {
-              rowOfRows.forEach((row) => {
-                self.emit("row", row, results[i]);
-              });
-            });
-          } else {
-            rows.forEach(function(row) {
-              self.emit("row", row, results);
-            });
-          }
-        }
-        self.state = "end";
-        self.emit("end", results);
-        if (self.callback) {
-          self.callback(null, results);
-        }
-      };
-      if (process.domain) {
-        after = process.domain.bind(after);
-      }
-      if (this.name) {
-        if (this.name.length > 63) {
-          console.error("Warning! Postgres only supports 63 characters for query names.");
-          console.error("You supplied %s (%s)", this.name, this.name.length);
-          console.error("This can cause conflicts and silent errors executing queries");
-        }
-        const values = (this.values || []).map(utils.prepareValue);
-        if (client.namedQueries[this.name]) {
-          if (this.text && client.namedQueries[this.name] !== this.text) {
-            const err = new Error(`Prepared statements must be unique - '${this.name}' was used for a different statement`);
-            return after(err);
-          }
-          return client.native.execute(this.name, values, after);
-        }
-        return client.native.prepare(this.name, this.text, values.length, function(err) {
-          if (err) return after(err);
-          client.namedQueries[self.name] = self.text;
-          return self.native.execute(self.name, values, after);
-        });
-      } else if (this.values) {
-        if (!Array.isArray(this.values)) {
-          const err = new Error("Query values must be an array");
-          return after(err);
-        }
-        const vals = this.values.map(utils.prepareValue);
-        client.native.query(this.text, vals, after);
-      } else if (this.queryMode === "extended") {
-        client.native.query(this.text, [], after);
-      } else {
-        client.native.query(this.text, after);
-      }
-    };
-  }
-});
-
-// node_modules/pg/lib/native/client.js
-var require_client2 = __commonJS({
-  "node_modules/pg/lib/native/client.js"(exports2, module2) {
-    var nodeUtils = require("util");
-    var Native;
-    try {
-      Native = require("pg-native");
-    } catch (e) {
-      throw e;
-    }
-    var TypeOverrides2 = require_type_overrides();
-    var EventEmitter4 = require("events").EventEmitter;
-    var util = require("util");
-    var ConnectionParameters = require_connection_parameters();
-    var NativeQuery = require_query2();
-    var queryQueueLengthDeprecationNotice = nodeUtils.deprecate(
-      () => {
-      },
-      "Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead."
-    );
-    var Client2 = module2.exports = function(config) {
-      EventEmitter4.call(this);
-      config = config || {};
-      this._Promise = config.Promise || global.Promise;
-      this._types = new TypeOverrides2(config.types);
-      this.native = new Native({
-        types: this._types
-      });
-      this._queryQueue = [];
-      this._ending = false;
-      this._connecting = false;
-      this._connected = false;
-      this._queryable = true;
-      const cp = this.connectionParameters = new ConnectionParameters(config);
-      if (config.nativeConnectionString) cp.nativeConnectionString = config.nativeConnectionString;
-      this.user = cp.user;
-      Object.defineProperty(this, "password", {
-        configurable: true,
-        enumerable: false,
-        writable: true,
-        value: cp.password
-      });
-      this.database = cp.database;
-      this.host = cp.host;
-      this.port = cp.port;
-      this.namedQueries = {};
-    };
-    Client2.Query = NativeQuery;
-    util.inherits(Client2, EventEmitter4);
-    Client2.prototype._errorAllQueries = function(err) {
-      const enqueueError = (query) => {
-        process.nextTick(() => {
-          query.native = this.native;
-          query.handleError(err);
-        });
-      };
-      if (this._hasActiveQuery()) {
-        enqueueError(this._activeQuery);
-        this._activeQuery = null;
-      }
-      this._queryQueue.forEach(enqueueError);
-      this._queryQueue.length = 0;
-    };
-    Client2.prototype._connect = function(cb) {
-      const self = this;
-      if (this._connecting) {
-        process.nextTick(() => cb(new Error("Client has already been connected. You cannot reuse a client.")));
-        return;
-      }
-      this._connecting = true;
-      this.connectionParameters.getLibpqConnectionString(function(err, conString) {
-        if (self.connectionParameters.nativeConnectionString) conString = self.connectionParameters.nativeConnectionString;
-        if (err) return cb(err);
-        self.native.connect(conString, function(err2) {
-          if (err2) {
-            self.native.end();
-            return cb(err2);
-          }
-          self._connected = true;
-          self.native.on("error", function(err3) {
-            self._queryable = false;
-            self._errorAllQueries(err3);
-            self.emit("error", err3);
-          });
-          self.native.on("notification", function(msg) {
-            self.emit("notification", {
-              channel: msg.relname,
-              payload: msg.extra
-            });
-          });
-          self.emit("connect");
-          self._pulseQueryQueue(true);
-          cb(null, this);
-        });
-      });
-    };
-    Client2.prototype.connect = function(callback) {
-      if (callback) {
-        this._connect(callback);
-        return;
-      }
-      return new this._Promise((resolve, reject) => {
-        this._connect((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve(this);
-          }
-        });
-      });
-    };
-    Client2.prototype.query = function(config, values, callback) {
-      let query;
-      let result;
-      let readTimeout;
-      let readTimeoutTimer;
-      let queryCallback;
-      if (config === null || config === void 0) {
-        throw new TypeError("Client was passed a null or undefined query");
-      } else if (typeof config.submit === "function") {
-        readTimeout = config.query_timeout || this.connectionParameters.query_timeout;
-        result = query = config;
-        if (typeof values === "function") {
-          config.callback = values;
-        }
-      } else {
-        readTimeout = config.query_timeout || this.connectionParameters.query_timeout;
-        query = new NativeQuery(config, values, callback);
-        if (!query.callback) {
-          let resolveOut, rejectOut;
-          result = new this._Promise((resolve, reject) => {
-            resolveOut = resolve;
-            rejectOut = reject;
-          }).catch((err) => {
-            Error.captureStackTrace(err);
-            throw err;
-          });
-          query.callback = (err, res) => err ? rejectOut(err) : resolveOut(res);
-        }
-      }
-      if (readTimeout) {
-        queryCallback = query.callback || (() => {
-        });
-        readTimeoutTimer = setTimeout(() => {
-          const error = new Error("Query read timeout");
-          process.nextTick(() => {
-            query.handleError(error, this.connection);
-          });
-          queryCallback(error);
-          query.callback = () => {
-          };
-          const index = this._queryQueue.indexOf(query);
-          if (index > -1) {
-            this._queryQueue.splice(index, 1);
-          }
-          this._pulseQueryQueue();
-        }, readTimeout);
-        query.callback = (err, res) => {
-          clearTimeout(readTimeoutTimer);
-          queryCallback(err, res);
-        };
-      }
-      if (!this._queryable) {
-        query.native = this.native;
-        process.nextTick(() => {
-          query.handleError(new Error("Client has encountered a connection error and is not queryable"));
-        });
-        return result;
-      }
-      if (this._ending) {
-        query.native = this.native;
-        process.nextTick(() => {
-          query.handleError(new Error("Client was closed and is not queryable"));
-        });
-        return result;
-      }
-      if (this._queryQueue.length > 0) {
-        queryQueueLengthDeprecationNotice();
-      }
-      this._queryQueue.push(query);
-      this._pulseQueryQueue();
-      return result;
-    };
-    Client2.prototype.end = function(cb) {
-      const self = this;
-      this._ending = true;
-      if (!this._connected) {
-        this.once("connect", this.end.bind(this, cb));
-      }
-      let result;
-      if (!cb) {
-        result = new this._Promise(function(resolve, reject) {
-          cb = (err) => err ? reject(err) : resolve();
-        });
-      }
-      this.native.end(function() {
-        self._connected = false;
-        self._errorAllQueries(new Error("Connection terminated"));
-        process.nextTick(() => {
-          self.emit("end");
-          if (cb) cb();
-        });
-      });
-      return result;
-    };
-    Client2.prototype._hasActiveQuery = function() {
-      return this._activeQuery && this._activeQuery.state !== "error" && this._activeQuery.state !== "end";
-    };
-    Client2.prototype._pulseQueryQueue = function(initialConnection) {
-      if (!this._connected) {
-        return;
-      }
-      if (this._hasActiveQuery()) {
-        return;
-      }
-      const query = this._queryQueue.shift();
-      if (!query) {
-        if (!initialConnection) {
-          this.emit("drain");
-        }
-        return;
-      }
-      this._activeQuery = query;
-      query.submit(this);
-      const self = this;
-      query.once("_done", function() {
-        self._pulseQueryQueue();
-      });
-    };
-    Client2.prototype.cancel = function(query) {
-      if (this._activeQuery === query) {
-        this.native.cancel(function() {
-        });
-      } else if (this._queryQueue.indexOf(query) !== -1) {
-        this._queryQueue.splice(this._queryQueue.indexOf(query), 1);
-      }
-    };
-    Client2.prototype.ref = function() {
-    };
-    Client2.prototype.unref = function() {
-    };
-    Client2.prototype.setTypeParser = function(oid, format, parseFn) {
-      return this._types.setTypeParser(oid, format, parseFn);
-    };
-    Client2.prototype.getTypeParser = function(oid, format) {
-      return this._types.getTypeParser(oid, format);
-    };
-    Client2.prototype.isConnected = function() {
-      return this._connected;
-    };
-  }
-});
-
-// node_modules/pg/lib/native/index.js
-var require_native = __commonJS({
-  "node_modules/pg/lib/native/index.js"(exports2, module2) {
-    "use strict";
-    module2.exports = require_client2();
-  }
-});
-
-// node_modules/pg/lib/index.js
-var require_lib2 = __commonJS({
-  "node_modules/pg/lib/index.js"(exports2, module2) {
-    "use strict";
-    var Client2 = require_client();
-    var defaults2 = require_defaults();
-    var Connection2 = require_connection();
-    var Result2 = require_result();
-    var utils = require_utils();
-    var Pool2 = require_pg_pool();
-    var TypeOverrides2 = require_type_overrides();
-    var { DatabaseError: DatabaseError2 } = require_dist();
-    var { escapeIdentifier: escapeIdentifier2, escapeLiteral: escapeLiteral2 } = require_utils();
-    var poolFactory = (Client3) => {
-      return class BoundPool extends Pool2 {
-        constructor(options) {
-          super(options, Client3);
-        }
-      };
-    };
-    var PG = function(clientConstructor2) {
-      this.defaults = defaults2;
-      this.Client = clientConstructor2;
-      this.Query = this.Client.Query;
-      this.Pool = poolFactory(this.Client);
-      this._pools = [];
-      this.Connection = Connection2;
-      this.types = require_pg_types();
-      this.DatabaseError = DatabaseError2;
-      this.TypeOverrides = TypeOverrides2;
-      this.escapeIdentifier = escapeIdentifier2;
-      this.escapeLiteral = escapeLiteral2;
-      this.Result = Result2;
-      this.utils = utils;
-    };
-    var clientConstructor = Client2;
-    var forceNative = false;
-    try {
-      forceNative = !!process.env.NODE_PG_FORCE_NATIVE;
-    } catch {
-    }
-    if (forceNative) {
-      clientConstructor = require_native();
-    }
-    module2.exports = new PG(clientConstructor);
-    Object.defineProperty(module2.exports, "native", {
-      configurable: true,
-      enumerable: false,
-      get() {
-        let native = null;
-        try {
-          native = new PG(require_native());
-        } catch (err) {
-          if (err.code !== "MODULE_NOT_FOUND") {
-            throw err;
-          }
-        }
-        Object.defineProperty(module2.exports, "native", {
-          value: native
-        });
-        return native;
-      }
-    });
-  }
-});
-
 // src/extension.ts
 var extension_exports = {};
 __export(extension_exports, {
@@ -5135,34 +34,27 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode24 = __toESM(require("vscode"));
+var vscode26 = __toESM(require("vscode"));
 
 // src/database/connectionManager.ts
 var vscode = __toESM(require("vscode"));
-
-// node_modules/pg/esm/index.mjs
-var import_lib = __toESM(require_lib2(), 1);
-var Client = import_lib.default.Client;
-var Pool = import_lib.default.Pool;
-var Connection = import_lib.default.Connection;
-var types = import_lib.default.types;
-var Query = import_lib.default.Query;
-var DatabaseError = import_lib.default.DatabaseError;
-var escapeIdentifier = import_lib.default.escapeIdentifier;
-var escapeLiteral = import_lib.default.escapeLiteral;
-var Result = import_lib.default.Result;
-var TypeOverrides = import_lib.default.TypeOverrides;
-var defaults = import_lib.default.defaults;
 
 // src/database/drivers/postgresDriver.ts
 var import_crypto = require("crypto");
 
 // src/utils/identifiers.ts
-function quoteIdentifier(identifier) {
-  return `"${identifier.replace(/"/g, '""')}"`;
+function quoteIdentifier(identifier, quote) {
+  const marker = typeof quote === "string" && quote ? quote : '"';
+  if (marker === "`") {
+    return `\`${identifier.replace(/`/g, "``")}\``;
+  }
+  return `${marker}${identifier.replace(new RegExp(escapeRegExp(marker), "g"), marker + marker)}${marker}`;
 }
-function qualifiedName(schema, name) {
-  return `${quoteIdentifier(schema)}.${quoteIdentifier(name)}`;
+function qualifiedName(schema, name, quote) {
+  return `${quoteIdentifier(schema, quote)}.${quoteIdentifier(name, quote)}`;
+}
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // src/services/queryPlanService.ts
@@ -5274,6 +166,7 @@ var PostgresDriver = class {
   pools = /* @__PURE__ */ new Map();
   configs = /* @__PURE__ */ new Map();
   activeExecutions = /* @__PURE__ */ new Map();
+  transactionClients = /* @__PURE__ */ new Map();
   async testConnection(config) {
     let pool;
     try {
@@ -5296,11 +189,53 @@ var PostgresDriver = class {
     return { id: config.id, config, connectedAt: Date.now() };
   }
   async disconnect(connectionId) {
+    await this.rollbackTransaction(connectionId).catch(() => void 0);
     const pool = this.pools.get(connectionId);
     if (pool) {
       this.pools.delete(connectionId);
       await pool.end();
     }
+  }
+  async beginTransaction(connectionId) {
+    if (this.transactionClients.has(connectionId)) {
+      return;
+    }
+    const pool = this.requirePool(connectionId);
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      this.transactionClients.set(connectionId, client);
+    } catch (error) {
+      client.release();
+      throw error;
+    }
+  }
+  async commitTransaction(connectionId) {
+    const client = this.transactionClients.get(connectionId);
+    if (!client) {
+      return;
+    }
+    try {
+      await client.query("commit");
+    } finally {
+      this.transactionClients.delete(connectionId);
+      client.release();
+    }
+  }
+  async rollbackTransaction(connectionId) {
+    const client = this.transactionClients.get(connectionId);
+    if (!client) {
+      return;
+    }
+    try {
+      await client.query("rollback");
+    } finally {
+      this.transactionClients.delete(connectionId);
+      client.release();
+    }
+  }
+  isTransactionOpen(connectionId) {
+    return this.transactionClients.has(connectionId);
   }
   async executeQuery(params) {
     const [result] = await this.executeStatements(params, [params.sql]);
@@ -5308,9 +243,11 @@ var PostgresDriver = class {
   }
   async executeStatements(params, statements) {
     const pool = this.requirePool(params.connectionId);
-    const client = await pool.connect();
+    const transactionClient = this.transactionClients.get(params.connectionId);
+    const client = transactionClient ?? await pool.connect();
     const results = [];
-    const hasExplicitTransaction = statements.some((sql) => /\bbegin\b/i.test(sql));
+    const hasExplicitTransaction = !transactionClient && statements.some((sql) => /\bbegin\b/i.test(sql));
+    const pinnedTransaction = !!transactionClient;
     try {
       for (const [index, sql] of statements.entries()) {
         const executionId = (0, import_crypto.randomUUID)();
@@ -5325,7 +262,7 @@ var PostgresDriver = class {
         });
         this.activeExecutions.set(executionId, { connectionId: params.connectionId, processId: client.processID });
         try {
-          const result = await client.query(this.sqlWithClientLimit(sql, params.maxRows));
+          const result = await client.query(this.sqlWithClientLimit(sql, params.maxRows, params.offset));
           const queryResults = Array.isArray(result) ? result : [result];
           const executionResults = queryResults.map((item) => this.toExecutionResult(item, executionId, started));
           params.onProgress?.({
@@ -5368,7 +305,9 @@ var PostgresDriver = class {
       }
       throw error;
     } finally {
-      client.release();
+      if (!pinnedTransaction) {
+        client.release();
+      }
     }
   }
   async validateQuery(params) {
@@ -5436,6 +375,107 @@ var PostgresDriver = class {
       [schema]
     );
     return result.rows;
+  }
+  async getFunctions(connectionId, schema) {
+    const result = await this.requirePool(connectionId).query(
+      `select n.nspname as schema,
+              p.proname as name,
+              'function' as kind,
+              pg_get_function_result(p.oid) as "returnType",
+              l.lanname as language,
+              obj_description(p.oid, 'pg_proc') as comment
+       from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+       left join pg_language l on l.oid = p.prolang
+       where n.nspname = $1 and p.prokind = 'f'
+       order by p.proname`,
+      [schema]
+    );
+    return result.rows;
+  }
+  async getProcedures(connectionId, schema) {
+    const result = await this.requirePool(connectionId).query(
+      `select n.nspname as schema,
+              p.proname as name,
+              'procedure' as kind,
+              pg_get_function_result(p.oid) as "returnType",
+              l.lanname as language,
+              obj_description(p.oid, 'pg_proc') as comment
+       from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+       left join pg_language l on l.oid = p.prolang
+       where n.nspname = $1 and p.prokind = 'p'
+       order by p.proname`,
+      [schema]
+    );
+    return result.rows;
+  }
+  async getTriggers(connectionId, schema) {
+    const result = await this.requirePool(connectionId).query(
+      `select n.nspname as schema,
+              c.relname as table,
+              t.tgname as name,
+              t.tgenabled as enabled,
+              pg_get_triggerdef(t.oid) as definition
+       from pg_trigger t
+       join pg_class c on c.oid = t.tgrelid
+       join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = $1 and not t.tgisinternal
+       order by c.relname, t.tgname`,
+      [schema]
+    );
+    return result.rows.map((row) => ({
+      schema: String(row.schema),
+      table: String(row.table),
+      name: String(row.name),
+      enabled: optionalString(row.enabled),
+      orientation: optionalString(row.definition)?.includes("FOR EACH ROW") ? "row" : "statement",
+      timing: optionalString(row.definition)?.includes("BEFORE") ? "before" : optionalString(row.definition)?.includes("AFTER") ? "after" : optionalString(row.definition)?.includes("INSTEAD OF") ? "instead of" : void 0,
+      events: triggerEvents(optionalString(row.definition))
+    }));
+  }
+  async getActiveSessions(connectionId) {
+    const result = await this.requirePool(connectionId).query(
+      `select pid,
+              usename as user,
+              datname as database,
+              application_name as application,
+              client_addr::text as client,
+              state,
+              query,
+              backend_start as "startedAt",
+              xact_start as "transactionStartedAt",
+              state_change as "stateChangedAt",
+              wait_event_type as "waitEventType",
+              wait_event as "waitEvent",
+              pid = pg_backend_pid() as "isCurrent",
+              state = 'idle in transaction' as "isIdleInTransaction"
+       from pg_stat_activity
+       where datname = current_database()
+       order by backend_start desc nulls last, pid desc`
+    );
+    return result.rows.map((row) => ({
+      pid: Number(row.pid),
+      user: optionalString(row.user),
+      database: optionalString(row.database),
+      application: optionalString(row.application),
+      client: optionalString(row.client),
+      state: optionalString(row.state),
+      query: optionalString(row.query),
+      startedAt: optionalString(row.startedAt),
+      transactionStartedAt: optionalString(row.transactionStartedAt),
+      stateChangedAt: optionalString(row.stateChangedAt),
+      waitEventType: optionalString(row.waitEventType),
+      waitEvent: optionalString(row.waitEvent),
+      isCurrent: Boolean(row.isCurrent),
+      isIdleInTransaction: Boolean(row.isIdleInTransaction)
+    }));
+  }
+  async cancelSession(connectionId, pid) {
+    await this.requirePool(connectionId).query("select pg_cancel_backend($1)", [pid]);
+  }
+  async terminateSession(connectionId, pid) {
+    await this.requirePool(connectionId).query("select pg_terminate_backend($1)", [pid]);
   }
   async getColumns(connectionId, schema, table) {
     const result = await this.requirePool(connectionId).query(
@@ -5600,6 +640,7 @@ ${lines.join(",\n")}
     return config.sslMode === "prefer" && /server does not support ssl connections/i.test(message);
   }
   async createVerifiedPool(config, max) {
+    const { Pool } = await loadPg();
     const pool = new Pool(this.toPoolConfig(config, max));
     try {
       await pool.query("select 1");
@@ -5646,9 +687,11 @@ ${lines.join(",\n")}
     const normalized = sql.trim().replace(/^--.*$/gm, "").trim().toLowerCase();
     return normalized.startsWith("select") || normalized.startsWith("with");
   }
-  sqlWithClientLimit(sql, maxRows) {
+  sqlWithClientLimit(sql, maxRows, offset) {
     const limit = Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : void 0;
-    return limit && this.canApplyClientLimit(sql) ? `select * from (${sql.replace(/;+\s*$/, "")}) __dg_query limit ${limit}` : sql;
+    const nextOffset = Number.isFinite(offset) && offset && offset > 0 ? Math.floor(offset) : 0;
+    const pageLimit = limit ? limit + 1 : void 0;
+    return pageLimit && this.canApplyClientLimit(sql) ? `select * from (${sql.replace(/;+\s*$/, "")}) __dg_query limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ""}` : sql;
   }
   toExecutionResult(result, executionId, started) {
     const fields = result?.fields ?? [];
@@ -5678,6 +721,28 @@ ${lines.join(",\n")}
     };
   }
 };
+var pgRuntime;
+function loadPg() {
+  pgRuntime ??= import("pg").then((module2) => {
+    const candidate = module2;
+    return "Pool" in candidate ? candidate : candidate.default;
+  });
+  return pgRuntime;
+}
+function optionalString(value) {
+  if (value === null || value === void 0) {
+    return void 0;
+  }
+  const next = String(value).trim();
+  return next || void 0;
+}
+function triggerEvents(definition) {
+  if (!definition) {
+    return void 0;
+  }
+  const events = ["INSERT", "UPDATE", "DELETE", "TRUNCATE"].filter((event) => definition.includes(event));
+  return events.length ? events : void 0;
+}
 
 // src/database/drivers/redshiftDriver.ts
 var RedshiftDriver = class extends PostgresDriver {
@@ -5745,6 +810,54 @@ var RedshiftDriver = class extends PostgresDriver {
     );
     return result.rows;
   }
+  async getActiveSessions(connectionId) {
+    const pool = this.requirePool(connectionId);
+    try {
+      const result = await pool.query(
+        `select pid,
+                user_name as user,
+                db_name as database,
+                '' as application,
+                remotehost as client,
+                status as state,
+                query as query,
+                starttime as "startedAt",
+                null as "transactionStartedAt",
+                null as "stateChangedAt",
+                null as "waitEventType",
+                null as "waitEvent",
+                pid = pg_backend_pid() as "isCurrent",
+                status = 'idle in transaction' as "isIdleInTransaction"
+         from stv_recents
+         where db_name = current_database()
+         order by starttime desc nulls last, pid desc`
+      );
+      return result.rows.map((row) => ({
+        pid: Number(row.pid),
+        user: optionalString2(row.user),
+        database: optionalString2(row.database),
+        application: optionalString2(row.application),
+        client: optionalString2(row.client),
+        state: optionalString2(row.state),
+        query: optionalString2(row.query),
+        startedAt: optionalString2(row.startedAt),
+        transactionStartedAt: optionalString2(row.transactionStartedAt),
+        stateChangedAt: optionalString2(row.stateChangedAt),
+        waitEventType: optionalString2(row.waitEventType),
+        waitEvent: optionalString2(row.waitEvent),
+        isCurrent: Boolean(row.isCurrent),
+        isIdleInTransaction: Boolean(row.isIdleInTransaction)
+      }));
+    } catch {
+      return super.getActiveSessions(connectionId);
+    }
+  }
+  async cancelSession(connectionId, pid) {
+    await this.requirePool(connectionId).query("select pg_cancel_backend($1)", [pid]);
+  }
+  async terminateSession(connectionId, pid) {
+    await this.cancelSession(connectionId, pid);
+  }
   async getColumns(connectionId, schema, table) {
     const result = await this.requirePool(connectionId).query(
       `select table_schema as schema, table_name as table, column_name as name,
@@ -5782,15 +895,15 @@ var RedshiftDriver = class extends PostgresDriver {
         rowEstimate: this.numberFromDb(row.rowCount),
         columns: [],
         redshift: {
-          distStyle: optionalString(row.distStyle),
-          sortKey1: optionalString(row.sortKey1),
+          distStyle: optionalString2(row.distStyle),
+          sortKey1: optionalString2(row.sortKey1),
           sortKeyNum: this.numberFromDb(row.sortKeyNum),
           sizeMb: this.numberFromDb(row.sizeMb),
           rowCount: this.numberFromDb(row.rowCount),
           skewRows: this.numberFromDb(row.skewRows),
           unsortedPct: this.numberFromDb(row.unsortedPct),
           statsOffPct: this.numberFromDb(row.statsOffPct),
-          encoded: optionalString(row.encoded)
+          encoded: optionalString2(row.encoded)
         }
       };
     } catch {
@@ -5824,7 +937,576 @@ var RedshiftDriver = class extends PostgresDriver {
     };
   }
 };
-function optionalString(value) {
+function optionalString2(value) {
+  if (value === null || value === void 0) {
+    return void 0;
+  }
+  const next = String(value).trim();
+  return next || void 0;
+}
+
+// src/database/drivers/mysqlDriver.ts
+var import_crypto2 = require("crypto");
+var MySQLDriver = class {
+  id = "mysql";
+  displayName = "MySQL";
+  pools = /* @__PURE__ */ new Map();
+  configs = /* @__PURE__ */ new Map();
+  activeExecutions = /* @__PURE__ */ new Map();
+  transactionConnections = /* @__PURE__ */ new Map();
+  async testConnection(config) {
+    let pool;
+    try {
+      pool = await this.createVerifiedPool(config, 1);
+      const [rows] = await pool.query("select version() as version");
+      const row = rows[0] ?? {};
+      return { ok: true, message: "Connection successful", serverVersion: optionalString3(row.version) };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (pool) {
+        await this.endPool(pool);
+      }
+    }
+  }
+  async connect(config) {
+    await this.disconnect(config.id);
+    const pool = await this.createVerifiedPool(config, 8);
+    this.pools.set(config.id, pool);
+    this.configs.set(config.id, config);
+    return { id: config.id, config, connectedAt: Date.now() };
+  }
+  async disconnect(connectionId) {
+    await this.rollbackTransaction(connectionId).catch(() => void 0);
+    const pool = this.pools.get(connectionId);
+    if (pool) {
+      this.pools.delete(connectionId);
+      await pool.end();
+    }
+  }
+  async beginTransaction(connectionId) {
+    if (this.transactionConnections.has(connectionId)) {
+      return;
+    }
+    const pool = this.requirePool(connectionId);
+    const connection = await pool.getConnection();
+    try {
+      await connection.query("start transaction");
+      this.transactionConnections.set(connectionId, connection);
+    } catch (error) {
+      connection.release();
+      throw error;
+    }
+  }
+  async commitTransaction(connectionId) {
+    const connection = this.transactionConnections.get(connectionId);
+    if (!connection) {
+      return;
+    }
+    try {
+      await connection.query("commit");
+    } finally {
+      this.transactionConnections.delete(connectionId);
+      connection.release();
+    }
+  }
+  async rollbackTransaction(connectionId) {
+    const connection = this.transactionConnections.get(connectionId);
+    if (!connection) {
+      return;
+    }
+    try {
+      await connection.query("rollback");
+    } finally {
+      this.transactionConnections.delete(connectionId);
+      connection.release();
+    }
+  }
+  isTransactionOpen(connectionId) {
+    return this.transactionConnections.has(connectionId);
+  }
+  async executeQuery(params) {
+    const [result] = await this.executeStatements(params, [params.sql]);
+    return result;
+  }
+  async executeStatements(params, statements) {
+    const pool = this.requirePool(params.connectionId);
+    const transactionConnection = this.transactionConnections.get(params.connectionId);
+    const connection = transactionConnection ?? await pool.getConnection();
+    const results = [];
+    const hasExplicitTransaction = !transactionConnection && statements.some((sql) => /\bbegin\b/i.test(sql));
+    const pinnedTransaction = !!transactionConnection;
+    try {
+      for (const [index, sql] of statements.entries()) {
+        const executionId = (0, import_crypto2.randomUUID)();
+        const started = Date.now();
+        params.onProgress?.({
+          statementIndex: index,
+          statementCount: statements.length,
+          sql,
+          status: "started",
+          executionId,
+          startedAt: started
+        });
+        this.activeExecutions.set(executionId, { connectionId: params.connectionId, threadId: this.threadId(connection) });
+        try {
+          const [rows, fields] = await connection.query(this.sqlWithClientLimit(sql, params.maxRows, params.offset));
+          const executionResult = this.toExecutionResult(rows, fields, executionId, started, sql);
+          params.onProgress?.({
+            statementIndex: index,
+            statementCount: statements.length,
+            sql,
+            status: "completed",
+            executionId,
+            startedAt: started,
+            durationMs: Date.now() - started,
+            rowCount: executionResult.rowCount,
+            command: executionResult.command
+          });
+          results.push(executionResult);
+        } catch (error) {
+          params.onProgress?.({
+            statementIndex: index,
+            statementCount: statements.length,
+            sql,
+            status: "failed",
+            executionId,
+            startedAt: started,
+            durationMs: Date.now() - started,
+            errorMessage: error instanceof Error ? error.message : String(error)
+          });
+          throw error;
+        } finally {
+          this.activeExecutions.delete(executionId);
+        }
+      }
+      return results;
+    } catch (error) {
+      if (hasExplicitTransaction) {
+        try {
+          await connection.query("rollback");
+        } catch {
+        }
+      }
+      throw error;
+    } finally {
+      if (!pinnedTransaction) {
+        connection.release();
+      }
+    }
+  }
+  async validateQuery(params) {
+    const pool = this.requirePool(params.connectionId);
+    const sql = params.sql.trim().replace(/;+\s*$/, "");
+    if (!sql || !this.canExplain(sql)) {
+      return { ok: true };
+    }
+    try {
+      await pool.query(`explain ${sql}`);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: this.toQueryError(error) };
+    }
+  }
+  async explainQuery(params, options = {}) {
+    const pool = this.requirePool(params.connectionId);
+    const sql = params.sql.trim().replace(/;+\s*$/, "");
+    if (!sql || !this.canExplain(sql)) {
+      throw new Error("Only SELECT, WITH, INSERT, UPDATE, DELETE, and MERGE statements can be explained.");
+    }
+    const explainSql = options.analyze ? `explain analyze ${sql}` : `explain format=json ${sql}`;
+    const [rows] = await pool.query(explainSql);
+    return textExplainPlan(JSON.stringify(rows, null, 2), options.analyze === true);
+  }
+  async cancelQuery(executionId) {
+    const active = this.activeExecutions.get(executionId);
+    if (!active?.threadId) {
+      return;
+    }
+    const pool = this.requirePool(active.connectionId);
+    await pool.query(`kill query ${active.threadId}`);
+  }
+  async getSchemas(connectionId) {
+    const [rows] = await this.requirePool(connectionId).query(
+      `select schema_name as name
+       from information_schema.schemata
+       where schema_name not in ('information_schema', 'mysql', 'performance_schema', 'sys')
+       order by schema_name`
+    );
+    return rows;
+  }
+  async getTables(connectionId, schema) {
+    const [rows] = await this.requirePool(connectionId).query(
+      `select table_schema as schema,
+              table_name as name,
+              'table' as type,
+              table_rows as "rowEstimate",
+              table_comment as comment
+       from information_schema.tables
+       where table_schema = ? and table_type = 'BASE TABLE'
+       order by table_name`,
+      [schema]
+    );
+    return rows;
+  }
+  async getViews(connectionId, schema) {
+    const [rows] = await this.requirePool(connectionId).query(
+      `select table_schema as schema, table_name as name, 'view' as type
+       from information_schema.views
+       where table_schema = ?
+       order by table_name`,
+      [schema]
+    );
+    return rows;
+  }
+  async getFunctions(connectionId, schema) {
+    return this.getRoutines(connectionId, schema, "FUNCTION");
+  }
+  async getProcedures(connectionId, schema) {
+    return this.getRoutines(connectionId, schema, "PROCEDURE");
+  }
+  async getTriggers(connectionId, schema) {
+    const [rows] = await this.requirePool(connectionId).query(
+      `select trigger_schema as schema,
+              event_object_table as "table",
+              trigger_name as name,
+              action_timing as timing,
+              event_manipulation as event,
+              action_orientation as orientation,
+              action_statement as definition
+       from information_schema.triggers
+       where trigger_schema = ?
+       order by event_object_table, trigger_name`,
+      [schema]
+    );
+    return rows.map((row) => ({
+      schema: String(row.schema),
+      table: String(row.table),
+      name: String(row.name),
+      timing: optionalString3(row.timing)?.toLowerCase(),
+      orientation: optionalString3(row.orientation)?.toLowerCase(),
+      enabled: "YES",
+      events: optionalString3(row.event) ? [optionalString3(row.event)] : void 0
+    }));
+  }
+  async getActiveSessions(connectionId) {
+    const pool = this.requirePool(connectionId);
+    const connection = await pool.getConnection();
+    let currentThreadId;
+    let rows = [];
+    try {
+      const [currentRows] = await connection.query(`select connection_id() as id`);
+      currentThreadId = numberFromDb(currentRows[0]?.id);
+      const [processRows] = await connection.query(`show full processlist`);
+      rows = processRows;
+    } finally {
+      connection.release();
+    }
+    return rows.map((row) => ({
+      pid: Number(row.Id ?? row.id ?? row.ID),
+      user: optionalString3(row.User ?? row.user),
+      database: optionalString3(row.db ?? row.Database ?? row.database),
+      application: optionalString3(row.Command ?? row.command),
+      client: optionalString3(row.Host ?? row.host),
+      state: optionalString3(row.State ?? row.state),
+      query: optionalString3(row.Info ?? row.info),
+      isCurrent: Number(row.Id ?? row.id ?? row.ID) === currentThreadId
+    }));
+  }
+  async cancelSession(connectionId, pid) {
+    await this.requirePool(connectionId).query(`kill query ${Math.trunc(pid)}`);
+  }
+  async terminateSession(connectionId, pid) {
+    await this.requirePool(connectionId).query(`kill ${Math.trunc(pid)}`);
+  }
+  async getColumns(connectionId, schema, table) {
+    const [rows] = await this.requirePool(connectionId).query(
+      `select table_schema as schema,
+              table_name as table,
+              column_name as name,
+              ordinal_position as ordinal,
+              column_type as "dataType",
+              is_nullable = 'YES' as nullable,
+              column_default as "defaultValue",
+              column_comment as comment
+       from information_schema.columns
+       where table_schema = ? and table_name = ?
+       order by ordinal_position`,
+      [schema, table]
+    );
+    return rows;
+  }
+  async getIndexes(connectionId, schema, table) {
+    const [rows] = await this.requirePool(connectionId).query(
+      `select index_name as name,
+              non_unique as "nonUnique",
+              seq_in_index as "seqInIndex",
+              column_name as "columnName",
+              index_type as "indexType"
+       from information_schema.statistics
+       where table_schema = ? and table_name = ?
+       order by index_name, seq_in_index`,
+      [schema, table]
+    );
+    const grouped = /* @__PURE__ */ new Map();
+    for (const row of rows) {
+      const name = String(row.name);
+      const entry = grouped.get(name) ?? { name, columns: [], unique: true };
+      if (typeof row.nonUnique === "number") {
+        entry.unique = row.nonUnique === 0;
+      }
+      if (row.columnName) {
+        entry.columns.push(String(row.columnName));
+      }
+      if (!entry.definition && row.indexType) {
+        entry.definition = String(row.indexType);
+      }
+      grouped.set(name, entry);
+    }
+    return [...grouped.values()].map(({ nonUnique: _nonUnique, ...index }) => index);
+  }
+  async getPrimaryKeys(connectionId, schema, table) {
+    const [rows] = await this.requirePool(connectionId).query(
+      `select constraint_name as name, column_name as "columnName", ordinal_position as ordinal
+       from information_schema.key_column_usage
+       where table_schema = ? and table_name = ? and constraint_name = 'PRIMARY'
+       order by ordinal_position`,
+      [schema, table]
+    );
+    return groupKeyRows(rows);
+  }
+  async getForeignKeys(connectionId, schema, table) {
+    const [rows] = await this.requirePool(connectionId).query(
+      `select constraint_name as name,
+              column_name as "columnName",
+              ordinal_position as ordinal,
+              referenced_table_schema as "foreignSchema",
+              referenced_table_name as "foreignTable",
+              referenced_column_name as "foreignColumn"
+       from information_schema.key_column_usage
+       where table_schema = ? and table_name = ? and referenced_table_name is not null
+       order by constraint_name, ordinal_position`,
+      [schema, table]
+    );
+    return groupForeignKeyRows(rows);
+  }
+  async getTablePreview(connectionId, schema, table, limit, options) {
+    const where = options?.where?.trim();
+    if (where && /;|--|\/\*/.test(where)) {
+      throw new Error("WHERE must be a single SQL expression without comments or semicolons.");
+    }
+    const orderBySql = options?.orderBySql?.trim();
+    if (orderBySql && /;|--|\/\*/.test(orderBySql)) {
+      throw new Error("ORDER BY must be a single SQL expression without comments or semicolons.");
+    }
+    const orderBy = orderBySql ? `
+order by ${orderBySql}` : options?.orderBy?.length ? `
+order by ${options.orderBy.map((item) => `${quoteIdentifier(item.column, "`")} ${item.direction === "desc" ? "desc" : "asc"}`).join(", ")}` : "";
+    const offset = Number.isFinite(options?.offset) && options?.offset && options.offset > 0 ? Math.floor(options.offset) : 0;
+    const pageLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) + 1 : 0;
+    const paging = pageLimit ? `
+limit ${pageLimit}${offset ? ` offset ${offset}` : ""}` : "";
+    const sql = `select * from ${qualifiedName(schema, table, "`")}${where ? `
+where ${where}` : ""}${orderBy}${paging}`;
+    return this.executeQuery({ connectionId, sql, maxRows: 0 });
+  }
+  async getTableDDL(connectionId, schema, table) {
+    const columns = await this.getColumns(connectionId, schema, table);
+    const lines = columns.map((column) => {
+      const nullable = column.nullable ? "" : " not null";
+      const defaultValue = column.defaultValue ? ` default ${column.defaultValue}` : "";
+      return `  ${quoteIdentifier(column.name, "`")} ${column.dataType}${defaultValue}${nullable}`;
+    });
+    return `create table ${qualifiedName(schema, table, "`")} (
+${lines.join(",\n")}
+);`;
+  }
+  async getTableStats(connectionId, schema, table) {
+    const [rows] = await this.requirePool(connectionId).query(
+      `select table_rows as "rowEstimate",
+              data_length as "dataLength",
+              index_length as "indexLength",
+              update_time as "updatedAt"
+       from information_schema.tables
+       where table_schema = ? and table_name = ?`,
+      [schema, table]
+    );
+    const row = rows[0] ?? {};
+    return {
+      schema,
+      table,
+      databaseType: this.id,
+      rowEstimate: numberFromDb(row.rowEstimate),
+      columns: []
+    };
+  }
+  requirePool(connectionId) {
+    const pool = this.pools.get(connectionId);
+    if (!pool) {
+      throw new Error("Connection is not active. Connect first.");
+    }
+    return pool;
+  }
+  toPoolConfig(config, max) {
+    const ssl = config.sslMode === "disable" ? void 0 : { rejectUnauthorized: false };
+    return {
+      host: config.host,
+      port: config.port,
+      database: config.database,
+      user: config.username,
+      password: config.password,
+      connectionLimit: max,
+      waitForConnections: true,
+      connectTimeout: config.connectTimeoutMs ?? 1e4,
+      ssl
+    };
+  }
+  shouldRetryWithoutSsl(config, error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return config.sslMode === "prefer" && /ssl|secure connection|handshake/i.test(message);
+  }
+  async createVerifiedPool(config, max) {
+    const mysql = await loadMysql();
+    const pool = mysql.createPool(this.toPoolConfig(config, max));
+    try {
+      await pool.query("select 1");
+      return pool;
+    } catch (error) {
+      await this.endPool(pool);
+      if (!this.shouldRetryWithoutSsl(config, error)) {
+        throw error;
+      }
+      const fallbackPool = mysql.createPool(this.toPoolConfig({ ...config, sslMode: "disable" }, max));
+      try {
+        await fallbackPool.query("select 1");
+        return fallbackPool;
+      } catch (fallbackError) {
+        await this.endPool(fallbackPool);
+        throw fallbackError;
+      }
+    }
+  }
+  async endPool(pool) {
+    try {
+      await pool.end();
+    } catch {
+    }
+  }
+  sqlWithClientLimit(sql, maxRows, offset) {
+    const limit = Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : void 0;
+    const nextOffset = Number.isFinite(offset) && offset && offset > 0 ? Math.floor(offset) : 0;
+    const pageLimit = limit ? limit + 1 : void 0;
+    return pageLimit && this.canApplyClientLimit(sql) ? `select * from (${sql.replace(/;+\s*$/, "")}) __dg_query limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ""}` : sql;
+  }
+  canApplyClientLimit(sql) {
+    const normalized = sql.trim().replace(/^--.*$/gm, "").trim().toLowerCase();
+    return normalized.startsWith("select") || normalized.startsWith("with");
+  }
+  toExecutionResult(rows, fields, executionId, started, sql) {
+    const recordRows = Array.isArray(rows) ? rows : [];
+    const rowCount = Array.isArray(rows) ? recordRows.length : typeof rows?.affectedRows === "number" ? Number(rows.affectedRows) : 0;
+    return {
+      executionId,
+      fields: Array.isArray(fields) ? fields.map((field) => ({ name: field.name, dataTypeId: field.columnType })) : [],
+      rows: recordRows,
+      rowCount,
+      command: sql.trim().match(/^\w+/)?.[0]?.toUpperCase(),
+      durationMs: Date.now() - started
+    };
+  }
+  async getRoutines(connectionId, schema, type) {
+    const [rows] = await this.requirePool(connectionId).query(
+      `select routine_schema as schema,
+              routine_name as name,
+              routine_type as kind,
+              dtd_identifier as "returnType",
+              security_type as language,
+              routine_comment as comment
+       from information_schema.routines
+       where routine_schema = ? and routine_type = ?
+       order by routine_name`,
+      [schema, type]
+    );
+    return rows.map((row) => ({
+      schema: String(row.schema),
+      name: String(row.name),
+      kind: optionalString3(row.kind)?.toLowerCase() === "procedure" ? "procedure" : "function",
+      returnType: optionalString3(row.returnType),
+      language: optionalString3(row.language),
+      comment: optionalString3(row.comment)
+    }));
+  }
+  canExplain(sql) {
+    const normalized = sql.trim().replace(/^--.*$/gm, "").trim().toLowerCase();
+    return /^(select|with|insert|update|delete|merge)\b/.test(normalized);
+  }
+  threadId(connection) {
+    return numberFromDb(connection.threadId);
+  }
+  toQueryError(error) {
+    const mysqlError = error;
+    return {
+      message: mysqlError.message ?? String(error),
+      code: mysqlError.code,
+      detail: mysqlError.detail,
+      hint: mysqlError.hint,
+      position: mysqlError.position,
+      where: mysqlError.where
+    };
+  }
+};
+var mysqlRuntime;
+function loadMysql() {
+  mysqlRuntime ??= import("mysql2/promise").then((module2) => {
+    const candidate = module2;
+    return "createPool" in candidate ? candidate : candidate.default;
+  });
+  return mysqlRuntime;
+}
+function groupKeyRows(rows) {
+  const grouped = /* @__PURE__ */ new Map();
+  for (const row of rows) {
+    const name = String(row.name);
+    const entry = grouped.get(name) ?? { name, columns: [] };
+    const column = row.columnName ?? row.column_name;
+    if (column) {
+      entry.columns.push(String(column));
+    }
+    grouped.set(name, entry);
+  }
+  return [...grouped.values()];
+}
+function groupForeignKeyRows(rows) {
+  const grouped = /* @__PURE__ */ new Map();
+  for (const row of rows) {
+    const name = String(row.name);
+    const entry = grouped.get(name) ?? {
+      name,
+      columns: [],
+      foreignSchema: String(row.foreignSchema ?? row.referenced_table_schema ?? ""),
+      foreignTable: String(row.foreignTable ?? row.referenced_table_name ?? ""),
+      foreignColumns: []
+    };
+    const column = row.columnName ?? row.column_name;
+    const foreignColumn = row.foreignColumn ?? row.referenced_column_name;
+    if (column) {
+      entry.columns.push(String(column));
+    }
+    if (foreignColumn) {
+      entry.foreignColumns.push(String(foreignColumn));
+    }
+    grouped.set(name, entry);
+  }
+  return [...grouped.values()];
+}
+function numberFromDb(value) {
+  if (value === null || value === void 0) {
+    return void 0;
+  }
+  const next = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(next) ? next : void 0;
+}
+function optionalString3(value) {
   if (value === null || value === void 0) {
     return void 0;
   }
@@ -5852,10 +1534,139 @@ var DEFAULTS_BY_DATABASE_TYPE = {
     database: "dev",
     sslMode: "require",
     color: "purple"
+  },
+  mysql: {
+    name: "MySQL",
+    port: "3306",
+    database: "mysql",
+    sslMode: "disable",
+    color: "blue"
   }
 };
 function connectionDefaultsForType(type) {
   return DEFAULTS_BY_DATABASE_TYPE[type];
+}
+
+// src/services/sshTunnelManager.ts
+var import_child_process = require("child_process");
+var net = __toESM(require("net"));
+var SshTunnelManager = class {
+  tunnels = /* @__PURE__ */ new Map();
+  async open(connection) {
+    const tunnel = connection.sshTunnel;
+    if (!tunnel?.enabled) {
+      return connection;
+    }
+    const existing = this.tunnels.get(connection.id);
+    if (existing) {
+      await this.close(connection.id);
+    }
+    const localHost = tunnel.localHost?.trim() || "127.0.0.1";
+    const localPort = tunnel.localPort && tunnel.localPort > 0 ? Math.floor(tunnel.localPort) : await freePort(localHost);
+    const sshHost = tunnel.host.trim();
+    const sshUser = tunnel.username.trim();
+    if (!sshHost || !sshUser) {
+      throw new Error("SSH tunnel requires a bastion host and username.");
+    }
+    const args = [
+      "-N",
+      "-L",
+      `${localHost}:${localPort}:${connection.host}:${connection.port}`,
+      "-p",
+      String(tunnel.port && tunnel.port > 0 ? Math.floor(tunnel.port) : 22),
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-o",
+      "ServerAliveInterval=30",
+      "-o",
+      "ServerAliveCountMax=3"
+    ];
+    if (tunnel.privateKeyPath?.trim()) {
+      args.push("-i", tunnel.privateKeyPath.trim());
+    }
+    args.push(`${sshUser}@${sshHost}`);
+    const process2 = (0, import_child_process.spawn)("ssh", args, {
+      stdio: ["ignore", "ignore", "pipe"]
+    });
+    const stderr = [];
+    process2.stderr.on("data", (chunk3) => stderr.push(String(chunk3)));
+    const exitPromise = new Promise((_, reject) => {
+      process2.once("error", reject);
+      process2.once("exit", (code, signal) => {
+        reject(new Error(`SSH tunnel exited before it was ready${code !== null ? ` (code ${code})` : ""}${signal ? ` (signal ${signal})` : ""}${stderr.length ? `: ${stderr.join("").trim()}` : ""}`));
+      });
+    });
+    await Promise.race([
+      waitForListening(localHost, localPort, 1e4),
+      exitPromise
+    ]);
+    this.tunnels.set(connection.id, { process: process2, localHost, localPort });
+    return {
+      ...connection,
+      host: localHost,
+      port: localPort
+    };
+  }
+  async close(connectionId) {
+    const tunnel = this.tunnels.get(connectionId);
+    if (!tunnel) {
+      return;
+    }
+    this.tunnels.delete(connectionId);
+    await stopProcess(tunnel.process);
+  }
+};
+async function freePort(host) {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen(0, host, () => {
+      const address = server.address();
+      if (address && typeof address === "object") {
+        const port = address.port;
+        server.close(() => resolve(port));
+      } else {
+        server.close(() => reject(new Error("Could not allocate a free TCP port.")));
+      }
+    });
+  });
+}
+async function waitForListening(host, port, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await canConnect(host, port)) {
+      return;
+    }
+    await delay(150);
+  }
+  throw new Error(`SSH tunnel did not become ready on ${host}:${port}.`);
+}
+async function canConnect(host, port) {
+  return await new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    const done = (ok) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+  });
+}
+async function stopProcess(process2) {
+  if (process2.exitCode !== null || process2.signalCode !== null) {
+    return;
+  }
+  process2.kill("SIGTERM");
+  await delay(500);
+  if (process2.exitCode === null && process2.signalCode === null) {
+    process2.kill("SIGKILL");
+    await delay(200);
+  }
+}
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // src/database/connectionManager.ts
@@ -5864,10 +1675,13 @@ var ConnectionManager = class {
     this.store = store;
     this.drivers.set("postgres", new PostgresDriver());
     this.drivers.set("redshift", new RedshiftDriver());
+    this.drivers.set("mysql", new MySQLDriver());
   }
   drivers = /* @__PURE__ */ new Map();
   active = /* @__PURE__ */ new Map();
+  transactionModes = /* @__PURE__ */ new Map();
   activeConnectionEmitter = new vscode.EventEmitter();
+  sshTunnelManager = new SshTunnelManager();
   onDidChangeActiveConnections = this.activeConnectionEmitter.event;
   getConnections() {
     return this.store.getAll();
@@ -5912,20 +1726,8 @@ var ConnectionManager = class {
     if (!activeConnection) {
       return;
     }
-    if (activeConnection.config.type !== config.type) {
-      await this.getDriver(activeConnection.config.type).disconnect(config.id);
-    }
-    try {
-      const nextConfig = await this.getConnectionWithPassword(config.id);
-      const connection = await this.getDriver(nextConfig.type).connect(nextConfig);
-      this.active.set(config.id, connection);
-      await this.store.setSelectedConnectionId(config.id);
-      this.activeConnectionEmitter.fire(config.id);
-    } catch (error) {
-      this.active.delete(config.id);
-      this.activeConnectionEmitter.fire(config.id);
-      throw error;
-    }
+    await this.disconnect(config.id);
+    await this.connect(config.id);
   }
   async setSelectedConnection(id) {
     await this.store.setSelectedConnectionId(id);
@@ -5936,13 +1738,17 @@ var ConnectionManager = class {
   }
   async connect(id) {
     const config = await this.getConnectionWithPassword(id);
+    const driver = this.getDriver(config.type);
     try {
-      const connection = await this.getDriver(config.type).connect(config);
+      const tunneled = await this.sshTunnelManager.open(config);
+      await driver.connect(tunneled);
+      const connection = { id: config.id, config, connectedAt: Date.now() };
       this.active.set(id, connection);
       await this.store.setSelectedConnectionId(id);
       this.activeConnectionEmitter.fire(id);
       return connection;
     } catch (error) {
+      await this.sshTunnelManager.close(id).catch(() => void 0);
       if (this.active.has(id)) {
         this.active.delete(id);
         this.activeConnectionEmitter.fire(id);
@@ -5956,7 +1762,9 @@ var ConnectionManager = class {
     if (config) {
       await this.getDriver(config.type).disconnect(id);
     }
+    await this.sshTunnelManager.close(id).catch(() => void 0);
     this.active.delete(id);
+    this.transactionModes.delete(id);
     if (wasConnected) {
       this.activeConnectionEmitter.fire(id);
     }
@@ -5966,11 +1774,53 @@ var ConnectionManager = class {
     return this.testConfig(config);
   }
   async testConfig(config) {
-    const result = await this.getDriver(config.type).testConnection(config);
-    if (!result.ok) {
-      throw new Error(`Connection failed for ${config.username}@${config.host}:${config.port}/${config.database}: ${result.message}`);
+    const driver = this.getDriver(config.type);
+    const tunneled = await this.sshTunnelManager.open(config);
+    try {
+      const result = await driver.testConnection(tunneled);
+      if (!result.ok) {
+        throw new Error(`Connection failed for ${config.username}@${config.host}:${config.port}/${config.database}: ${result.message}`);
+      }
+      return result.serverVersion ?? result.message;
+    } finally {
+      await this.sshTunnelManager.close(config.id).catch(() => void 0);
     }
-    return result.serverVersion ?? result.message;
+  }
+  getTransactionMode(id) {
+    return this.transactionModes.get(id) ?? "auto";
+  }
+  setTransactionMode(id, mode) {
+    if (mode === "auto") {
+      this.transactionModes.delete(id);
+    } else {
+      this.transactionModes.set(id, mode);
+    }
+  }
+  isTransactionOpen(id) {
+    const connection = this.getConnection(id);
+    return connection ? this.getDriver(connection.type).isTransactionOpen(id) : false;
+  }
+  async beginTransaction(id) {
+    const connection = this.getConnection(id);
+    if (!connection) {
+      throw new Error("Connection not found.");
+    }
+    await this.getDriver(connection.type).beginTransaction(id);
+    this.transactionModes.set(id, "manual");
+  }
+  async commitTransaction(id) {
+    const connection = this.getConnection(id);
+    if (!connection) {
+      throw new Error("Connection not found.");
+    }
+    await this.getDriver(connection.type).commitTransaction(id);
+  }
+  async rollbackTransaction(id) {
+    const connection = this.getConnection(id);
+    if (!connection) {
+      throw new Error("Connection not found.");
+    }
+    await this.getDriver(connection.type).rollbackTransaction(id);
   }
   async pickConnection() {
     const connections = this.getConnections();
@@ -5984,7 +1834,7 @@ var ConnectionManager = class {
     const selectedId = this.store.getSelectedConnectionId();
     const picked = await vscode.window.showQuickPick(connections.map((connection) => ({
       label: truncateMiddle(connection.name, 48),
-      description: `${this.isConnected(connection.id) ? "online" : "offline"} - ${connection.type}`,
+      description: `${this.isConnected(connection.id) ? "online" : "offline"} - ${connection.type}${connection.production ? " - prod" : ""}`,
       detail: `${connection.username}@${connection.host}:${connection.port}/${connection.database}`,
       connection
     })), { placeHolder: "Select database connection" });
@@ -5993,14 +1843,15 @@ var ConnectionManager = class {
   async promptConnection(existing) {
     const typePick = await vscode.window.showQuickPick([
       { label: "PostgreSQL", type: "postgres" },
-      { label: "Amazon Redshift", type: "redshift" }
+      { label: "Amazon Redshift", type: "redshift" },
+      { label: "MySQL", type: "mysql" }
     ], { placeHolder: "Database type" });
     if (!typePick) {
       return void 0;
     }
     const type = typePick.type;
-    const defaults2 = connectionDefaultsForType(type);
-    const name = await vscode.window.showInputBox({ prompt: "Connection name", value: existing?.name ?? defaults2.name });
+    const defaults = connectionDefaultsForType(type);
+    const name = await vscode.window.showInputBox({ prompt: "Connection name", value: existing?.name ?? defaults.name });
     if (!name) {
       return void 0;
     }
@@ -6008,8 +1859,8 @@ var ConnectionManager = class {
     if (!host) {
       return void 0;
     }
-    const port = Number(await vscode.window.showInputBox({ prompt: "Port", value: String(existing?.port ?? defaults2.port) }));
-    const database = await vscode.window.showInputBox({ prompt: "Database", value: existing?.database ?? defaults2.database });
+    const port = Number(await vscode.window.showInputBox({ prompt: "Port", value: String(existing?.port ?? defaults.port) }));
+    const database = await vscode.window.showInputBox({ prompt: "Database", value: existing?.database ?? defaults.database });
     if (!database) {
       return void 0;
     }
@@ -6028,8 +1879,8 @@ var ConnectionManager = class {
       database,
       username,
       password,
-      sslMode: ssl ?? defaults2.sslMode,
-      color: existing?.color ?? defaults2.color,
+      sslMode: ssl ?? defaults.sslMode,
+      color: existing?.color ?? defaults.color,
       defaultSchema: existing?.defaultSchema ?? "public",
       queryTimeoutMs: vscode.workspace.getConfiguration("database").get("query.timeoutMs", 3e5)
     };
@@ -6295,22 +2146,33 @@ var QueryExecutor = class {
     const started = Date.now();
     const tabId = createId("tab");
     const resultSets = [];
+    const transactionMode = this.connectionManager.getTransactionMode(params.connectionId);
+    let effectiveTransactionMode = params.transactionMode ?? transactionMode;
     try {
       if (!this.connectionManager.isConnected(params.connectionId)) {
         await this.connectionManager.connect(params.connectionId);
       }
+      if (config.readOnlyDefault && !isReadOnlySql(params.sql)) {
+        throw new Error("This connection is read-only by default and only accepts SELECT-style queries.");
+      }
       await this.confirmDestructiveIfNeeded(config.production === true, params.sql);
+      if (effectiveTransactionMode === "manual" && !this.connectionManager.isTransactionOpen(params.connectionId)) {
+        await this.connectionManager.beginTransaction(params.connectionId);
+      }
       const statements = splitSqlStatements(params.sql);
       const sqlParts = statements.length ? statements.map((statement) => statement.sql) : [params.sql];
       const results = await this.connectionManager.getDriver(config.type).executeStatements(params, sqlParts);
       for (const [index, result] of results.entries()) {
+        const maxRows = params.maxRows && params.maxRows > 0 ? Math.floor(params.maxRows) : void 0;
+        const rows = maxRows ? result.rows.slice(0, maxRows) : result.rows;
         resultSets.push({
           id: result.executionId,
           title: sqlParts.length > 1 ? `Result ${index + 1}` : this.resultTitle(sqlParts[index] ?? params.sql, params.source?.fileName),
           fields: result.fields,
-          rows: result.rows,
-          rowCount: result.rowCount,
-          maxRows: params.maxRows,
+          rows,
+          rowCount: rows.length,
+          maxRows,
+          hasMore: maxRows ? result.rowCount > rows.length : false,
           command: result.command,
           durationMs: result.durationMs
         });
@@ -6357,7 +2219,12 @@ var QueryExecutor = class {
         executionTimeMs: durationMs,
         rowCount: resultSets.reduce((total, set) => total + set.rowCount, 0),
         maxRows: params.maxRows,
+        rowOffset: params.offset && params.offset > 0 ? Math.floor(params.offset) : 0,
         resultSets,
+        transaction: {
+          mode: effectiveTransactionMode,
+          open: this.connectionManager.isTransactionOpen(config.id)
+        },
         activeResultSetIndex: 0,
         filters: [],
         sort: [],
@@ -6406,8 +2273,13 @@ var QueryExecutor = class {
         executionFinishedAt: Date.now(),
         executionTimeMs: Date.now() - started,
         maxRows: params.maxRows,
+        rowOffset: params.offset && params.offset > 0 ? Math.floor(params.offset) : 0,
         error: queryError,
         resultSets: [],
+        transaction: {
+          mode: effectiveTransactionMode,
+          open: this.connectionManager.isTransactionOpen(config.id)
+        },
         activeResultSetIndex: 0,
         filters: [],
         sort: [],
@@ -6469,6 +2341,11 @@ var QueryExecutor = class {
     };
   }
 };
+function isReadOnlySql(sql) {
+  const statements = splitSqlStatements(sql).map((statement) => statement.sql.trim()).filter(Boolean);
+  const parts = statements.length ? statements : [sql.trim()].filter(Boolean);
+  return parts.every((statement) => /^(select|with|values|show|describe|explain)\b/i.test(statement));
+}
 
 // src/explorer/DatabaseTreeProvider.ts
 var vscode4 = __toESM(require("vscode"));
@@ -6623,11 +2500,11 @@ var ConnectionNode = class extends vscode3.TreeItem {
     super(truncateMiddle2(connection.name, 36), vscode3.TreeItemCollapsibleState.Collapsed);
     this.connection = connection;
     this.id = connection.id;
-    this.description = `${connected ? "online" : "offline"} | ${connection.type}`;
+    this.description = `${connected ? "online" : "offline"} | ${connection.type}${connection.production ? " | prod" : ""}`;
     this.contextValue = "connection";
     this.iconPath = new vscode3.ThemeIcon(
       "database",
-      new vscode3.ThemeColor(connected ? "testing.iconPassed" : "descriptionForeground")
+      new vscode3.ThemeColor(connection.production ? "errorForeground" : connected ? connectionColorTheme(connection.color) : "descriptionForeground")
     );
     this.tooltip = new vscode3.MarkdownString(
       [
@@ -6638,12 +2515,30 @@ var ConnectionNode = class extends vscode3.TreeItem {
         `Database: ${connection.database}`,
         `User: ${connection.username}`,
         `Schema: ${connection.defaultSchema ?? "public"}`,
+        `Environment: ${connection.production ? "production" : "non-production"}`,
         `Status: ${connected ? "connected" : "disconnected"}`
       ].join("\n\n")
     );
   }
   kind = "connection";
 };
+function connectionColorTheme(color) {
+  switch (color) {
+    case "red":
+      return "charts.red";
+    case "yellow":
+      return "charts.yellow";
+    case "green":
+      return "charts.green";
+    case "blue":
+      return "charts.blue";
+    case "purple":
+      return "charts.purple";
+    case "gray":
+    default:
+      return "descriptionForeground";
+  }
+}
 var CatalogNode = class extends vscode3.TreeItem {
   constructor(connection) {
     super(truncateMiddle2(connection.database, 40), vscode3.TreeItemCollapsibleState.Collapsed);
@@ -6686,10 +2581,48 @@ var FolderNode = class extends vscode3.TreeItem {
     this.folder = folder;
     this.tableName = tableName;
     this.id = `folder:${connection.id}:${schema}:${folder}:${tableName ?? ""}`;
-    this.contextValue = folder.toLowerCase().replace(/\s+/g, "-");
+    this.contextValue = folder === "Functions" ? "function-folder" : folder === "Procedures" ? "procedure-folder" : folder === "Triggers" ? "trigger-folder" : folder.toLowerCase().replace(/\s+/g, "-");
     this.iconPath = new vscode3.ThemeIcon(folder === "Materialized Views" ? "symbol-structure" : "folder");
   }
   kind = "folder";
+};
+var RoutineNode = class extends vscode3.TreeItem {
+  constructor(connection, routine) {
+    super(truncateMiddle2(routine.name, 48), vscode3.TreeItemCollapsibleState.None);
+    this.connection = connection;
+    this.routine = routine;
+    this.id = `routine:${connection.id}:${routine.kind}:${routine.schema}:${routine.name}`;
+    this.contextValue = routine.kind;
+    this.iconPath = new vscode3.ThemeIcon(routine.kind === "procedure" ? "gear" : "symbol-function");
+    this.tooltip = [
+      `${routine.schema}.${routine.name}`,
+      routine.kind === "procedure" ? "Procedure" : "Function",
+      routine.returnType ? `Returns: ${routine.returnType}` : void 0,
+      routine.language ? `Language: ${routine.language}` : void 0,
+      routine.comment
+    ].filter(Boolean).join("\n");
+    this.command = { command: "database.quickDocumentation", title: "Quick Documentation", arguments: [this] };
+  }
+  kind = "routine";
+};
+var TriggerNode = class extends vscode3.TreeItem {
+  constructor(connection, trigger) {
+    super(truncateMiddle2(trigger.name, 48), vscode3.TreeItemCollapsibleState.None);
+    this.connection = connection;
+    this.trigger = trigger;
+    this.id = `trigger:${connection.id}:${trigger.schema}:${trigger.table}:${trigger.name}`;
+    this.contextValue = "trigger";
+    this.iconPath = new vscode3.ThemeIcon("debug-breakpoint-log");
+    this.tooltip = [
+      `${trigger.schema}.${trigger.table}.${trigger.name}`,
+      trigger.timing ? `Timing: ${trigger.timing}` : void 0,
+      trigger.orientation ? `Orientation: ${trigger.orientation}` : void 0,
+      trigger.events?.length ? `Events: ${trigger.events.join(", ")}` : void 0,
+      trigger.enabled ? `Enabled: ${trigger.enabled}` : void 0
+    ].filter(Boolean).join("\n");
+    this.command = { command: "database.quickDocumentation", title: "Quick Documentation", arguments: [this] };
+  }
+  kind = "trigger";
 };
 var TableNode = class extends vscode3.TreeItem {
   constructor(connection, table) {
@@ -6814,7 +2747,10 @@ var DatabaseTreeProvider = class {
       return [
         new FolderNode(element.connection, element.schema.name, "Tables"),
         new FolderNode(element.connection, element.schema.name, "Materialized Views"),
-        new FolderNode(element.connection, element.schema.name, "Views")
+        new FolderNode(element.connection, element.schema.name, "Views"),
+        new FolderNode(element.connection, element.schema.name, "Functions"),
+        new FolderNode(element.connection, element.schema.name, "Procedures"),
+        new FolderNode(element.connection, element.schema.name, "Triggers")
       ];
     }
     if (element instanceof FolderNode && element.folder === "Tables") {
@@ -6839,6 +2775,21 @@ var DatabaseTreeProvider = class {
       await this.ensureConnected(element.connection.id);
       const views = await this.connectionManager.getDriver(element.connection.type).getViews(element.connection.id, element.schema);
       return views.map((view) => new ViewNode(element.connection, view));
+    }
+    if (element instanceof FolderNode && element.folder === "Functions") {
+      await this.ensureConnected(element.connection.id);
+      const routines = await this.connectionManager.getDriver(element.connection.type).getFunctions(element.connection.id, element.schema);
+      return routines.map((routine) => new RoutineNode(element.connection, routine));
+    }
+    if (element instanceof FolderNode && element.folder === "Procedures") {
+      await this.ensureConnected(element.connection.id);
+      const routines = await this.connectionManager.getDriver(element.connection.type).getProcedures(element.connection.id, element.schema);
+      return routines.map((routine) => new RoutineNode(element.connection, routine));
+    }
+    if (element instanceof FolderNode && element.folder === "Triggers") {
+      await this.ensureConnected(element.connection.id);
+      const triggers = await this.connectionManager.getDriver(element.connection.type).getTriggers(element.connection.id, element.schema);
+      return triggers.map((trigger) => new TriggerNode(element.connection, trigger));
     }
     if (element instanceof TableNode) {
       return [
@@ -8288,17 +4239,31 @@ var SchemaContextService = class {
   }
   async getColumns(connection, schemaName, tableName) {
     const entry = await this.loadSchema(connection, schemaName);
-    const tableKey = this.tableKey(schemaName, tableName);
-    if (entry.columns[tableKey]) {
-      return entry.columns[tableKey];
+    const tableKey3 = this.tableKey(schemaName, tableName);
+    if (entry.columns[tableKey3]) {
+      return entry.columns[tableKey3];
     }
     const columns = await this.connectionManager.getDriver(connection.type).getColumns(connection.id, schemaName, tableName);
-    entry.columns[tableKey] = columns;
+    entry.columns[tableKey3] = columns;
     entry.loadedAt = Date.now();
     entry.status = "ready";
     entry.source = "live";
     await this.persistentCache?.persist(connection, entry);
     return columns;
+  }
+  async getPrimaryKeys(connection, schemaName, tableName) {
+    const entry = await this.loadSchema(connection, schemaName);
+    const tableKey3 = this.tableKey(schemaName, tableName);
+    if (entry.keys[tableKey3]) {
+      return entry.keys[tableKey3];
+    }
+    const keys = await this.connectionManager.getDriver(connection.type).getPrimaryKeys(connection.id, schemaName, tableName);
+    entry.keys[tableKey3] = keys;
+    entry.loadedAt = Date.now();
+    entry.status = "ready";
+    entry.source = "live";
+    await this.persistentCache?.persist(connection, entry);
+    return keys;
   }
   async getCachedColumns(connection, schemaName, tableName) {
     const entry = await this.getCachedForConnection(connection, schemaName);
@@ -8972,7 +4937,7 @@ var SqlDiagnosticsService = class {
     if (!column) {
       return void 0;
     }
-    const regex = new RegExp(`\\b${escapeRegExp(column)}\\b`, "i");
+    const regex = new RegExp(`\\b${escapeRegExp2(column)}\\b`, "i");
     const match = regex.exec(section.sql);
     if (!match) {
       return void 0;
@@ -9097,7 +5062,7 @@ var SqlDiagnosticsService = class {
     return commentStart >= 0 && commentStart < start;
   }
 };
-function escapeRegExp(value) {
+function escapeRegExp2(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
@@ -10081,6 +6046,157 @@ function comparePositions(a, b) {
   return a.line - b.line || a.character - b.character;
 }
 
+// src/services/tableRowMutationService.ts
+var TableRowMutationService = class {
+  constructor(schemaContext) {
+    this.schemaContext = schemaContext;
+  }
+  async preview(request) {
+    const target = request.target;
+    const primaryKeys = await this.primaryKeys(target.connection, target.schema, target.table);
+    const table = qualifiedName(target.schema, target.table);
+    if (request.kind === "delete-row") {
+      const originalRow2 = request.originalRow ?? parseRowText(request.rowText);
+      const where2 = this.whereClause(primaryKeys, originalRow2, target.table);
+      return {
+        kind: request.kind,
+        sql: `delete from ${table}
+where ${where2};`,
+        title: `Delete ${target.table}`,
+        primaryKeys
+      };
+    }
+    if (request.kind === "insert-row") {
+      const row = request.updatedRow ?? parseRowText(request.rowText);
+      const columns = this.orderedColumns(target.columns, row);
+      if (!columns.length) {
+        throw new Error("No values were provided for the new row.");
+      }
+      return {
+        kind: request.kind,
+        sql: `insert into ${table} (${columns.map(quoteIdentifier).join(", ")})
+values (${columns.map((column) => formatLiteral(row[column])).join(", ")});`,
+        title: `Insert into ${target.table}`,
+        primaryKeys
+      };
+    }
+    const originalRow = request.originalRow ?? parseRowText(request.rowText);
+    const updatedRow = request.kind === "edit-cell" ? {
+      ...originalRow,
+      ...request.column ? { [request.column]: parseScalar(request.valueText ?? "") } : {}
+    } : request.updatedRow ?? originalRow;
+    const changedColumns = this.changedColumns(primaryKeys, originalRow, updatedRow);
+    if (!changedColumns.length) {
+      throw new Error("No editable columns changed.");
+    }
+    const where = this.whereClause(primaryKeys, originalRow, target.table);
+    return {
+      kind: request.kind,
+      sql: `update ${table}
+set ${changedColumns.map((column) => `${quoteIdentifier(column)} = ${formatLiteral(updatedRow[column])}`).join(", ")}
+where ${where};`,
+      title: `Update ${target.table}`,
+      primaryKeys
+    };
+  }
+  async inferTargetFromQuery(connection, sql) {
+    if (/\b(with|join|union|intersect|except)\b/i.test(sql) || /\bfrom\s*\(/i.test(sql)) {
+      return void 0;
+    }
+    const aliases = extractSqlAliases(sql);
+    if (aliases.length !== 1) {
+      return void 0;
+    }
+    const [unique2] = aliases;
+    const schema = unique2.schema ?? connection.defaultSchema ?? "public";
+    const columns = await this.schemaContext.getColumns(connection, schema, unique2.table);
+    return {
+      connection,
+      schema,
+      table: unique2.table,
+      columns: columns.map((column) => column.name),
+      queryText: sql
+    };
+  }
+  async primaryKeys(connection, schema, table) {
+    const keys = await this.schemaContext.getPrimaryKeys(connection, schema, table);
+    return keys.flatMap((key) => key.columns).filter((column, index, all) => all.findIndex((item) => item === column) === index);
+  }
+  orderedColumns(columns, row) {
+    const existing = new Set(columns ?? Object.keys(row));
+    return [...columns ?? Object.keys(row), ...Object.keys(row).filter((column) => !existing.has(column))].filter((column, index, all) => all.indexOf(column) === index);
+  }
+  changedColumns(primaryKeys, originalRow, updatedRow) {
+    const allColumns = /* @__PURE__ */ new Set([...Object.keys(originalRow), ...Object.keys(updatedRow)]);
+    return [...allColumns].filter((column) => !primaryKeys.includes(column) && !valuesEqual(originalRow[column], updatedRow[column]));
+  }
+  whereClause(primaryKeys, row, table) {
+    if (!primaryKeys.length) {
+      throw new Error(`Cannot edit ${table} safely because no primary key is cached.`);
+    }
+    return primaryKeys.map((column) => {
+      if (!(column in row)) {
+        throw new Error(`Cannot edit ${table} safely because the primary key column ${column} is missing from the row.`);
+      }
+      const value = row[column];
+      return value === null || value === void 0 ? `${quoteIdentifier(column)} is null` : `${quoteIdentifier(column)} = ${formatLiteral(value)}`;
+    }).join(" and ");
+  }
+};
+function parseRowText(valueText) {
+  if (!valueText || !valueText.trim()) {
+    return {};
+  }
+  const trimmed = valueText.trim();
+  const parsed = JSON.parse(trimmed);
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return parsed;
+  }
+  throw new Error("Insert row input must be a JSON object.");
+}
+function parseScalar(text) {
+  if (!text.trim()) return null;
+  if (/^null$/i.test(text)) return null;
+  if (/^true$/i.test(text)) return true;
+  if (/^false$/i.test(text)) return false;
+  if (/^-?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?$/i.test(text)) {
+    const next = Number(text);
+    return Number.isFinite(next) ? next : text;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+function valuesEqual(left, right) {
+  if (left === right) {
+    return true;
+  }
+  if (left instanceof Date && right instanceof Date) {
+    return left.getTime() === right.getTime();
+  }
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+function formatLiteral(value) {
+  if (value === null || value === void 0) {
+    return "null";
+  }
+  if (typeof value === "number" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (value instanceof Date) {
+    return `'${value.toISOString().replace(/'/g, "''")}'`;
+  }
+  if (typeof value === "object") {
+    return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
+  }
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
 // src/ai/vsCodeLanguageModelSqlAdapter.ts
 var vscode16 = __toESM(require("vscode"));
 
@@ -10198,8 +6314,8 @@ ${schema || "(no schema metadata available)"}`
     ];
     const response = await model.sendRequest(messages, {}, new vscode16.CancellationTokenSource().token);
     let text = "";
-    for await (const chunk of response.text) {
-      text += chunk;
+    for await (const chunk3 of response.text) {
+      text += chunk3;
     }
     return text;
   }
@@ -10642,6 +6758,97 @@ var QueryOutputService = class {
   }
 };
 
+// src/services/erDiagramService.ts
+var ErDiagramService = class {
+  constructor(connectionManager, schemaContext) {
+    this.connectionManager = connectionManager;
+    this.schemaContext = schemaContext;
+  }
+  async build(request) {
+    if (!this.connectionManager.isConnected(request.connection.id)) {
+      await this.connectionManager.connect(request.connection.id);
+    }
+    const entry = await this.schemaContext.loadSchema(request.connection, request.schemaName);
+    if (entry.status !== "ready") {
+      throw new Error(entry.errorMessage ?? `Could not load schema ${request.schemaName}.`);
+    }
+    const tables = [...entry.tables, ...entry.views].filter((relation) => relation.schema === request.schemaName).sort((left, right) => left.name.localeCompare(right.name));
+    const relations = [];
+    const tableMap2 = new Map(tables.map((relation) => [relation.name, relation]));
+    const mappedTables = [];
+    for (const table of tables) {
+      if ("type" in table && table.type === "view") {
+        const columnInfos2 = entry.columns[tableKey(table.schema, table.name)] ?? [];
+        mappedTables.push({
+          schema: table.schema,
+          name: table.name,
+          type: table.type,
+          rowEstimate: "rowEstimate" in table ? table.rowEstimate : void 0,
+          primaryKeys: [],
+          columns: columnInfos2.map((column) => ({
+            name: column.name,
+            dataType: column.dataType,
+            nullable: column.nullable,
+            primary: false
+          })),
+          outgoing: [],
+          incoming: []
+        });
+        continue;
+      }
+      const primaryKeyList = await this.schemaContext.getPrimaryKeys(request.connection, table.schema, table.name);
+      const foreignKeyList = await this.connectionManager.getDriver(request.connection.type).getForeignKeys(request.connection.id, table.schema, table.name);
+      const pkColumns = primaryKeyList[0]?.columns ?? [];
+      const columnInfos = entry.columns[tableKey(table.schema, table.name)] ?? [];
+      const outgoing = foreignKeyList.filter((fk) => fk.foreignSchema === request.schemaName && tableMap2.has(fk.foreignTable));
+      relations.push(...outgoing.map((fk) => ({
+        name: fk.name,
+        fromSchema: table.schema,
+        fromTable: table.name,
+        fromColumns: fk.columns,
+        toSchema: fk.foreignSchema,
+        toTable: fk.foreignTable,
+        toColumns: fk.foreignColumns
+      })));
+      mappedTables.push({
+        schema: table.schema,
+        name: table.name,
+        type: table.type,
+        rowEstimate: "rowEstimate" in table ? table.rowEstimate : void 0,
+        primaryKeys: pkColumns,
+        columns: columnInfos.map((column) => ({
+          name: column.name,
+          dataType: column.dataType,
+          nullable: column.nullable,
+          primary: pkColumns.includes(column.name)
+        })),
+        outgoing: [],
+        incoming: []
+      });
+    }
+    const tableIndex = new Map(mappedTables.map((table) => [table.name, table]));
+    for (const relation of relations) {
+      const from = tableIndex.get(relation.fromTable);
+      const to = tableIndex.get(relation.toTable);
+      if (from) {
+        from.outgoing.push(relation);
+      }
+      if (to) {
+        to.incoming.push(relation);
+      }
+    }
+    return {
+      connectionName: request.connection.name,
+      schemaName: request.schemaName,
+      tables: mappedTables,
+      relations
+    };
+  }
+};
+function tableKey(schema, table) {
+  return `${schema}.${table}`;
+}
+
 // src/services/queryPlanAnalyzerService.ts
 var QueryPlanAnalyzerService = class {
   constructor(connectionManager, ai) {
@@ -10682,8 +6889,1361 @@ var QueryPlanAnalyzerService = class {
   }
 };
 
-// src/webviews/connection/ConnectionEditorPanel.ts
+// src/services/resultSetDiffService.ts
+function compareResultSets(left, right, leftTitle = left.title, rightTitle = right.title) {
+  const leftColumns = left.fields.map((field) => field.name);
+  const rightColumns = right.fields.map((field) => field.name);
+  const rightColumnSet = new Set(rightColumns);
+  const sharedColumns = leftColumns.filter((column) => rightColumnSet.has(column));
+  const leftOnlyColumns = leftColumns.filter((column) => !rightColumnSet.has(column));
+  const rightOnlyColumns = rightColumns.filter((column) => !leftColumns.includes(column));
+  const identityColumns = pickIdentityColumns(sharedColumns);
+  const leftRows = left.rows.map((row, index) => ({ row, index }));
+  const rightRows = right.rows.map((row, index) => ({ row, index }));
+  const comparisonColumns = sharedColumns.length ? sharedColumns : [.../* @__PURE__ */ new Set([...leftColumns, ...rightColumns])];
+  const leftGroups = groupRows(leftRows, identityColumns, comparisonColumns);
+  const rightGroups = groupRows(rightRows, identityColumns, comparisonColumns);
+  const addedRows = [];
+  const removedRows = [];
+  const changedRows = [];
+  let sameRows = 0;
+  const allKeys = [.../* @__PURE__ */ new Set([...leftGroups.keys(), ...rightGroups.keys()])].sort();
+  for (const key of allKeys) {
+    const leftGroup = leftGroups.get(key) ?? [];
+    const rightGroup = rightGroups.get(key) ?? [];
+    const pairCount = Math.min(leftGroup.length, rightGroup.length);
+    for (let index = 0; index < pairCount; index += 1) {
+      const leftRow = leftGroup[index];
+      const rightRow = rightGroup[index];
+      const changes = compareRows(leftRow.row, rightRow.row, sharedColumns);
+      if (changes.length) {
+        changedRows.push({
+          key,
+          leftRow: leftRow.row,
+          rightRow: rightRow.row,
+          changes
+        });
+      } else {
+        sameRows += 1;
+      }
+    }
+    for (let index = pairCount; index < leftGroup.length; index += 1) {
+      removedRows.push({ key, row: leftGroup[index].row });
+    }
+    for (let index = pairCount; index < rightGroup.length; index += 1) {
+      addedRows.push({ key, row: rightGroup[index].row });
+    }
+  }
+  return {
+    leftTitle,
+    rightTitle,
+    leftRowCount: left.rows.length,
+    rightRowCount: right.rows.length,
+    sharedColumns,
+    leftOnlyColumns,
+    rightOnlyColumns,
+    identityColumns,
+    addedRows,
+    removedRows,
+    changedRows,
+    sameRows
+  };
+}
+function formatResultSetDiffMarkdown(report) {
+  const lines = [
+    "# Result Set Diff",
+    "",
+    `Comparing **${report.leftTitle}** to **${report.rightTitle}**.`,
+    "",
+    `- Left rows: ${report.leftRowCount}`,
+    `- Right rows: ${report.rightRowCount}`,
+    `- Shared columns: ${report.sharedColumns.length ? report.sharedColumns.join(", ") : "none"}`,
+    `- Identity columns: ${report.identityColumns.length ? report.identityColumns.join(", ") : "row order fallback"}`,
+    `- Added rows: ${report.addedRows.length}`,
+    `- Removed rows: ${report.removedRows.length}`,
+    `- Changed rows: ${report.changedRows.length}`,
+    `- Unchanged pairs: ${report.sameRows}`
+  ];
+  if (report.leftOnlyColumns.length || report.rightOnlyColumns.length) {
+    lines.push("");
+    lines.push("## Column Differences");
+    if (report.leftOnlyColumns.length) {
+      lines.push(`- Only in left: ${report.leftOnlyColumns.join(", ")}`);
+    }
+    if (report.rightOnlyColumns.length) {
+      lines.push(`- Only in right: ${report.rightOnlyColumns.join(", ")}`);
+    }
+  }
+  if (report.changedRows.length) {
+    lines.push("");
+    lines.push("## Changed Rows");
+    for (const change of report.changedRows.slice(0, 20)) {
+      lines.push("");
+      lines.push(`### ${change.key}`);
+      for (const field of change.changes) {
+        lines.push(`- \`${field.column}\`: ${formatValue(field.leftValue)} -> ${formatValue(field.rightValue)}`);
+      }
+    }
+    if (report.changedRows.length > 20) {
+      lines.push("");
+      lines.push(`_\u2026 ${report.changedRows.length - 20} more changed rows omitted._`);
+    }
+  }
+  if (report.addedRows.length) {
+    lines.push("");
+    lines.push("## Added Rows");
+    for (const delta of report.addedRows.slice(0, 10)) {
+      lines.push(`- ${delta.key}`);
+      lines.push("```json");
+      lines.push(stringifyRow(delta.row));
+      lines.push("```");
+    }
+    if (report.addedRows.length > 10) {
+      lines.push(`_\u2026 ${report.addedRows.length - 10} more added rows omitted._`);
+    }
+  }
+  if (report.removedRows.length) {
+    lines.push("");
+    lines.push("## Removed Rows");
+    for (const delta of report.removedRows.slice(0, 10)) {
+      lines.push(`- ${delta.key}`);
+      lines.push("```json");
+      lines.push(stringifyRow(delta.row));
+      lines.push("```");
+    }
+    if (report.removedRows.length > 10) {
+      lines.push(`_\u2026 ${report.removedRows.length - 10} more removed rows omitted._`);
+    }
+  }
+  return lines.join("\n");
+}
+function compareRows(left, right, columns) {
+  const changes = [];
+  for (const column of columns) {
+    if (!isDeepEqual(left[column], right[column])) {
+      changes.push({
+        column,
+        leftValue: left[column],
+        rightValue: right[column]
+      });
+    }
+  }
+  return changes;
+}
+function groupRows(rows, identityColumns, comparisonColumns) {
+  const groups = /* @__PURE__ */ new Map();
+  const keyColumns = identityColumns.length ? identityColumns : comparisonColumns.slice(0, Math.min(2, comparisonColumns.length));
+  const sorted = [...rows].sort((left, right) => {
+    const leftKey = rowKey(left.row, keyColumns, left.index);
+    const rightKey = rowKey(right.row, keyColumns, right.index);
+    return leftKey.localeCompare(rightKey);
+  });
+  for (const entry of sorted) {
+    const key = rowKey(entry.row, keyColumns, entry.index);
+    const list = groups.get(key) ?? [];
+    list.push(entry);
+    groups.set(key, list);
+  }
+  return groups;
+}
+function pickIdentityColumns(columns) {
+  const preferred = columns.filter((column) => /(^id$)|(^.+_id$)|(^.+id$)/i.test(column));
+  if (preferred.length) {
+    return preferred.slice(0, 3);
+  }
+  return columns.slice(0, Math.min(2, columns.length));
+}
+function rowKey(row, columns, index) {
+  if (!columns.length) {
+    return `${index}:${stringifyValue(row)}`;
+  }
+  return columns.map((column) => `${column}=${stringifyValue(row[column])}`).join(" | ") || `${index}`;
+}
+function stringifyValue(value) {
+  if (value === void 0) {
+    return "undefined";
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  return stableStringify(value);
+}
+function stringifyRow(row) {
+  return stableStringify(row);
+}
+function stableStringify(value) {
+  return JSON.stringify(normalizeValue(value));
+}
+function normalizeValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeValue(item));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, normalizeValue(value[key])]));
+  }
+  return value;
+}
+function isDeepEqual(left, right) {
+  return stableStringify(left) === stableStringify(right);
+}
+function formatValue(value) {
+  if (value === void 0) {
+    return "`undefined`";
+  }
+  if (value === null) {
+    return "`null`";
+  }
+  const text = typeof value === "string" ? value : stableStringify(value);
+  const preview = text.length > 120 ? `${text.slice(0, 117)}...` : text;
+  return `\`${preview.replace(/`/g, "\\`")}\``;
+}
+
+// src/services/schemaDiffService.ts
+function compareSchemas(request) {
+  const sourceTables = tableMap(request.sourceSchema.tables);
+  const targetTables = tableMap(request.targetSchema.tables);
+  const sourceViews = viewMap(request.sourceSchema.views);
+  const targetViews = viewMap(request.targetSchema.views);
+  const createTables = [...sourceTables.values()].filter((table) => !targetTables.has(tableKey2(table.schema, table.name))).map((table) => ({
+    schema: table.schema,
+    name: table.name,
+    ddl: buildCreateTableSql(table.schema, table.name, request.sourceSchema.columns[tableKey2(table.schema, table.name)] ?? [])
+  }));
+  const dropTables = [...targetTables.values()].filter((table) => !sourceTables.has(tableKey2(table.schema, table.name))).map((table) => ({ schema: table.schema, name: table.name }));
+  const createViews = [...sourceViews.values()].filter((view) => !targetViews.has(viewKey(view.schema, view.name))).map((view) => ({
+    schema: view.schema,
+    name: view.name,
+    ddl: buildCreateViewSql(view.schema, view.name)
+  }));
+  const dropViews = [...targetViews.values()].filter((view) => !sourceViews.has(viewKey(view.schema, view.name))).map((view) => ({ schema: view.schema, name: view.name }));
+  const alterTables = [...sourceTables.values()].filter((table) => targetTables.has(tableKey2(table.schema, table.name))).map((table) => compareTableColumns(
+    table.schema,
+    table.name,
+    request.sourceSchema.columns[tableKey2(table.schema, table.name)] ?? [],
+    request.targetSchema.columns[tableKey2(table.schema, table.name)] ?? []
+  )).filter((change) => change.addedColumns.length || change.removedColumns.length || change.typeChanges.length || change.nullableChanges.length);
+  const migrationSql = buildMigrationSql({ createTables, dropTables, createViews, dropViews, alterTables });
+  return {
+    sourceConnectionName: request.sourceConnectionName,
+    targetConnectionName: request.targetConnectionName,
+    sourceSchema: request.sourceSchema.schemaName,
+    targetSchema: request.targetSchema.schemaName,
+    createTables,
+    dropTables,
+    createViews,
+    dropViews,
+    alterTables,
+    migrationSql
+  };
+}
+function formatSchemaDiffMarkdown(report) {
+  const lines = [
+    "# Schema Diff",
+    "",
+    `Source: **${report.sourceConnectionName}** / schema **${report.sourceSchema}**`,
+    `Target: **${report.targetConnectionName}** / schema **${report.targetSchema}**`,
+    "",
+    `- Tables to create: ${report.createTables.length}`,
+    `- Tables to drop: ${report.dropTables.length}`,
+    `- Views to create: ${report.createViews.length}`,
+    `- Views to drop: ${report.dropViews.length}`,
+    `- Tables to alter: ${report.alterTables.length}`
+  ];
+  appendObjects(lines, "## Create Tables", report.createTables.map((item) => `${qualifiedName(item.schema, item.name)}
+\`\`\`sql
+${item.ddl}
+\`\`\``));
+  appendSimple(lines, "## Drop Tables", report.dropTables.map((item) => qualifiedName(item.schema, item.name)));
+  appendObjects(lines, "## Create Views", report.createViews.map((item) => `${qualifiedName(item.schema, item.name)}
+\`\`\`sql
+${item.ddl}
+\`\`\``));
+  appendSimple(lines, "## Drop Views", report.dropViews.map((item) => qualifiedName(item.schema, item.name)));
+  if (report.alterTables.length) {
+    lines.push("");
+    lines.push("## Table Changes");
+    for (const table of report.alterTables) {
+      lines.push("");
+      lines.push(`### ${qualifiedName(table.schema, table.name)}`);
+      if (table.addedColumns.length) {
+        lines.push(`- Added columns: ${table.addedColumns.map((item) => `${item.name}`).join(", ")}`);
+      }
+      if (table.removedColumns.length) {
+        lines.push(`- Removed columns: ${table.removedColumns.map((item) => item.name).join(", ")}`);
+      }
+      if (table.typeChanges.length) {
+        lines.push(`- Type changes: ${table.typeChanges.map((item) => `${item.name} ${item.from} -> ${item.to}`).join(", ")}`);
+      }
+      if (table.nullableChanges.length) {
+        lines.push(`- Nullability changes: ${table.nullableChanges.map((item) => `${item.name} ${item.from ? "nullable" : "not null"} -> ${item.to ? "nullable" : "not null"}`).join(", ")}`);
+      }
+    }
+  }
+  lines.push("");
+  lines.push("## Migration SQL");
+  lines.push("```sql");
+  lines.push(report.migrationSql || "-- No migration SQL generated.");
+  lines.push("```");
+  return lines.join("\n");
+}
+function compareTableColumns(schema, name, sourceColumns, targetColumns) {
+  const targetByName = new Map(targetColumns.map((column) => [column.name, column]));
+  const sourceByName = new Map(sourceColumns.map((column) => [column.name, column]));
+  const addedColumns = sourceColumns.filter((column) => !targetByName.has(column.name)).map((column) => ({
+    name: column.name,
+    ddl: `alter table ${qualifiedName(schema, name)} add column ${quoteIdentifier(column.name)} ${column.dataType}${column.defaultValue ? ` default ${column.defaultValue}` : ""}${column.nullable ? "" : " not null"};`
+  }));
+  const removedColumns = targetColumns.filter((column) => !sourceByName.has(column.name)).map((column) => ({ name: column.name }));
+  const typeChanges = sourceColumns.filter((column) => {
+    const target = targetByName.get(column.name);
+    return !!target && target.dataType !== column.dataType;
+  }).map((column) => ({
+    name: column.name,
+    from: targetByName.get(column.name)?.dataType ?? "",
+    to: column.dataType
+  }));
+  const nullableChanges = sourceColumns.filter((column) => {
+    const target = targetByName.get(column.name);
+    return !!target && target.nullable !== column.nullable;
+  }).map((column) => ({
+    name: column.name,
+    from: targetByName.get(column.name)?.nullable ?? false,
+    to: column.nullable
+  }));
+  return { schema, name, addedColumns, removedColumns, typeChanges, nullableChanges };
+}
+function buildMigrationSql(report) {
+  const statements = [];
+  for (const item of report.createTables) {
+    statements.push(item.ddl);
+  }
+  for (const item of report.createViews) {
+    statements.push(item.ddl);
+  }
+  for (const item of report.alterTables) {
+    for (const added of item.addedColumns) {
+      statements.push(added.ddl);
+    }
+  }
+  for (const item of report.dropViews) {
+    statements.push(`drop view if exists ${qualifiedName(item.schema, item.name)};`);
+  }
+  for (const item of report.dropTables) {
+    statements.push(`drop table if exists ${qualifiedName(item.schema, item.name)};`);
+  }
+  return statements.join("\n");
+}
+function buildCreateTableSql(schema, table, columns) {
+  const ddlColumns = columns.length ? columns.map((column) => `  ${quoteIdentifier(column.name)} ${column.dataType}${column.defaultValue ? ` default ${column.defaultValue}` : ""}${column.nullable ? "" : " not null"}`) : ["  id integer"];
+  return `create table ${qualifiedName(schema, table)} (
+${ddlColumns.join(",\n")}
+);`;
+}
+function buildCreateViewSql(schema, view) {
+  return `create view ${qualifiedName(schema, view)} as
+select 1 as placeholder;
+`;
+}
+function tableMap(items) {
+  return new Map(items.map((item) => [tableKey2(item.schema, item.name), item]));
+}
+function viewMap(items) {
+  return new Map(items.map((item) => [viewKey(item.schema, item.name), item]));
+}
+function tableKey2(schema, table) {
+  return `${schema}.${table}`;
+}
+function viewKey(schema, view) {
+  return `${schema}.${view}`;
+}
+function appendObjects(lines, title, values) {
+  if (!values.length) {
+    return;
+  }
+  lines.push("");
+  lines.push(title);
+  for (const value of values) {
+    lines.push("");
+    lines.push(value);
+  }
+}
+function appendSimple(lines, title, values) {
+  if (!values.length) {
+    return;
+  }
+  lines.push("");
+  lines.push(title);
+  for (const value of values) {
+    lines.push(`- ${value}`);
+  }
+}
+
+// src/services/querySnippetService.ts
+function querySnippets() {
+  return [
+    {
+      id: "select-by-id",
+      label: "Select by ID",
+      description: "Template for fetching one row by primary key.",
+      snippet: [
+        "select *",
+        "from ${1:table_name}",
+        "where ${2:id_column} = ${3:value};"
+      ].join("\n")
+    },
+    {
+      id: "filtered-select",
+      label: "Filtered Select",
+      description: "Template for a constrained query with ordering.",
+      snippet: [
+        "select ${1:columns}",
+        "from ${2:table_name}",
+        "where ${3:filter_expression}",
+        "order by ${4:sort_column} ${5|asc,desc|};"
+      ].join("\n")
+    },
+    {
+      id: "join-query",
+      label: "Join Query",
+      description: "Template for joining two relations.",
+      snippet: [
+        "select ${1:left_alias}.*, ${2:right_alias}.*",
+        "from ${3:left_table} ${1:left_alias}",
+        "join ${4:right_table} ${2:right_alias}",
+        "  on ${5:join_condition};"
+      ].join("\n")
+    },
+    {
+      id: "cte-query",
+      label: "CTE Query",
+      description: "Template for a common table expression.",
+      snippet: [
+        "with ${1:base} as (",
+        "  select ${2:columns}",
+        "  from ${3:table_name}",
+        ")",
+        "select *",
+        "from ${1:base};"
+      ].join("\n")
+    },
+    {
+      id: "insert-row",
+      label: "Insert Row",
+      description: "Template for inserting a single row.",
+      snippet: [
+        "insert into ${1:table_name} (${2:column_list})",
+        "values (${3:value_list});"
+      ].join("\n")
+    },
+    {
+      id: "update-row",
+      label: "Update Row",
+      description: "Template for updating rows with a predicate.",
+      snippet: [
+        "update ${1:table_name}",
+        "set ${2:column} = ${3:value}",
+        "where ${4:predicate};"
+      ].join("\n")
+    },
+    {
+      id: "delete-row",
+      label: "Delete Row",
+      description: "Template for deleting rows with a predicate.",
+      snippet: [
+        "delete from ${1:table_name}",
+        "where ${2:predicate};"
+      ].join("\n")
+    }
+  ];
+}
+
+// src/services/sqlFormattingService.ts
+function sqlFormatterDialect(connection) {
+  if (connection?.type === "redshift") {
+    return "redshift";
+  }
+  if (connection?.type === "mysql") {
+    return "mysql";
+  }
+  return "postgresql";
+}
+async function formatSqlText(sql, dialect) {
+  if (!sql.trim()) {
+    return sql;
+  }
+  const { format } = await loadSqlFormatter();
+  return format(sql, {
+    language: dialect,
+    tabWidth: 2
+  });
+}
+var sqlFormatterRuntime;
+function loadSqlFormatter() {
+  sqlFormatterRuntime ??= import("sql-formatter").then((module2) => {
+    const candidate = module2;
+    return "format" in candidate ? candidate : candidate.default;
+  });
+  return sqlFormatterRuntime;
+}
+
+// src/services/tableCopyService.ts
+function buildTableCopyPreview(sourceSchema, sourceTable, targetSchema, targetTable, columns, rows, sourceLabel, targetLabel) {
+  if (!columns.length) {
+    throw new Error("No table columns were found to copy.");
+  }
+  const columnNames = columns.map((column) => column.name);
+  const warnings = [
+    sourceLabel ? `Source connection: ${sourceLabel}` : void 0,
+    targetLabel ? `Target connection: ${targetLabel}` : void 0,
+    rows.length === 0 ? "No data rows were found; only the table structure will be copied." : void 0,
+    rows.length > 5e3 ? `Copy preview includes ${rows.length.toLocaleString()} rows.` : void 0
+  ].filter(Boolean);
+  const ddl = buildCreateTableSql2(targetSchema, targetTable, columns);
+  const inserts = chunk(rows, 100).map((batch) => buildInsertBatch(targetSchema, targetTable, columnNames, batch));
+  return {
+    sourceRowCount: rows.length,
+    targetSchema,
+    targetTable,
+    sql: [
+      `-- Source table: ${qualifiedName(sourceSchema, sourceTable)}`,
+      `-- Target table: ${qualifiedName(targetSchema, targetTable)}`,
+      ...warnings.map((warning) => `-- ${warning}`),
+      "",
+      ddl,
+      "",
+      ...inserts
+    ].join("\n"),
+    warnings
+  };
+}
+function buildCreateTableSql2(schema, table, columns) {
+  const lines = columns.map((column) => {
+    const nullable = column.nullable ? "" : " not null";
+    const defaultValue = column.defaultValue ? ` default ${column.defaultValue}` : "";
+    return `  ${quoteIdentifier(column.name)} ${column.dataType}${defaultValue}${nullable}`;
+  });
+  return `create table ${qualifiedName(schema, table)} (
+${lines.join(",\n")}
+);`;
+}
+function buildInsertBatch(schema, table, columns, rows) {
+  return `insert into ${qualifiedName(schema, table)} (${columns.map(quoteIdentifier).join(", ")})
+values
+${rows.map((row) => `  (${columns.map((column) => formatLiteral2(row[column])).join(", ")})`).join(",\n")};`;
+}
+function formatLiteral2(value) {
+  if (value === null || value === void 0) {
+    return "null";
+  }
+  if (typeof value === "number" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (value instanceof Date) {
+    return `'${value.toISOString().replace(/'/g, "''")}'`;
+  }
+  if (typeof value === "object") {
+    return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
+  }
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+function chunk(items, size) {
+  const result = [];
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size));
+  }
+  return result;
+}
+
+// src/services/tableImportService.ts
+function buildTableImportPreview(schema, table, tableColumns, fileName, text) {
+  const kind = fileName.toLowerCase().endsWith(".json") ? "json" : "csv";
+  const source = kind === "json" ? parseJsonSource(text) : parseCsvSource(text);
+  const targetColumns = tableColumns.map((column) => column.name);
+  const mapping = inferMapping(source.columns, targetColumns);
+  if (!mapping.length) {
+    throw new Error("Could not map any source fields to table columns.");
+  }
+  const mappedTargets = unique(mapping.map((item) => item.target));
+  const rows = source.rows.map((row) => {
+    const next = {};
+    for (const item of mapping) {
+      next[item.target] = row[item.source];
+    }
+    return next;
+  }).filter((row) => Object.keys(row).length > 0);
+  if (!rows.length) {
+    throw new Error("No import rows were found.");
+  }
+  const batches = chunk2(rows, 100).map((batch) => buildInsertBatch2(schema, table, mappedTargets, batch));
+  const warnings = [
+    ...source.warnings,
+    ...mappingWarnings(source.columns, targetColumns, mapping)
+  ];
+  return {
+    kind,
+    rowCount: rows.length,
+    columns: source.columns,
+    mapping,
+    warnings,
+    sql: batches.join("\n")
+  };
+}
+function parseJsonSource(text) {
+  const parsed = JSON.parse(text);
+  if (!Array.isArray(parsed)) {
+    throw new Error("JSON import expects an array of objects.");
+  }
+  const rows = parsed.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error("JSON import expects an array of objects.");
+    }
+    return item;
+  });
+  const columns = unique(rows.flatMap((row) => Object.keys(row)));
+  return { columns, rows, warnings: [] };
+}
+function parseCsvSource(text) {
+  const rows = parseCsv(text);
+  if (!rows.length) {
+    throw new Error("CSV file is empty.");
+  }
+  const [header, ...dataRows] = rows;
+  const columns = header.map((value, index) => value || `column_${index + 1}`);
+  return {
+    columns,
+    rows: dataRows.map((row) => Object.fromEntries(columns.map((column, index) => [column, parseScalar2(row[index] ?? "")]))),
+    warnings: []
+  };
+}
+function parseCsv(text) {
+  const rows = [];
+  let currentRow = [];
+  let currentValue = "";
+  let inQuotes = false;
+  const pushValue = () => {
+    currentRow.push(currentValue);
+    currentValue = "";
+  };
+  const pushRow = () => {
+    if (currentRow.length || currentValue.length) {
+      if (currentValue.length || inQuotes) {
+        pushValue();
+      }
+      rows.push(currentRow);
+      currentRow = [];
+    }
+    currentValue = "";
+  };
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (inQuotes) {
+      if (char === '"') {
+        if (next === '"') {
+          currentValue += '"';
+          index += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        currentValue += char;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inQuotes = true;
+      continue;
+    }
+    if (char === ",") {
+      pushValue();
+      continue;
+    }
+    if (char === "\n") {
+      pushValue();
+      pushRow();
+      continue;
+    }
+    if (char === "\r") {
+      continue;
+    }
+    currentValue += char;
+  }
+  if (currentValue.length || currentRow.length) {
+    pushValue();
+    rows.push(currentRow);
+  }
+  return rows.filter((row) => row.some((value) => value.length > 0));
+}
+function inferMapping(sourceColumns, targetColumns) {
+  const targetLookup = new Map(targetColumns.map((column) => [column.toLowerCase(), column]));
+  const usedTargets = /* @__PURE__ */ new Set();
+  const mapping = [];
+  for (const source of sourceColumns) {
+    const exact = targetLookup.get(source.toLowerCase());
+    if (exact && !usedTargets.has(exact)) {
+      mapping.push({ source, target: exact });
+      usedTargets.add(exact);
+    }
+  }
+  if (mapping.length && mapping.length < sourceColumns.length) {
+    for (const source of sourceColumns) {
+      if (mapping.some((item) => item.source === source)) {
+        continue;
+      }
+      const fallback = targetColumns.find((column) => !usedTargets.has(column));
+      if (!fallback) {
+        break;
+      }
+      mapping.push({ source, target: fallback });
+      usedTargets.add(fallback);
+    }
+  } else if (!mapping.length) {
+    sourceColumns.forEach((source, index) => {
+      const target = targetColumns[index];
+      if (target) {
+        mapping.push({ source, target });
+        usedTargets.add(target);
+      }
+    });
+  }
+  return mapping;
+}
+function mappingWarnings(sourceColumns, targetColumns, mapping) {
+  const unmatchedSource = sourceColumns.filter((source) => !mapping.some((item) => item.source === source));
+  const unusedTargets = targetColumns.filter((target) => !mapping.some((item) => item.target === target));
+  const warnings = [];
+  if (unmatchedSource.length) {
+    warnings.push(`Skipped source columns: ${unmatchedSource.join(", ")}.`);
+  }
+  if (unusedTargets.length) {
+    warnings.push(`Target columns left unmapped: ${unusedTargets.join(", ")}.`);
+  }
+  return warnings;
+}
+function buildInsertBatch2(schema, table, columns, rows) {
+  return `insert into ${qualifiedName(schema, table)} (${columns.map(quoteIdentifier).join(", ")})
+values
+${rows.map((row) => `  (${columns.map((column) => formatLiteral3(row[column])).join(", ")})`).join(",\n")};`;
+}
+function formatLiteral3(value) {
+  if (value === null || value === void 0) {
+    return "null";
+  }
+  if (typeof value === "number" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (value instanceof Date) {
+    return `'${value.toISOString().replace(/'/g, "''")}'`;
+  }
+  if (typeof value === "object") {
+    return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
+  }
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+function parseScalar2(text) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/^null$/i.test(trimmed)) {
+    return null;
+  }
+  if (/^true$/i.test(trimmed)) {
+    return true;
+  }
+  if (/^false$/i.test(trimmed)) {
+    return false;
+  }
+  if (/^-?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?$/i.test(trimmed)) {
+    const next = Number(trimmed);
+    return Number.isFinite(next) ? next : trimmed;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+function chunk2(items, size) {
+  const result = [];
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size));
+  }
+  return result;
+}
+function unique(values) {
+  return [...new Set(values)];
+}
+
+// src/webviews/session/SessionMonitorPanel.ts
 var vscode19 = __toESM(require("vscode"));
+var SessionMonitorPanel = class {
+  static async open(context, connectionManager, connection) {
+    const panel = vscode19.window.createWebviewPanel(
+      "databaseSessionMonitor",
+      `Sessions: ${connection.name}`,
+      vscode19.ViewColumn.Active,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true
+      }
+    );
+    panel.iconPath = vscode19.Uri.joinPath(context.extensionUri, "media", "database.svg");
+    panel.webview.html = this.html(panel.webview, connection);
+    panel.webview.onDidReceiveMessage(async (message) => {
+      if (message.type === "ready" || message.type === "refresh") {
+        await this.postState(panel, connectionManager, connection);
+        return;
+      }
+      if (message.type === "cancel" && typeof message.pid === "number") {
+        await connectionManager.getDriver(connection.type).cancelSession(connection.id, message.pid);
+        await this.postState(panel, connectionManager, connection);
+        return;
+      }
+      if (message.type === "terminate" && typeof message.pid === "number") {
+        const confirmed = await vscode19.window.showWarningMessage(
+          `Terminate session ${message.pid} on ${connection.name}?`,
+          { modal: true },
+          "Terminate"
+        );
+        if (confirmed === "Terminate") {
+          await connectionManager.getDriver(connection.type).terminateSession(connection.id, message.pid);
+          await this.postState(panel, connectionManager, connection);
+        }
+      }
+    });
+  }
+  static async postState(panel, connectionManager, connection) {
+    try {
+      if (!connectionManager.isConnected(connection.id)) {
+        await connectionManager.connect(connection.id);
+      }
+      const sessions = await connectionManager.getDriver(connection.type).getActiveSessions(connection.id);
+      await panel.webview.postMessage({
+        type: "state",
+        sessions,
+        connection: {
+          name: connection.name,
+          type: connection.type,
+          host: connection.host,
+          database: connection.database
+        }
+      });
+    } catch (error) {
+      await panel.webview.postMessage({
+        type: "error",
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  static html(webview, connection) {
+    const nonce = Date.now().toString();
+    const title = `${connection.name} sessions`;
+    return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg-main: var(--vscode-editor-background);
+      --bg-panel: var(--vscode-sideBar-background);
+      --bg-row: var(--vscode-editorWidget-background);
+      --border: var(--vscode-panel-border);
+      --text-main: var(--vscode-editor-foreground);
+      --text-muted: var(--vscode-descriptionForeground);
+      font-family: var(--vscode-font-family);
+      font-size: 13px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--text-main);
+      background: var(--bg-main);
+      font-family: var(--vscode-font-family);
+    }
+    .shell {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      height: 100vh;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+    }
+    .toolbar button {
+      border: 1px solid var(--border);
+      background: var(--bg-row);
+      color: var(--text-main);
+      padding: 4px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .toolbar button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .meta {
+      padding: 8px 12px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    thead th, tbody td {
+      border-bottom: 1px solid var(--border);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+    }
+    thead th {
+      position: sticky;
+      top: 0;
+      background: var(--bg-panel);
+      z-index: 1;
+    }
+    tbody tr:hover {
+      background: color-mix(in srgb, var(--vscode-list-hoverBackground) 80%, transparent);
+    }
+    .muted { color: var(--text-muted); }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--bg-row);
+      border: 1px solid var(--border);
+      font-size: 11px;
+    }
+    .error {
+      padding: 12px;
+      color: var(--vscode-errorForeground);
+    }
+    .query {
+      font-family: var(--vscode-editor-font-family);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="toolbar">
+      <button id="refresh">Refresh</button>
+      <span class="pill">${connection.name}</span>
+      <span class="muted">${connection.type} \u2022 ${connection.host}</span>
+    </div>
+    <div id="meta" class="meta">Loading sessions...</div>
+    <div id="body"></div>
+  </div>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    const body = document.getElementById('body');
+    const meta = document.getElementById('meta');
+    document.getElementById('refresh').addEventListener('click', () => vscode.postMessage({ type: 'refresh' }));
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;');
+    }
+    function render(sessions) {
+      if (!sessions.length) {
+        body.innerHTML = '<div class="error">No active sessions were returned.</div>';
+        meta.textContent = '0 sessions';
+        return;
+      }
+      meta.textContent = sessions.length + ' sessions';
+      body.innerHTML = '<table>'
+        + '<thead><tr><th>PID</th><th>User</th><th>State</th><th>Client</th><th>Age</th><th>Query</th><th>Actions</th></tr></thead>'
+        + '<tbody>'
+        + sessions.map(function(session) {
+          return '<tr>'
+            + '<td>' + session.pid + (session.isCurrent ? ' <span class="pill">current</span>' : '') + '</td>'
+            + '<td>' + escapeHtml(session.user || '') + '<div class="muted">' + escapeHtml(session.application || '') + '</div></td>'
+            + '<td>' + escapeHtml(session.state || '') + (session.isIdleInTransaction ? '<div class="pill">idle in tx</div>' : '') + '</td>'
+            + '<td>' + escapeHtml(session.client || '') + '</td>'
+            + '<td>' + escapeHtml(relativeTime(session.startedAt)) + '</td>'
+            + '<td><div class="query">' + escapeHtml(session.query || '') + '</div></td>'
+            + '<td>'
+            + '<button data-cancel="' + session.pid + '" ' + (session.isCurrent ? 'disabled' : '') + '>Cancel</button>'
+            + ' <button data-terminate="' + session.pid + '" ' + (session.isCurrent ? 'disabled' : '') + '>Terminate</button>'
+            + '</td>'
+            + '</tr>';
+        }).join('')
+        + '</tbody></table>';
+      body.querySelectorAll('[data-cancel]').forEach((button) => {
+        button.addEventListener('click', () => vscode.postMessage({ type: 'cancel', pid: Number(button.getAttribute('data-cancel')) }));
+      });
+      body.querySelectorAll('[data-terminate]').forEach((button) => {
+        button.addEventListener('click', () => vscode.postMessage({ type: 'terminate', pid: Number(button.getAttribute('data-terminate')) }));
+      });
+    }
+    function relativeTime(value) {
+      if (!value) return '';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      const diff = Date.now() - date.getTime();
+      const minutes = Math.round(diff / 60000);
+      if (Math.abs(minutes) < 1) return 'now';
+      if (Math.abs(minutes) < 60) return minutes + 'm ago';
+      const hours = Math.round(minutes / 60);
+      if (Math.abs(hours) < 24) return hours + 'h ago';
+      const days = Math.round(hours / 24);
+      return days + 'd ago';
+    }
+    window.addEventListener('message', (event) => {
+      if (event.data?.type === 'error') {
+        body.innerHTML = '<div class="error">' + escapeHtml(event.data.message || 'Failed to load sessions') + '</div>';
+        meta.textContent = 'error';
+        return;
+      }
+      if (event.data?.type === 'state') {
+        render(event.data.sessions || []);
+      }
+    });
+    vscode.postMessage({ type: 'ready' });
+  </script>
+</body>
+</html>`;
+  }
+};
+
+// src/webviews/erDiagram/ErDiagramPanel.ts
+var vscode20 = __toESM(require("vscode"));
+var ErDiagramPanel = class {
+  static async open(context, report) {
+    const panel = vscode20.window.createWebviewPanel(
+      "databaseErDiagram",
+      `ER Diagram: ${report.schemaName}`,
+      vscode20.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true }
+    );
+    panel.iconPath = vscode20.Uri.joinPath(context.extensionUri, "media", "database.svg");
+    panel.webview.html = this.html(panel.webview, report);
+  }
+  static html(webview, report) {
+    const nonce = Date.now().toString();
+    const data = JSON.stringify(report).replace(/</g, "\\u003c");
+    return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ER Diagram</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg-main: var(--vscode-editor-background);
+      --bg-panel: var(--vscode-sideBar-background);
+      --bg-elevated: var(--vscode-dropdown-background);
+      --bg-hover: var(--vscode-list-hoverBackground);
+      --bg-active: var(--vscode-list-activeSelectionBackground);
+      --border: var(--vscode-panel-border);
+      --text-main: var(--vscode-foreground);
+      --text-muted: var(--vscode-descriptionForeground);
+      --accent: var(--vscode-focusBorder);
+      --success: var(--vscode-testing-iconPassed);
+      --warning: var(--vscode-charts-orange);
+      --space-xs: .35rem;
+      --space-sm: .5rem;
+      --space-md: .75rem;
+      --space-lg: 1rem;
+      --radius-sm: .35rem;
+      --radius-md: .5rem;
+      --card-width: 18rem;
+      --card-min-height: 9rem;
+      font-family: var(--vscode-font-family);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg-main);
+      color: var(--text-main);
+      overflow: hidden;
+    }
+    .shell {
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-md);
+      padding: var(--space-sm) var(--space-md);
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-panel);
+    }
+    h1 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .meta {
+      display: flex;
+      gap: var(--space-sm);
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .stats {
+      display: flex;
+      gap: var(--space-sm);
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .pill {
+      padding: .2rem .55rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--bg-elevated);
+      color: var(--text-main);
+    }
+    .viewport {
+      position: relative;
+      min-height: 0;
+      overflow: auto;
+      padding: var(--space-lg);
+    }
+    .canvas {
+      position: relative;
+      min-width: max-content;
+      min-height: max-content;
+    }
+    .diagram-grid {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(var(--card-width), 1fr));
+      gap: var(--space-md);
+      align-items: start;
+      width: max(100%, 56rem);
+    }
+    .table-card {
+      position: relative;
+      min-height: var(--card-min-height);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: color-mix(in srgb, var(--bg-panel) 82%, transparent);
+      box-shadow: 0 .35rem .9rem color-mix(in srgb, black 18%, transparent);
+      overflow: hidden;
+    }
+    .table-head {
+      display: flex;
+      justify-content: space-between;
+      gap: var(--space-sm);
+      align-items: flex-start;
+      padding: var(--space-sm) var(--space-md);
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+    }
+    .table-name {
+      min-width: 0;
+    }
+    .table-name strong {
+      display: block;
+      font-size: 1rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .table-name span {
+      display: block;
+      color: var(--text-muted);
+      font-size: .85em;
+    }
+    .pk-badge {
+      flex: 0 0 auto;
+      padding: .18rem .45rem;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--success) 15%, transparent);
+      color: var(--success);
+      border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
+      font-size: .82em;
+      white-space: nowrap;
+    }
+    .column-list {
+      margin: 0;
+      padding: var(--space-sm) var(--space-md) var(--space-md);
+      list-style: none;
+      display: grid;
+      gap: .22rem;
+    }
+    .column {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: var(--space-xs);
+      align-items: center;
+      padding: .12rem 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 35%, transparent);
+    }
+    .column:last-child { border-bottom: 0; }
+    .column-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .column-meta {
+      color: var(--text-muted);
+      font-size: .82em;
+      white-space: nowrap;
+    }
+    .column.primary .column-name::before {
+      content: 'PK ';
+      color: var(--success);
+      font-weight: 600;
+    }
+    .relations {
+      display: grid;
+      gap: .3rem;
+      padding: 0 var(--space-md) var(--space-md);
+      color: var(--text-muted);
+      font-size: .84em;
+    }
+    .relation {
+      padding: .2rem .35rem;
+      border-radius: var(--radius-sm);
+      background: color-mix(in srgb, var(--bg-main) 82%, transparent);
+      border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+    }
+    .relation strong {
+      color: var(--text-main);
+    }
+    svg.overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      overflow: visible;
+    }
+    .legend {
+      color: var(--text-muted);
+      font-size: .85em;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <h1>${escapeHtml(report.connectionName)} ER Diagram</h1>
+        <div class="legend">${escapeHtml(report.schemaName)} schema</div>
+      </div>
+      <div class="stats">
+        <span class="pill">${report.tables.length.toLocaleString()} tables</span>
+        <span class="pill">${report.relations.length.toLocaleString()} relationships</span>
+      </div>
+    </header>
+    <div class="viewport">
+      <div class="canvas">
+        <svg class="overlay" aria-hidden="true">
+          <defs>
+            <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"></path>
+            </marker>
+          </defs>
+        </svg>
+        <div id="grid" class="diagram-grid"></div>
+      </div>
+    </div>
+  </div>
+  <script nonce="${nonce}">
+    const data = ${data};
+    const grid = document.getElementById('grid');
+    const overlay = document.querySelector('svg.overlay');
+    grid.innerHTML = data.tables.map((table) => {
+      const columns = table.columns.map((column) => '<li class="column ' + (column.primary ? 'primary' : '') + '"><span class="column-name">' + escapeHtml(column.name) + '</span><span class="column-meta">' + escapeHtml(column.dataType + (column.nullable ? '' : ' not null')) + '</span></li>').join('');
+      const outgoing = table.outgoing.map((relation) => '<div class="relation"><strong>' + escapeHtml(relation.name) + '</strong> ' + escapeHtml(relation.fromColumns.join(', ')) + ' \u2192 ' + escapeHtml(relation.toTable) + '(' + escapeHtml(relation.toColumns.join(', ')) + ')</div>').join('');
+      return '<article class="table-card" data-table="' + escapeHtml(table.schema + '.' + table.name) + '">' +
+        '<div class="table-head">' +
+          '<div class="table-name"><strong>' + escapeHtml(table.name) + '</strong><span>' + escapeHtml(table.schema) + ' \u2022 ' + escapeHtml(table.type) + (table.rowEstimate ? ' \u2022 ~' + table.rowEstimate : '') + '</span></div>' +
+          (table.primaryKeys.length ? '<span class="pk-badge">PK ' + escapeHtml(table.primaryKeys.join(', ')) + '</span>' : '<span class="pk-badge" style="opacity:.7">No PK</span>') +
+        '</div>' +
+        '<ol class="column-list">' + columns + '</ol>' +
+        (outgoing ? '<div class="relations">' + outgoing + '</div>' : '') +
+      '</article>';
+    }).join('');
+
+    function draw() {
+      overlay.setAttribute('viewBox', '0 0 ' + grid.scrollWidth + ' ' + grid.scrollHeight);
+      overlay.innerHTML = '<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"></path></marker></defs>';
+      const cards = new Map([...document.querySelectorAll('.table-card')].map((element) => [element.getAttribute('data-table'), element]));
+      for (const relation of data.relations) {
+        const from = cards.get(relation.fromSchema + '.' + relation.fromTable);
+        const to = cards.get(relation.toSchema + '.' + relation.toTable);
+        if (!from || !to) continue;
+        const fromRect = from.getBoundingClientRect();
+        const toRect = to.getBoundingClientRect();
+        const gridRect = grid.getBoundingClientRect();
+        const fromX = fromRect.right - gridRect.left + grid.scrollLeft;
+        const toX = toRect.left - gridRect.left + grid.scrollLeft;
+        const fromY = fromRect.top - gridRect.top + fromRect.height / 2 + grid.scrollTop;
+        const toY = toRect.top - gridRect.top + toRect.height / 2 + grid.scrollTop;
+        const startX = fromX < toX ? fromRect.right - gridRect.left + grid.scrollLeft : fromRect.left - gridRect.left + grid.scrollLeft;
+        const endX = fromX < toX ? toRect.left - gridRect.left + grid.scrollLeft : toRect.right - gridRect.left + grid.scrollLeft;
+        const midX = (startX + endX) / 2;
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', 'M ' + startX + ' ' + fromY + ' L ' + midX + ' ' + fromY + ' L ' + midX + ' ' + toY + ' L ' + endX + ' ' + toY);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke', 'var(--accent)');
+        path.setAttribute('stroke-width', '1.6');
+        path.setAttribute('stroke-opacity', '0.9');
+        path.setAttribute('marker-end', 'url(#arrow)');
+        overlay.appendChild(path);
+      }
+    }
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+    window.addEventListener('resize', draw);
+    grid.addEventListener('scroll', draw, { passive: true });
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>`;
+  }
+};
+function escapeHtml(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+// src/webviews/connection/ConnectionEditorPanel.ts
+var vscode21 = __toESM(require("vscode"));
 var ConnectionEditorPanel = class _ConnectionEditorPanel {
   constructor(panel, connectionManager, existing, resolve) {
     this.panel = panel;
@@ -10695,10 +8255,10 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
   }
   static async open(context, connectionManager, existing) {
     return new Promise((resolve) => {
-      const panel = vscode19.window.createWebviewPanel(
+      const panel = vscode21.window.createWebviewPanel(
         "databaseConnectionEditor",
         existing ? `Edit ${existing.name}` : "Add Database Connection",
-        vscode19.ViewColumn.Active,
+        vscode21.ViewColumn.Active,
         { enableScripts: true, retainContextWhenHidden: true }
       );
       const editor = new _ConnectionEditorPanel(panel, connectionManager, existing, resolve);
@@ -10780,34 +8340,61 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       connectTimeoutMs: toOptionalNumber(form.connectTimeoutMs),
       queryTimeoutMs: toOptionalNumber(form.queryTimeoutMs),
       production: form.production === true,
-      readOnlyDefault: form.readOnlyDefault === true
+      readOnlyDefault: form.readOnlyDefault === true,
+      sshTunnel: this.sshTunnelFromForm(form)
+    };
+  }
+  sshTunnelFromForm(form) {
+    if (form.sshTunnelEnabled !== true) {
+      return void 0;
+    }
+    const host = form.sshTunnelHost?.trim() || "";
+    const username = form.sshTunnelUser?.trim() || "";
+    if (!host || !username) {
+      throw new Error("SSH tunnel requires a bastion host and username.");
+    }
+    return {
+      enabled: true,
+      host,
+      port: toOptionalNumber(form.sshTunnelPort),
+      username,
+      privateKeyPath: form.sshTunnelKeyPath?.trim() || void 0,
+      localHost: form.sshTunnelLocalHost?.trim() || void 0,
+      localPort: toOptionalNumber(form.sshTunnelLocalPort)
     };
   }
   toForm(connection) {
-    const defaults2 = connectionDefaultsForType(connection?.type ?? "postgres");
+    const defaults = connectionDefaultsForType(connection?.type ?? "postgres");
     return {
       id: connection?.id,
-      name: connection?.name ?? defaults2.name,
+      name: connection?.name ?? defaults.name,
       type: connection?.type ?? "postgres",
       host: connection?.host ?? "localhost",
-      port: String(connection?.port ?? defaults2.port),
-      database: connection?.database ?? defaults2.database,
+      port: String(connection?.port ?? defaults.port),
+      database: connection?.database ?? defaults.database,
       username: connection?.username ?? "",
       password: "",
-      sslMode: connection?.sslMode ?? defaults2.sslMode,
+      sslMode: connection?.sslMode ?? defaults.sslMode,
       defaultSchema: connection?.defaultSchema ?? "public",
-      color: connection?.color ?? defaults2.color,
+      color: connection?.color ?? defaults.color,
       connectTimeoutMs: connection?.connectTimeoutMs ? String(connection.connectTimeoutMs) : "",
-      queryTimeoutMs: connection?.queryTimeoutMs ? String(connection.queryTimeoutMs) : String(vscode19.workspace.getConfiguration("database").get("query.timeoutMs", 3e5)),
+      queryTimeoutMs: connection?.queryTimeoutMs ? String(connection.queryTimeoutMs) : String(vscode21.workspace.getConfiguration("database").get("query.timeoutMs", 3e5)),
       production: connection?.production ?? false,
-      readOnlyDefault: connection?.readOnlyDefault ?? false
+      readOnlyDefault: connection?.readOnlyDefault ?? false,
+      sshTunnelEnabled: connection?.sshTunnel?.enabled ?? false,
+      sshTunnelHost: connection?.sshTunnel?.host ?? "",
+      sshTunnelPort: connection?.sshTunnel?.port ? String(connection.sshTunnel.port) : "22",
+      sshTunnelUser: connection?.sshTunnel?.username ?? "",
+      sshTunnelKeyPath: connection?.sshTunnel?.privateKeyPath ?? "",
+      sshTunnelLocalHost: connection?.sshTunnel?.localHost ?? "127.0.0.1",
+      sshTunnelLocalPort: connection?.sshTunnel?.localPort ? String(connection.sshTunnel.localPort) : ""
     };
   }
   html(webview, form) {
     const nonce = getNonce();
     const data = JSON.stringify(form).replace(/</g, "\\u003c");
     const connections = JSON.stringify(this.connectionManager.getConnections()).replace(/</g, "\\u003c");
-    const defaults2 = JSON.stringify(DEFAULTS_BY_DATABASE_TYPE).replace(/</g, "\\u003c");
+    const defaults = JSON.stringify(DEFAULTS_BY_DATABASE_TYPE).replace(/</g, "\\u003c");
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -11323,6 +8910,7 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
             <select name="type" id="typeField" aria-label="Database type">
               <option value="postgres">PostgreSQL</option>
               <option value="redshift">Amazon Redshift</option>
+              <option value="mysql">MySQL</option>
             </select>
             <span class="field-label">Color:</span>
             <select name="color" aria-label="Connection color">
@@ -11346,6 +8934,7 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
               <div class="segment full-row" role="group" aria-label="Connection type">
                 <button type="button" data-db-type="postgres">default</button>
                 <button type="button" data-db-type="redshift">IAM cluster/region</button>
+                <button type="button" data-db-type="mysql">MySQL</button>
               </div>
               <span class="field-label">Host:</span>
               <div class="inline-row full-row">
@@ -11378,6 +8967,22 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
           </div>
           <div class="tab-panel" data-panel="ssh">
             <div class="advanced-grid">
+              <span class="field-label">SSH tunnel:</span>
+              <label class="check"><input name="sshTunnelEnabled" type="checkbox">Use SSH tunnel</label>
+              <span class="field-label">Bastion host:</span>
+              <div class="inline-row full-row">
+                <input name="sshTunnelHost" autocomplete="off" aria-label="SSH tunnel host">
+                <input name="sshTunnelPort" inputmode="numeric" aria-label="SSH tunnel port">
+              </div>
+              <span class="field-label">Bastion user:</span>
+              <input class="full-row" name="sshTunnelUser" autocomplete="off" aria-label="SSH tunnel username">
+              <span class="field-label">Private key:</span>
+              <input class="full-row" name="sshTunnelKeyPath" autocomplete="off" aria-label="SSH private key path">
+              <span class="field-label">Local bind:</span>
+              <div class="inline-row full-row">
+                <input name="sshTunnelLocalHost" autocomplete="off" aria-label="SSH tunnel local host">
+                <input name="sshTunnelLocalPort" inputmode="numeric" aria-label="SSH tunnel local port">
+              </div>
               <span class="field-label">SSL mode:</span>
               <select name="sslMode" aria-label="SSL mode"><option>disable</option><option>prefer</option><option>require</option></select>
             </div>
@@ -11404,7 +9009,7 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
     const vscode = acquireVsCodeApi();
     const formData = ${data};
     const allConnections = ${connections};
-    const defaultsByType = ${defaults2};
+    const defaultsByType = ${defaults};
     const form = document.getElementById('form');
     const connectionList = allConnections.map((connection) => ({ ...connection }));
     let selectedId = formData.id ?? (connectionList[0]?.id || 'new');
@@ -11459,7 +9064,14 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
         password: '',
         sslMode: defaultsByType[form.elements.namedItem('type').value || 'postgres'].sslMode,
         defaultSchema: 'public',
-        color: defaultsByType[form.elements.namedItem('type').value || 'postgres'].color
+        color: defaultsByType[form.elements.namedItem('type').value || 'postgres'].color,
+        sshTunnelEnabled: false,
+        sshTunnelHost: '',
+        sshTunnelPort: '22',
+        sshTunnelUser: '',
+        sshTunnelKeyPath: '',
+        sshTunnelLocalHost: '127.0.0.1',
+        sshTunnelLocalPort: ''
       };
       for (const [key, value] of Object.entries(next)) {
         const field = form.elements.namedItem(key);
@@ -11486,7 +9098,14 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
           password: '',
           sslMode: defaultsByType[typeField.value || 'postgres'].sslMode,
           defaultSchema: 'public',
-          color: defaultsByType[typeField.value || 'postgres'].color
+          color: defaultsByType[typeField.value || 'postgres'].color,
+          sshTunnelEnabled: false,
+          sshTunnelHost: '',
+          sshTunnelPort: '22',
+          sshTunnelUser: '',
+          sshTunnelKeyPath: '',
+          sshTunnelLocalHost: '127.0.0.1',
+          sshTunnelLocalPort: ''
         });
         return;
       }
@@ -11494,7 +9113,14 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       if (existing) {
         loadConnection({
           ...existing,
-          password: ''
+          password: '',
+          sshTunnelEnabled: existing.sshTunnel?.enabled ?? false,
+          sshTunnelHost: existing.sshTunnel?.host ?? '',
+          sshTunnelPort: existing.sshTunnel?.port ? String(existing.sshTunnel.port) : '22',
+          sshTunnelUser: existing.sshTunnel?.username ?? '',
+          sshTunnelKeyPath: existing.sshTunnel?.privateKeyPath ?? '',
+          sshTunnelLocalHost: existing.sshTunnel?.localHost ?? '127.0.0.1',
+          sshTunnelLocalPort: existing.sshTunnel?.localPort ? String(existing.sshTunnel.localPort) : ''
         });
       }
     }
@@ -11505,7 +9131,7 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       const port = form.elements.namedItem('port').value || '';
       const database = form.elements.namedItem('database').value || 'database';
       sourceName.textContent = name;
-      urlPreview.value = 'jdbc:' + (type === 'redshift' ? 'redshift' : 'postgresql') + '://' + host + (port ? ':' + port : '') + '/' + database;
+      urlPreview.value = 'jdbc:' + (type === 'redshift' ? 'redshift' : type === 'mysql' ? 'mysql' : 'postgresql') + '://' + host + (port ? ':' + port : '') + '/' + database;
       typeButtons.forEach((button) => button.classList.toggle('active', button.dataset.dbType === type));
       renderSourceList();
     }
@@ -11621,7 +9247,7 @@ function getNonce() {
 }
 
 // src/webviews/queryMap/QueryMapProvider.ts
-var vscode20 = __toESM(require("vscode"));
+var vscode22 = __toESM(require("vscode"));
 var PROJECT_SQL_SESSION_PREFIX = "project-sql:";
 var QueryMapProvider = class {
   constructor(sectionService, revealSection, runSection, getHistoryItems, openHistoryItem, setConsolePinned, untrackConsole, moveConsole, touchConsoleDocument, updateHistoryItem, deleteHistoryItem, clearActiveSessions, clearHistoryItems, refreshData) {
@@ -11719,7 +9345,7 @@ var QueryMapProvider = class {
   }
   documentTitle(documentUri) {
     try {
-      const uri = vscode20.Uri.parse(documentUri);
+      const uri = vscode22.Uri.parse(documentUri);
       return uri.fsPath.split(/[\\/]/).pop() || uri.toString();
     } catch {
       return documentUri.split(/[\\/]/).pop() || documentUri;
@@ -11739,7 +9365,7 @@ var QueryMapProvider = class {
       return;
     }
     if (message.type === "newConsole") {
-      await vscode20.commands.executeCommand("database.openSqlConsole");
+      await vscode22.commands.executeCommand("database.openSqlConsole");
       return;
     }
     if (message.type === "clearActiveSessions") {
@@ -11747,7 +9373,7 @@ var QueryMapProvider = class {
       if (!ids.length) {
         return;
       }
-      const answer = await vscode20.window.showWarningMessage("Clear active query sessions?", { modal: true }, "Clear");
+      const answer = await vscode22.window.showWarningMessage("Clear active query sessions?", { modal: true }, "Clear");
       if (answer === "Clear") {
         await this.clearActiveSessions(ids);
       }
@@ -11758,7 +9384,7 @@ var QueryMapProvider = class {
       if (!ids.length) {
         return;
       }
-      const answer = await vscode20.window.showWarningMessage("Clear console history?", { modal: true }, "Clear");
+      const answer = await vscode22.window.showWarningMessage("Clear console history?", { modal: true }, "Clear");
       if (answer === "Clear") {
         await this.clearHistoryItems(ids);
       }
@@ -11793,7 +9419,7 @@ var QueryMapProvider = class {
     if (message.type === "copyHistory") {
       const item = this.getHistoryItems().find((history) => history.id === message.historyId);
       if (item) {
-        await vscode20.env.clipboard.writeText(item.sql);
+        await vscode22.env.clipboard.writeText(item.sql);
       }
       return;
     }
@@ -11807,7 +9433,7 @@ var QueryMapProvider = class {
         await this.touchConsoleDocument(message.documentUri);
       } else if (opened2.missing) {
         await this.untrackConsole(message.consoleId);
-        void vscode20.window.showInformationMessage("SQL console file no longer exists. Removed it from Active Session.");
+        void vscode22.window.showInformationMessage("SQL console file no longer exists. Removed it from Active Session.");
       }
       return;
     }
@@ -11821,7 +9447,7 @@ var QueryMapProvider = class {
     const editor = opened.editor;
     const node = this.findNodeById(this.sectionService.getTree(editor.document), message.nodeId);
     if (!node || !node.sql.trim()) {
-      void vscode20.window.showInformationMessage("No SQL section to run.");
+      void vscode22.window.showInformationMessage("No SQL section to run.");
       return;
     }
     const section = this.toSectionNode(node);
@@ -11836,22 +9462,22 @@ var QueryMapProvider = class {
   }
   async openDocument(documentUri, options = {}) {
     try {
-      const document = await vscode20.workspace.openTextDocument(vscode20.Uri.parse(documentUri));
-      const editor = await vscode20.window.showTextDocument(document, { preview: false, viewColumn: vscode20.ViewColumn.Active });
+      const document = await vscode22.workspace.openTextDocument(vscode22.Uri.parse(documentUri));
+      const editor = await vscode22.window.showTextDocument(document, { preview: false, viewColumn: vscode22.ViewColumn.Active });
       return { editor, missing: false };
     } catch (error) {
       if (this.isFileNotFound(error)) {
         if (options.showMissingWarning !== false) {
-          void vscode20.window.showWarningMessage("Source SQL file no longer exists.");
+          void vscode22.window.showWarningMessage("Source SQL file no longer exists.");
         }
         return { missing: true };
       }
-      void vscode20.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+      void vscode22.window.showErrorMessage(error instanceof Error ? error.message : String(error));
       return { missing: false };
     }
   }
   isFileNotFound(error) {
-    const code = error instanceof vscode20.FileSystemError ? error.code : typeof error === "object" && error !== null ? error.code : void 0;
+    const code = error instanceof vscode22.FileSystemError ? error.code : typeof error === "object" && error !== null ? error.code : void 0;
     const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
     return code === "FileNotFound" || /\b(FileNotFound|ENOENT)\b/i.test(message);
   }
@@ -12824,15 +10450,18 @@ var QueryMapProvider = class {
 };
 
 // src/webviews/results/ResultsPanelProvider.ts
-var vscode21 = __toESM(require("vscode"));
+var vscode23 = __toESM(require("vscode"));
 var ResultsPanelProvider = class _ResultsPanelProvider {
-  constructor(context, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection) {
+  constructor(context, connectionManager, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection, onMutationRequest, onCompareRequest) {
     this.context = context;
+    this.connectionManager = connectionManager;
     this.sessionStore = sessionStore;
     this.executor = executor;
     this.revealSource = revealSource;
     this.onTabsChanged = onTabsChanged;
     this.runActiveEditorSelection = runActiveEditorSelection;
+    this.onMutationRequest = onMutationRequest;
+    this.onCompareRequest = onCompareRequest;
     this.tabs = this.sessionStore.getTabs();
     this.activeTabId = this.tabs[0]?.id;
     this.activeConnectionId = this.tabs.find((tab) => tab.id === this.activeTabId)?.connectionId;
@@ -12846,7 +10475,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
     this.view = webviewView;
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [vscode21.Uri.joinPath(this.context.extensionUri, "media", "results")]
+      localResourceRoots: [vscode23.Uri.joinPath(this.context.extensionUri, "media", "results")]
     };
     webviewView.webview.html = this.html(webviewView.webview);
     webviewView.webview.onDidReceiveMessage((message) => this.onMessage(message));
@@ -12855,7 +10484,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
     if (connectionId) {
       this.selectConnection(connectionId);
     }
-    await vscode21.commands.executeCommand(`${_ResultsPanelProvider.viewType}.focus`);
+    await vscode23.commands.executeCommand(`${_ResultsPanelProvider.viewType}.focus`);
     this.postHydrate();
   }
   setActiveConnection(connectionId) {
@@ -12891,6 +10520,9 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
   }
   getTab(id) {
     return this.tabs.find((tab) => tab.id === id);
+  }
+  getActiveTab() {
+    return this.getTab(this.activeTabId ?? "");
   }
   async onMessage(message) {
     if (message.type === "ready") {
@@ -12931,6 +10563,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
       const tab = this.getTab(message.tabId);
       if (tab) {
         const maxRows = typeof message.maxRows === "number" ? message.maxRows : message.maxRows === null ? void 0 : tab.maxRows;
+        const offset = typeof message.offset === "number" ? message.offset : message.offset === null ? 0 : tab.rowOffset ?? 0;
         if (await this.runActiveEditorSelection?.(maxRows)) {
           return;
         }
@@ -12943,6 +10576,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
           executionTimeMs: void 0,
           rowCount: void 0,
           maxRows,
+          rowOffset: offset,
           error: void 0,
           resultSets: [],
           activeResultSetIndex: 0,
@@ -12952,6 +10586,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
           connectionId: tab.connectionId,
           sql: tab.queryText,
           maxRows,
+          offset,
           source: {
             origin: tab.sourceOrigin,
             fileName: tab.sourceFile,
@@ -12964,15 +10599,53 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
       }
       return;
     }
+    if (message.type === "setTransactionMode") {
+      const tab = this.getTab(message.tabId);
+      if (tab) {
+        await this.applyTransactionMode(tab.connectionId, message.mode);
+      }
+      return;
+    }
+    if (message.type === "commitTransaction") {
+      const tab = this.getTab(message.tabId);
+      if (tab) {
+        await this.connectionManager.commitTransaction(tab.connectionId);
+        await this.syncTransactionState(tab.connectionId);
+      }
+      return;
+    }
+    if (message.type === "rollbackTransaction") {
+      const tab = this.getTab(message.tabId);
+      if (tab) {
+        await this.connectionManager.rollbackTransaction(tab.connectionId);
+        await this.syncTransactionState(tab.connectionId);
+      }
+      return;
+    }
     if (message.type === "copy") {
-      await vscode21.env.clipboard.writeText(message.text);
+      await vscode23.env.clipboard.writeText(message.text);
+      return;
+    }
+    if (message.type === "mutation") {
+      const tab = this.getTab(this.activeTabId ?? "");
+      if (tab) {
+        await this.onMutationRequest?.(tab, message);
+      }
+      return;
+    }
+    if (message.type === "compareTabs") {
+      const tab = this.getTab(this.activeTabId ?? "");
+      if (tab) {
+        await this.onCompareRequest?.(tab, message.resultSetIndex);
+      }
+      return;
     }
   }
   post(message) {
     void this.view?.webview.postMessage(message);
   }
   postHydrate() {
-    const tabs = this.visibleTabs();
+    const tabs = this.visibleTabs().map((tab) => this.withTransactionState(tab));
     this.post({ type: "hydrate", tabs, activeTabId: this.activeTabId && tabs.some((tab) => tab.id === this.activeTabId) ? this.activeTabId : tabs[0]?.id });
   }
   selectConnection(connectionId) {
@@ -12986,6 +10659,47 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
     }
     return this.tabs.filter((tab) => tab.connectionId === this.activeConnectionId);
   }
+  withTransactionState(tab) {
+    return {
+      ...tab,
+      transaction: {
+        mode: this.connectionManager.getTransactionMode(tab.connectionId),
+        open: this.connectionManager.isTransactionOpen(tab.connectionId)
+      }
+    };
+  }
+  async applyTransactionMode(connectionId, mode) {
+    this.connectionManager.setTransactionMode(connectionId, mode);
+    if (mode === "manual") {
+      if (!this.connectionManager.isTransactionOpen(connectionId)) {
+        await this.connectionManager.beginTransaction(connectionId);
+      }
+    } else if (this.connectionManager.isTransactionOpen(connectionId)) {
+      const answer = await vscode23.window.showWarningMessage(
+        "Switching to auto-commit will close the current transaction.",
+        { modal: true },
+        "Commit",
+        "Rollback",
+        "Cancel"
+      );
+      if (answer === "Cancel" || !answer) {
+        this.connectionManager.setTransactionMode(connectionId, "manual");
+        return;
+      }
+      if (answer === "Commit") {
+        await this.connectionManager.commitTransaction(connectionId);
+      } else {
+        await this.connectionManager.rollbackTransaction(connectionId);
+      }
+    }
+    await this.syncTransactionState(connectionId);
+  }
+  async syncTransactionState(connectionId) {
+    this.tabs = this.tabs.map((tab) => tab.connectionId === connectionId ? this.withTransactionState(tab) : tab);
+    await this.sessionStore.saveTabs(this.tabs);
+    this.onTabsChanged?.(this.tabs);
+    this.postHydrate();
+  }
   reusableTabFor(tab) {
     if (tab.pinned) {
       return void 0;
@@ -12998,14 +10712,14 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
     return sameConnectionTabs.filter((item) => !item.pinned).sort((a, b) => b.updatedAt - a.updatedAt)[0];
   }
   html(webview) {
-    const script = webview.asWebviewUri(vscode21.Uri.joinPath(this.context.extensionUri, "media", "results", "results.js"));
-    const style = webview.asWebviewUri(vscode21.Uri.joinPath(this.context.extensionUri, "media", "results", "results.css"));
+    const script = webview.asWebviewUri(vscode23.Uri.joinPath(this.context.extensionUri, "media", "results", "results.js"));
+    const style = webview.asWebviewUri(vscode23.Uri.joinPath(this.context.extensionUri, "media", "results", "results.css"));
     const nonce = Date.now().toString();
     return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link href="${style}" rel="stylesheet">
   <title>SQL Results</title>
@@ -13019,21 +10733,21 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
 };
 
 // src/webviews/table/TableDataPanel.ts
-var vscode22 = __toESM(require("vscode"));
+var vscode24 = __toESM(require("vscode"));
 var TableDataPanel = class {
-  static async open(context, connectionManager, node) {
-    const configuredMaxRows = vscode22.workspace.getConfiguration("database").get("defaultMaxRows", 500);
+  static async open(context, connectionManager, node, onMutationRequest) {
+    const configuredMaxRows = vscode24.workspace.getConfiguration("database").get("defaultMaxRows", 500);
     const maxRows = Number.isFinite(configuredMaxRows) && configuredMaxRows && configuredMaxRows > 0 ? Math.floor(configuredMaxRows) : 500;
-    const panel = vscode22.window.createWebviewPanel(
+    const panel = vscode24.window.createWebviewPanel(
       "databaseTableData",
       node.table.name,
-      vscode22.ViewColumn.Active,
+      vscode24.ViewColumn.Active,
       {
         enableScripts: true,
         retainContextWhenHidden: true
       }
     );
-    panel.iconPath = vscode22.Uri.joinPath(context.extensionUri, "media", "database.svg");
+    panel.iconPath = vscode24.Uri.joinPath(context.extensionUri, "media", "database.svg");
     panel.webview.html = this.html(panel.webview, node, [], [], 0, maxRows, false, true);
     let initialFetchStarted = false;
     panel.webview.onDidReceiveMessage(async (message) => {
@@ -13045,25 +10759,43 @@ var TableDataPanel = class {
         return;
       }
       if (message.type === "copy" && typeof message.text === "string") {
-        await vscode22.env.clipboard.writeText(message.text);
+        await vscode24.env.clipboard.writeText(message.text);
         return;
       }
-      if (message.type === "export" && typeof message.text === "string" && message.format) {
-        const target = await vscode22.window.showSaveDialog({
-          defaultUri: vscode22.Uri.file(`${node.table.name}.${message.format}`),
-          filters: { "Data files": [message.format] }
+      if (message.type === "export" && message.format) {
+        const target = await vscode24.window.showSaveDialog({
+          defaultUri: vscode24.Uri.file(`${node.table.name}.${message.format === "insert" ? "sql" : message.format === "markdown" ? "md" : message.format}`),
+          filters: {
+            "Data files": [message.format === "insert" ? "sql" : message.format === "markdown" ? "md" : message.format]
+          }
         });
         if (target) {
-          await vscode22.workspace.fs.writeFile(target, Buffer.from(message.text, "utf8"));
+          if (message.format === "xlsx") {
+            const XLSX = await loadXlsx();
+            const workbook = XLSX.utils.book_new();
+            const rows = message.rows ?? [];
+            const columns = message.columns ?? (rows[0] ? Object.keys(rows[0]) : []);
+            const sheet = XLSX.utils.json_to_sheet(rows, { header: columns });
+            XLSX.utils.book_append_sheet(workbook, sheet, sanitizeSheetName(node.table.name));
+            await vscode24.workspace.fs.writeFile(target, Buffer.from(XLSX.write(workbook, { type: "buffer", bookType: "xlsx" })));
+          } else if (typeof message.text === "string") {
+            await vscode24.workspace.fs.writeFile(target, Buffer.from(message.text, "utf8"));
+          }
         }
         return;
       }
       if (message.type === "command") {
         if (message.command === "ddl") {
-          await vscode22.commands.executeCommand("database.showObjectDdl", node);
+          await vscode24.commands.executeCommand("database.showObjectDdl", node);
         }
         if (message.command === "select") {
-          await vscode22.commands.executeCommand("database.generateSelect", node);
+          await vscode24.commands.executeCommand("database.generateSelect", node);
+        }
+        if (message.command === "import") {
+          await vscode24.commands.executeCommand("database.importTableData", node);
+        }
+        if (message.command === "copyToConnection") {
+          await vscode24.commands.executeCommand("database.copyTableToConnection", node);
         }
         return;
       }
@@ -13076,24 +10808,28 @@ var TableDataPanel = class {
           orderBySql: message.orderBySql,
           orderBy: message.orderBy
         });
+        return;
+      }
+      if (message.type === "mutation") {
+        await onMutationRequest?.(message);
       }
     });
   }
   static async openPerformanceAdvisor(context, node, report, openSql) {
-    const panel = vscode22.window.createWebviewPanel(
+    const panel = vscode24.window.createWebviewPanel(
       "databaseTablePerformance",
       `Advisor: ${node.table.name}`,
-      vscode22.ViewColumn.Active,
+      vscode24.ViewColumn.Active,
       {
         enableScripts: true,
         retainContextWhenHidden: true
       }
     );
-    panel.iconPath = vscode22.Uri.joinPath(context.extensionUri, "media", "database.svg");
+    panel.iconPath = vscode24.Uri.joinPath(context.extensionUri, "media", "database.svg");
     panel.webview.html = this.advisorHtml(node, report);
     panel.webview.onDidReceiveMessage(async (message) => {
       if (message.type === "copy" && typeof message.text === "string") {
-        await vscode22.env.clipboard.writeText(message.text);
+        await vscode24.env.clipboard.writeText(message.text);
       }
       if (message.type === "openSql" && typeof message.sql === "string") {
         await openSql(message.title || `Advisor DDL ${node.table.name}`, `${message.sql.trim()}
@@ -13102,20 +10838,20 @@ var TableDataPanel = class {
     });
   }
   static async openDataProfile(context, node, report) {
-    const panel = vscode22.window.createWebviewPanel(
+    const panel = vscode24.window.createWebviewPanel(
       "databaseTableProfile",
       `Profile: ${node.table.name}`,
-      vscode22.ViewColumn.Active,
+      vscode24.ViewColumn.Active,
       {
         enableScripts: true,
         retainContextWhenHidden: true
       }
     );
-    panel.iconPath = vscode22.Uri.joinPath(context.extensionUri, "media", "database.svg");
+    panel.iconPath = vscode24.Uri.joinPath(context.extensionUri, "media", "database.svg");
     panel.webview.html = this.profileHtml(node, report);
     panel.webview.onDidReceiveMessage(async (message) => {
       if (message.type === "copy" && typeof message.text === "string") {
-        await vscode22.env.clipboard.writeText(message.text);
+        await vscode24.env.clipboard.writeText(message.text);
       }
     });
   }
@@ -13145,7 +10881,7 @@ var TableDataPanel = class {
   }
   static html(webview, node, rows, columns, durationMs, maxRows, hasMore, initialLoading = false) {
     const nonce = Date.now().toString();
-    const safeTable = escapeHtml(qualifiedName(node.table.schema, node.table.name));
+    const safeTable = escapeHtml2(qualifiedName(node.table.schema, node.table.name));
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -13803,7 +11539,13 @@ var TableDataPanel = class {
       <button class="icon-button" id="copyRows" data-tone="purple" title="Copy visible rows as TSV">\u29C9</button>
       <button class="icon-button" id="focusWhere" data-tone="blue" title="Focus WHERE">\u2315</button>
       <span class="toolbar-separator"></span>
+      <button class="icon-button" id="editCell" data-tone="purple" title="Edit selected cell">\u270E</button>
+      <button class="icon-button" id="insertRow" data-tone="green" title="Insert row">\uFF0B</button>
+      <button class="icon-button" id="deleteRow" data-tone="red" title="Delete selected row">\u232B</button>
+      <span class="toolbar-separator"></span>
       <button class="icon-button" id="generateSelect" data-tone="green" title="Generate SELECT">\uFF0B</button>
+      <button class="icon-button" id="copyTable" data-tone="purple" title="Copy table to another connection">\u21C4</button>
+      <button class="icon-button" id="importData" data-tone="blue" title="Import CSV or JSON">\u21EA</button>
       <button class="icon-button" id="clearCriteria" data-tone="red" title="Clear WHERE, ORDER BY, and column filters">\u2212</button>
       <button class="icon-button" id="resetRows" data-tone="orange" title="Reset to 500 rows">\u21B6</button>
       <button id="showDdl" title="Show DDL">DDL</button>
@@ -13815,6 +11557,9 @@ var TableDataPanel = class {
         <option value="csv">CSV</option>
         <option value="json">JSON</option>
         <option value="tsv">TSV</option>
+        <option value="markdown">Markdown</option>
+        <option value="insert">INSERT</option>
+        <option value="xlsx">XLSX</option>
       </select>
       <button class="icon-button" id="export" data-tone="green" title="Export">\u21E9</button>
     </div>
@@ -13882,6 +11627,7 @@ var TableDataPanel = class {
     let errorMessage = '';
     let selectedCell = null;
     let selectedRow = null;
+    let currentRows = [];
     let selectedColumn = null;
     let columnFiltersVisible = true;
     const columnFilters = new Map();
@@ -13950,6 +11696,17 @@ var TableDataPanel = class {
     }
     function csvValue(value) {
       return '"' + cell(value).replaceAll('"', '""') + '"';
+    }
+    function markdownValue(value) {
+      return cell(value).replaceAll('|', '\\|').replaceAll('\\r', ' ').replaceAll('\\n', ' ');
+    }
+    function sqlLiteral(value) {
+      if (value === null || value === undefined) return 'null';
+      if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+      if (typeof value === 'boolean') return value ? 'true' : 'false';
+      if (value instanceof Date) return "'" + value.toISOString().replace(/'/g, "''") + "'";
+      if (typeof value === 'object') return "'" + JSON.stringify(value).replace(/'/g, "''") + "'";
+      return "'" + String(value).replace(/'/g, "''") + "'";
     }
     function filterKey(value) {
       if (value === null || value === undefined) return '<NULL>';
@@ -14095,6 +11852,24 @@ var TableDataPanel = class {
       const visibleRows = filteredRows();
       if (format === 'json') {
         return JSON.stringify(visibleRows, null, 2);
+      }
+      if (format === 'markdown') {
+        if (!visibleRows.length) {
+          return '';
+        }
+        const header = '| ' + columns.map((column) => markdownValue(column)).join(' | ') + ' |';
+        const separator = '| ' + columns.map(() => '---').join(' | ') + ' |';
+        const body = visibleRows.map((row) => '| ' + columns.map((column) => markdownValue(row[column])).join(' | ') + ' |');
+        return [header, separator, ...body].join('\\n');
+      }
+      if (format === 'insert') {
+        if (!visibleRows.length) {
+          return '';
+        }
+        return 'insert into ${qualifiedName(node.table.schema, node.table.name)} (' + columns.map((column) => sqlIdentifier(column)).join(', ') + ')\\nvalues\\n' + visibleRows.map((row) => '  (' + columns.map((column) => sqlLiteral(row[column])).join(', ') + ')').join(',\\n') + ';';
+      }
+      if (format === 'xlsx') {
+        return '';
       }
       const separator = format === 'tsv' ? '\\t' : ',';
       const encode = format === 'tsv' ? cell : csvValue;
@@ -14346,6 +12121,7 @@ var TableDataPanel = class {
     }
     function renderBody() {
       const nextRows = filteredRows();
+      currentRows = nextRows;
       tbody.innerHTML = nextRows.map((row, index) => '<tr class="' + (selectedRow === index ? 'selected-row' : '') + '"><th data-row="' + index + '">' + (currentOffset + index + 1) + '</th>' + columns.map((column) => {
         const value = row[column];
         const text = html(cell(value));
@@ -14421,7 +12197,14 @@ var TableDataPanel = class {
     });
     document.getElementById('export').addEventListener('click', () => {
       const format = document.getElementById('exportFormat').value;
-      vscode.postMessage({ type: 'export', format, text: exportRows(format) });
+      const visibleRows = filteredRows();
+      vscode.postMessage({
+        type: 'export',
+        format,
+        text: format === 'xlsx' ? undefined : exportRows(format),
+        rows: format === 'xlsx' ? visibleRows : undefined,
+        columns: format === 'xlsx' ? columns : undefined
+      });
     });
     document.getElementById('copyRows').addEventListener('click', () => {
       vscode.postMessage({ type: 'copy', text: exportRows('tsv') });
@@ -14429,12 +12212,62 @@ var TableDataPanel = class {
     document.getElementById('focusWhere').addEventListener('click', () => {
       where.focus();
     });
+    document.getElementById('editCell').addEventListener('click', () => {
+      if (!selectedCell) {
+        return;
+      }
+      const row = currentRows[selectedCell.row];
+      const current = row?.[selectedCell.column];
+      const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', cell(current));
+      if (valueText === null) {
+        return;
+      }
+      vscode.postMessage({
+        type: 'mutation',
+        kind: 'edit-cell',
+        row,
+        updatedRow: { ...row, [selectedCell.column]: valueText },
+        column: selectedCell.column,
+        valueText
+      });
+    });
+    document.getElementById('insertRow').addEventListener('click', () => {
+      const rowText = window.prompt('Insert row as JSON object', '{}');
+      if (rowText === null) {
+        return;
+      }
+      vscode.postMessage({
+        type: 'mutation',
+        kind: 'insert-row',
+        rowText
+      });
+    });
+    document.getElementById('deleteRow').addEventListener('click', () => {
+      if (selectedRow === null || selectedRow === undefined) {
+        return;
+      }
+      const row = currentRows[selectedRow];
+      if (!row || !window.confirm('Open DELETE preview for the selected row?')) {
+        return;
+      }
+      vscode.postMessage({
+        type: 'mutation',
+        kind: 'delete-row',
+        row
+      });
+    });
     document.getElementById('applyWhere').addEventListener('click', () => fetchRows(0));
     document.getElementById('showDdl').addEventListener('click', () => {
       vscode.postMessage({ type: 'command', command: 'ddl' });
     });
     document.getElementById('generateSelect').addEventListener('click', () => {
       vscode.postMessage({ type: 'command', command: 'select' });
+    });
+    document.getElementById('copyTable').addEventListener('click', () => {
+      vscode.postMessage({ type: 'command', command: 'copyToConnection' });
+    });
+    document.getElementById('importData').addEventListener('click', () => {
+      vscode.postMessage({ type: 'command', command: 'import' });
     });
     document.getElementById('clearCriteria').addEventListener('click', () => {
       where.value = '';
@@ -14484,6 +12317,33 @@ var TableDataPanel = class {
         selectedColumn = null;
         render();
       }
+    });
+    tbody.addEventListener('dblclick', (event) => {
+      const target = event.target;
+      const cellElement = target.closest('td');
+      if (!cellElement) {
+        return;
+      }
+      const rowIndex = Number(cellElement.dataset.row);
+      const column = cellElement.dataset.column;
+      const row = currentRows[rowIndex];
+      const current = row?.[column];
+      const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', cell(current));
+      if (valueText === null) {
+        return;
+      }
+      selectedCell = { row: rowIndex, column };
+      selectedRow = null;
+      selectedColumn = null;
+      render();
+      vscode.postMessage({
+        type: 'mutation',
+        kind: 'edit-cell',
+        row,
+        updatedRow: { ...row, [column]: valueText },
+        column,
+        valueText
+      });
     });
     window.addEventListener('message', (event) => {
       if (event.data?.type === 'error') {
@@ -14535,7 +12395,7 @@ var TableDataPanel = class {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Advisor ${escapeHtml(table)}</title>
+  <title>Advisor ${escapeHtml2(table)}</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -14701,11 +12561,11 @@ var TableDataPanel = class {
 <body>
   <div class="shell">
     <header>
-      <h1>${escapeHtml(table)} Performance Advisor</h1>
-      <span class="meta">${escapeHtml(node.connection.name)} | ${escapeHtml(node.connection.type)}</span>
+      <h1>${escapeHtml2(table)} Performance Advisor</h1>
+      <span class="meta">${escapeHtml2(node.connection.name)} | ${escapeHtml2(node.connection.type)}</span>
     </header>
     <main>
-      ${report.aiError ? `<section><div class="note">AI advisor unavailable: ${escapeHtml(report.aiError)}. Showing deterministic findings.</div></section>` : ""}
+      ${report.aiError ? `<section><div class="note">AI advisor unavailable: ${escapeHtml2(report.aiError)}. Showing deterministic findings.</div></section>` : ""}
       <section>
         <h2>Workload</h2>
         <div class="stats">
@@ -14717,24 +12577,24 @@ var TableDataPanel = class {
       </section>
       <section>
         <h2>Findings</h2>
-        ${report.advice.findings.length ? `<ul class="list">${report.advice.findings.map((finding) => `<li>${escapeHtml(finding)}</li>`).join("")}</ul>` : '<div class="empty">No findings returned.</div>'}
+        ${report.advice.findings.length ? `<ul class="list">${report.advice.findings.map((finding) => `<li>${escapeHtml2(finding)}</li>`).join("")}</ul>` : '<div class="empty">No findings returned.</div>'}
       </section>
       <section>
         <h2>Deterministic Flags</h2>
-        ${report.request.prepassFlags.length ? `<ul class="list">${report.request.prepassFlags.map((flag) => `<li><strong>${escapeHtml(flag.impact)}</strong> ${escapeHtml(flag.message)} <span class="meta">${escapeHtml(flag.evidence)}</span></li>`).join("")}</ul>` : '<div class="empty">No deterministic flags crossed thresholds.</div>'}
+        ${report.request.prepassFlags.length ? `<ul class="list">${report.request.prepassFlags.map((flag) => `<li><strong>${escapeHtml2(flag.impact)}</strong> ${escapeHtml2(flag.message)} <span class="meta">${escapeHtml2(flag.evidence)}</span></li>`).join("")}</ul>` : '<div class="empty">No deterministic flags crossed thresholds.</div>'}
       </section>
       <section>
         <h2>Recommendations</h2>
         ${recommendations.length ? recommendations.map((item, index) => `
           <article class="recommendation">
             <div class="recommendation-header">
-              <strong>${escapeHtml(item.kind)}</strong>
-              <span class="impact ${escapeHtml(item.impact)}">${escapeHtml(item.impact)}</span>
+              <strong>${escapeHtml2(item.kind)}</strong>
+              <span class="impact ${escapeHtml2(item.impact)}">${escapeHtml2(item.impact)}</span>
               <button data-copy="${index}">Copy DDL</button>
               <button data-open="${index}">Open In Console</button>
             </div>
-            <p>${escapeHtml(item.rationale)}</p>
-            <pre>${escapeHtml(item.ddl)}</pre>
+            <p>${escapeHtml2(item.rationale)}</p>
+            <pre>${escapeHtml2(item.ddl)}</pre>
           </article>
         `).join("") : '<div class="empty">No ready-to-run recommendations returned.</div>'}
       </section>
@@ -14770,7 +12630,7 @@ var TableDataPanel = class {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Profile ${escapeHtml(table)}</title>
+  <title>Profile ${escapeHtml2(table)}</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -14886,17 +12746,17 @@ var TableDataPanel = class {
 <body>
   <div class="shell">
     <header>
-      <h1>${escapeHtml(table)} Data Profile</h1>
+      <h1>${escapeHtml2(table)} Data Profile</h1>
       <span class="note">${report.sampleRows.toLocaleString()} sampled rows</span>
       <button id="copyJson">Copy JSON</button>
     </header>
     <main>
-      ${report.aiError ? `<section><div class="note">AI narrative unavailable: ${escapeHtml(report.aiError)}. Showing deterministic narrative.</div></section>` : ""}
+      ${report.aiError ? `<section><div class="note">AI narrative unavailable: ${escapeHtml2(report.aiError)}. Showing deterministic narrative.</div></section>` : ""}
       <section>
         <h2>Narrative</h2>
         <div class="summary">
-          <div>${escapeHtml(report.narrative?.summary ?? `Profiled ${report.columns.length} columns.`)}</div>
-          ${report.narrative?.anomalies?.length ? `<ul class="anomalies">${report.narrative.anomalies.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+          <div>${escapeHtml2(report.narrative?.summary ?? `Profiled ${report.columns.length} columns.`)}</div>
+          ${report.narrative?.anomalies?.length ? `<ul class="anomalies">${report.narrative.anomalies.map((item) => `<li>${escapeHtml2(item)}</li>`).join("")}</ul>` : ""}
         </div>
       </section>
       <section>
@@ -14916,12 +12776,12 @@ var TableDataPanel = class {
           <tbody>
             ${report.columns.map((column) => `
               <tr>
-                <td><code>${escapeHtml(column.name)}</code></td>
-                <td>${escapeHtml(column.dataType ?? "")}</td>
+                <td><code>${escapeHtml2(column.name)}</code></td>
+                <td>${escapeHtml2(column.dataType ?? "")}</td>
                 <td class="${column.nullPct >= 50 ? "danger" : ""}">${column.nullPct}%</td>
                 <td>${column.distinctCount.toLocaleString()}</td>
-                <td class="mono">${escapeHtml(column.min ?? "")}<br>${escapeHtml(column.max ?? "")}</td>
-                <td>${column.topValues.map((item) => `<div><span class="mono">${escapeHtml(item.value)}</span> <span class="note">${item.count}</span></div>`).join("")}</td>
+                <td class="mono">${escapeHtml2(column.min ?? "")}<br>${escapeHtml2(column.max ?? "")}</td>
+                <td>${column.topValues.map((item) => `<div><span class="mono">${escapeHtml2(item.value)}</span> <span class="note">${item.count}</span></div>`).join("")}</td>
                 <td><div class="hist">${histogramHtml(column.histogram)}</div></td>
               </tr>
             `).join("")}
@@ -14941,8 +12801,20 @@ var TableDataPanel = class {
 </html>`;
   }
 };
-function escapeHtml(value) {
+function escapeHtml2(value) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function sanitizeSheetName(name) {
+  const cleaned = name.replace(/[\\/?*[\]:]/g, " ").trim();
+  return (cleaned || "Sheet1").slice(0, 31);
+}
+var xlsxRuntime;
+function loadXlsx() {
+  xlsxRuntime ??= import("xlsx").then((module2) => {
+    const candidate = module2;
+    return "utils" in candidate ? candidate : candidate.default;
+  });
+  return xlsxRuntime;
 }
 function formatOptionalNumber(value) {
   return value === void 0 ? "unknown" : value.toLocaleString();
@@ -14951,14 +12823,14 @@ function histogramHtml(histogram) {
   const max = Math.max(...histogram.map((bucket) => bucket.count), 1);
   return histogram.map((bucket) => {
     const pct = Math.max(3, Math.round(bucket.count / max * 100));
-    return `<div class="bar"><span class="mono" title="${escapeHtml(bucket.label)}">${escapeHtml(bucket.label)}</span><span>${bucket.count}</span><span class="bar-track" style="grid-column: 1 / -1"><span class="bar-fill" style="width: ${pct}%"></span></span></div>`;
+    return `<div class="bar"><span class="mono" title="${escapeHtml2(bucket.label)}">${escapeHtml2(bucket.label)}</span><span>${bucket.count}</span><span class="bar-track" style="grid-column: 1 / -1"><span class="bar-fill" style="width: ${pct}%"></span></span></div>`;
   }).join("");
 }
 
 // src/utils/logger.ts
-var vscode23 = __toESM(require("vscode"));
+var vscode25 = __toESM(require("vscode"));
 var Logger = class {
-  output = vscode23.window.createOutputChannel("Database");
+  output = vscode25.window.createOutputChannel("Database");
   info(message) {
     this.output.appendLine(`[info] ${message}`);
   }
@@ -14988,20 +12860,22 @@ function activate(context) {
   const schemaContext = new SchemaContextService(connectionManager, new SchemaMetadataCacheStore(context));
   const sectionService = new SqlSectionService();
   const highlighter = new SqlSectionHighlighter();
-  const sqlDiagnostics = vscode24.languages.createDiagnosticCollection("database-sql");
+  const sqlDiagnostics = vscode26.languages.createDiagnosticCollection("database-sql");
   const diagnosticsService = new SqlDiagnosticsService(connectionManager, schemaContext, sectionService);
   const parameterPrompt = new SqlParameterPrompt();
   const aiAdapter = new VsCodeLanguageModelSqlAdapter();
   const refreshAiAvailability = () => {
     void aiAdapter.isAvailable().then((available) => {
-      void vscode24.commands.executeCommand("setContext", "database.aiAvailable", available);
+      void vscode26.commands.executeCommand("setContext", "database.aiAvailable", available);
     });
   };
-  void vscode24.commands.executeCommand("setContext", "database.aiAvailable", false);
+  void vscode26.commands.executeCommand("setContext", "database.aiAvailable", false);
   refreshAiAvailability();
   const memoryStore = new QueryMemoryStore(context);
   const memoryService = new QueryMemoryService(historyStore, memoryStore, consoleStore, connectionManager, aiAdapter);
   const tablePerformanceAdvisor = new TablePerformanceAdvisorService(connectionManager, memoryService, aiAdapter);
+  const erDiagramService = new ErDiagramService(connectionManager, schemaContext);
+  const tableRowMutator = new TableRowMutationService(schemaContext);
   const queryPlanAnalyzer = new QueryPlanAnalyzerService(connectionManager, aiAdapter);
   const dataProfiler = new DataProfileService(connectionManager, aiAdapter);
   const executor = new QueryExecutor(connectionManager, historyStore, memoryService);
@@ -15011,30 +12885,33 @@ function activate(context) {
   const consoleAutoSaves = /* @__PURE__ */ new Map();
   const consoleAutoSaveQueued = /* @__PURE__ */ new Set();
   const runningDocuments = /* @__PURE__ */ new Map();
-  const statementRunningDecoration = vscode24.window.createTextEditorDecorationType({
+  const statementRunningDecoration = vscode26.window.createTextEditorDecorationType({
     before: {
-      contentIconPath: vscode24.Uri.joinPath(context.extensionUri, "media", "sql-running.svg"),
+      contentIconPath: vscode26.Uri.joinPath(context.extensionUri, "media", "sql-running.svg"),
       width: "12px",
       height: "12px",
       margin: "0 6px 0 0"
     }
   });
-  const statementCompletedDecoration = vscode24.window.createTextEditorDecorationType({
-    before: { contentText: "\u2713 ", color: new vscode24.ThemeColor("testing.iconPassed") }
+  const statementCompletedDecoration = vscode26.window.createTextEditorDecorationType({
+    before: { contentText: "\u2713 ", color: new vscode26.ThemeColor("testing.iconPassed") }
   });
-  const statementFailedDecoration = vscode24.window.createTextEditorDecorationType({
-    before: { contentText: "\u2717 ", color: new vscode24.ThemeColor("testing.iconFailed") }
+  const statementFailedDecoration = vscode26.window.createTextEditorDecorationType({
+    before: { contentText: "\u2717 ", color: new vscode26.ThemeColor("testing.iconFailed") }
   });
   let pruningMissingConsoles = false;
   let pruningUnknownConnections = false;
   let queryMap;
   const results = new ResultsPanelProvider(
     context,
+    connectionManager,
     resultStore,
     executor,
     async (tab) => revealSourceForTab(tab),
     (tabs) => queryMap?.updateResults(tabs),
-    async (maxRows) => executeActiveMultiStatementSelection(maxRows)
+    async (maxRows) => executeActiveMultiStatementSelection(maxRows),
+    async (tab, message) => handleTableMutationFromResultTab(tab, message),
+    async (tab, resultSetIndex) => compareResultTabs(tab, resultSetIndex)
   );
   queryMap = new QueryMapProvider(
     sectionService,
@@ -15042,7 +12919,7 @@ function activate(context) {
       await highlighter.reveal(documentUri, rangeToPlain(section.range), section.sql);
     },
     async (documentUri, section) => {
-      const editor = vscode24.window.activeTextEditor;
+      const editor = vscode26.window.activeTextEditor;
       if (!editor || editor.document.languageId !== "sql" || editor.document.uri.toString() !== documentUri) {
         return;
       }
@@ -15102,32 +12979,32 @@ function activate(context) {
   context.subscriptions.push(connectionManager.onDidChangeActiveConnections(() => {
     refreshQueryMap();
     tree.refresh();
-    updateSqlConnectionStatus(vscode24.window.activeTextEditor);
-    const activeDocument = vscode24.window.activeTextEditor?.document;
+    updateSqlConnectionStatus(vscode26.window.activeTextEditor);
+    const activeDocument = vscode26.window.activeTextEditor?.document;
     const connection = activeDocument?.languageId === "sql" ? connectionForDocument(activeDocument) : void 0;
     if (connection && connectionManager.isConnected(connection.id)) {
       schemaContext.refreshDefaultSchemaInBackground(connection);
     }
   }));
-  const treeView = vscode24.window.createTreeView("databaseExplorer", { treeDataProvider: tree, showCollapseAll: true });
+  const treeView = vscode26.window.createTreeView("databaseExplorer", { treeDataProvider: tree, showCollapseAll: true });
   context.subscriptions.push(
     treeView,
     highlighter,
     queryOutput,
     sqlDiagnostics,
-    vscode24.window.registerWebviewViewProvider(ResultsPanelProvider.viewType, results),
-    vscode24.window.registerWebviewViewProvider(QueryMapProvider.viewType, queryMap)
+    vscode26.window.registerWebviewViewProvider(ResultsPanelProvider.viewType, results),
+    vscode26.window.registerWebviewViewProvider(QueryMapProvider.viewType, queryMap)
   );
-  const status = vscode24.window.createStatusBarItem(vscode24.StatusBarAlignment.Left, 90);
+  const status = vscode26.window.createStatusBarItem(vscode26.StatusBarAlignment.Left, 90);
   status.command = "database.pickConnection";
   status.text = "$(database) Database";
   status.show();
   context.subscriptions.push(status, statementRunningDecoration, statementCompletedDecoration, statementFailedDecoration);
-  const sqlCodeLensRefresh = new vscode24.EventEmitter();
+  const sqlCodeLensRefresh = new vscode26.EventEmitter();
   context.subscriptions.push(sqlCodeLensRefresh);
   context.subscriptions.push(registerSqlCompletions(connectionManager, schemaContext, sectionService, connectionForDocument, context));
   context.subscriptions.push(registerSqlConnectionCodeLens(sqlConnectionLensTitle, sectionService, sqlCodeLensRefresh.event));
-  context.subscriptions.push(vscode24.window.onDidChangeActiveTextEditor((editor) => {
+  context.subscriptions.push(vscode26.window.onDidChangeActiveTextEditor((editor) => {
     queryMap.updateFromEditor(editor);
     syncResultsToEditor(editor);
     updateSqlConnectionStatus(editor);
@@ -15135,46 +13012,58 @@ function activate(context) {
     highlighter.refreshVisibleEditors();
     updateSqlDiagnostics(editor?.document, editor?.selection);
   }));
-  context.subscriptions.push(vscode24.window.onDidChangeTextEditorSelection((event) => {
+  context.subscriptions.push(vscode26.window.onDidChangeTextEditorSelection((event) => {
     highlightActiveSqlSection(event.textEditor);
     updateSqlDiagnostics(event.textEditor.document, event.selections[0]);
   }));
-  context.subscriptions.push(vscode24.workspace.onDidChangeTextDocument((event) => {
+  context.subscriptions.push(vscode26.workspace.onDidChangeTextDocument((event) => {
     autoSaveQueryConsoleDocument(event.document);
-    const editor = vscode24.window.activeTextEditor;
+    const editor = vscode26.window.activeTextEditor;
     if (editor?.document.uri.toString() === event.document.uri.toString()) {
       queryMap.updateFromEditor(editor);
       highlightActiveSqlSection(editor);
     }
     updateSqlDiagnostics(event.document, editor?.selection);
   }));
-  context.subscriptions.push(vscode24.workspace.onDidCloseTextDocument((document) => {
+  context.subscriptions.push(vscode26.workspace.onDidCloseTextDocument((document) => {
     const documentUri = document.uri.toString();
     consoleAutoSaves.delete(documentUri);
     consoleAutoSaveQueued.delete(documentUri);
     sqlDiagnostics.delete(document.uri);
   }));
-  context.subscriptions.push(vscode24.workspace.onDidChangeConfiguration((event) => {
+  context.subscriptions.push(vscode26.workspace.onDidChangeConfiguration((event) => {
     if (event.affectsConfiguration("database.ai")) {
       refreshAiAvailability();
     }
   }));
+  const sqlFormatter = {
+    async provideDocumentFormattingEdits(document) {
+      return formatSqlDocument(document);
+    },
+    async provideDocumentRangeFormattingEdits(document, range) {
+      return formatSqlDocument(document, range);
+    }
+  };
+  context.subscriptions.push(
+    vscode26.languages.registerDocumentFormattingEditProvider("sql", sqlFormatter),
+    vscode26.languages.registerDocumentRangeFormattingEditProvider("sql", sqlFormatter)
+  );
   refreshQueryMap();
   void schemaContext.warmFromDisk(connectionManager.getConnections());
-  queryMap.updateFromEditor(vscode24.window.activeTextEditor);
+  queryMap.updateFromEditor(vscode26.window.activeTextEditor);
   queryMap.updateResults(results.getTabs());
-  highlightActiveSqlSection(vscode24.window.activeTextEditor);
-  updateSqlConnectionStatus(vscode24.window.activeTextEditor);
-  for (const document of vscode24.workspace.textDocuments) {
+  highlightActiveSqlSection(vscode26.window.activeTextEditor);
+  updateSqlConnectionStatus(vscode26.window.activeTextEditor);
+  for (const document of vscode26.workspace.textDocuments) {
     updateSqlDiagnostics(document);
   }
   const register = (command, callback) => {
-    context.subscriptions.push(vscode24.commands.registerCommand(command, async (...args) => {
+    context.subscriptions.push(vscode26.commands.registerCommand(command, async (...args) => {
       try {
         return await callback(...args);
       } catch (error) {
         logger.error(command, error);
-        void vscode24.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+        void vscode26.window.showErrorMessage(error instanceof Error ? error.message : String(error));
         return void 0;
       }
     }));
@@ -15189,6 +13078,56 @@ function activate(context) {
     );
     void pruneMissingConsoleRecords();
     void pruneUnknownConnectionRecords();
+  }
+  async function collectDatabaseObjects() {
+    const picks = [];
+    for (const connection of connectionManager.getConnections()) {
+      let entries = schemaContext.getAnyCached(connection.id);
+      if (!entries.length && connectionManager.isConnected(connection.id)) {
+        entries = [await schemaContext.loadDefaultSchema(connection)];
+      }
+      for (const entry of entries) {
+        const schemaLabel = `${connection.name} \u2022 ${entry.schemaName}`;
+        for (const table of entry.tables) {
+          const node = new TableNode(connection, table);
+          picks.push({
+            objectKind: "table",
+            node,
+            label: table.name,
+            description: `table \u2022 ${schemaLabel}`,
+            detail: `${table.schema}.${table.name}`
+          });
+        }
+        for (const view of entry.views) {
+          const node = new ViewNode(connection, view);
+          picks.push({
+            objectKind: "view",
+            node,
+            label: view.name,
+            description: `view \u2022 ${schemaLabel}`,
+            detail: `${view.schema}.${view.name}`
+          });
+        }
+        for (const [tableKey3, columns] of Object.entries(entry.columns)) {
+          const [schemaName, tableName] = tableKey3.split(".");
+          for (const column of columns) {
+            const node = new ColumnNode(connection, column);
+            picks.push({
+              objectKind: "column",
+              node,
+              label: `${tableName}.${column.name}`,
+              description: `column \u2022 ${schemaLabel}`,
+              detail: `${schemaName}.${tableName}.${column.name}`
+            });
+          }
+        }
+      }
+    }
+    return picks.sort((left, right) => {
+      const leftKey = `${left.description ?? ""} ${left.detail ?? ""} ${left.label}`;
+      const rightKey = `${right.description ?? ""} ${right.detail ?? ""} ${right.label}`;
+      return leftKey.localeCompare(rightKey, void 0, { numeric: true, sensitivity: "base" });
+    });
   }
   function autoSaveQueryConsoleDocument(document) {
     const documentUri = document.uri.toString();
@@ -15291,7 +13230,7 @@ function activate(context) {
     const sqlParts = statements.length ? statements : [{ sql, start: 0, end: sql.length }];
     const baseOffset = editor.document.offsetAt(range.start);
     const statuses = sqlParts.map((statement) => ({
-      range: new vscode24.Range(
+      range: new vscode26.Range(
         editor.document.positionAt(baseOffset + statement.start),
         editor.document.positionAt(baseOffset + statement.start)
       ),
@@ -15389,6 +13328,18 @@ function activate(context) {
   function connectionForDocument(document) {
     return resolveConnectionForDocument(document).connection;
   }
+  async function formatSqlDocument(document, range) {
+    if (document.lineCount === 0) {
+      return [];
+    }
+    const targetRange = range ?? new vscode26.Range(0, 0, document.lineCount - 1, document.lineAt(document.lineCount - 1).range.end.character);
+    const source = document.getText(targetRange);
+    const formatted = await formatSqlText(source, sqlFormatterDialect(connectionForDocument(document)));
+    if (formatted === source) {
+      return [];
+    }
+    return [vscode26.TextEdit.replace(targetRange, formatted)];
+  }
   function connectionFromArg(node) {
     const id = connectionIdFromArg(node);
     return id ? connectionManager.getConnection(id) : void 0;
@@ -15401,7 +13352,7 @@ function activate(context) {
     ).connection?.id;
   }
   function activeConnectionId() {
-    const editor = vscode24.window.activeTextEditor;
+    const editor = vscode26.window.activeTextEditor;
     return editor?.document.languageId === "sql" ? connectionForDocument(editor.document)?.id : void 0;
   }
   function syncResultsToEditor(editor) {
@@ -15481,7 +13432,7 @@ function activate(context) {
     if (!id) {
       return;
     }
-    const answer = await vscode24.window.showWarningMessage("Delete this connection?", { modal: true }, "Delete");
+    const answer = await vscode26.window.showWarningMessage("Delete this connection?", { modal: true }, "Delete");
     if (answer === "Delete") {
       await connectionManager.delete(id);
       await schemaContext.deletePersistent(id);
@@ -15495,7 +13446,7 @@ function activate(context) {
       return;
     }
     const message = await connectionManager.test(id);
-    void vscode24.window.showInformationMessage(`Connection successful: ${message}`);
+    void vscode26.window.showInformationMessage(`Connection successful: ${message}`);
   });
   register("database.connect", async (node) => {
     const id = connectionIdFromArg(node) ?? (await connectionManager.pickConnection())?.id;
@@ -15539,7 +13490,34 @@ function activate(context) {
   });
   register("database.showResults", () => results.show(activeConnectionId()));
   register("database.focusResults", () => results.show(activeConnectionId()));
-  register("database.focusExplorer", () => vscode24.commands.executeCommand("databaseExplorer.focus"));
+  register("database.focusExplorer", () => vscode26.commands.executeCommand("databaseExplorer.focus"));
+  register("database.goToDatabaseObject", async () => {
+    const objects = await collectDatabaseObjects();
+    if (!objects.length) {
+      void vscode26.window.showInformationMessage("No cached database objects found yet.");
+      return;
+    }
+    const picked = await vscode26.window.showQuickPick(objects, {
+      placeHolder: "Go to database object",
+      matchOnDetail: true,
+      matchOnDescription: true
+    });
+    if (!picked) {
+      return;
+    }
+    await treeView.reveal(picked.node, { expand: true, focus: true, select: true });
+    if (picked.objectKind === "table") {
+      await vscode26.commands.executeCommand("database.openTableData", picked.node);
+    }
+  });
+  register("database.sessionMonitor", async (node) => {
+    const connection = connectionFromArg(node) ?? connectionManager.getPreferredConnection();
+    if (!connection) {
+      void vscode26.window.showInformationMessage("Pick a database connection first.");
+      return;
+    }
+    await SessionMonitorPanel.open(context, connectionManager, connection);
+  });
   register("database.showSqlMetadataStatus", () => showSqlMetadataStatus());
   register("database.setSqlFileConnection", (resource) => setSqlFileConnection(resource));
   register("database.pickConnection", async () => {
@@ -15552,39 +13530,39 @@ function activate(context) {
   register("database.openSqlConsole", async (node) => {
     const connection = connectionFromArg(node) ?? connectionManager.getPreferredConnection() ?? await connectionManager.pickConnection();
     const doc = await consoleStore.openOrCreate(connection, "", { reuse: false });
-    await vscode24.window.showTextDocument(doc, { viewColumn: vscode24.ViewColumn.Active, preview: false });
+    await vscode26.window.showTextDocument(doc, { viewColumn: vscode26.ViewColumn.Active, preview: false });
     results.setActiveConnection(connection?.id);
     if (connection) {
       void warmSqlMetadata(connection, "Query console");
     }
     refreshQueryMap();
-    queryMap.updateFromEditor(vscode24.window.activeTextEditor);
+    queryMap.updateFromEditor(vscode26.window.activeTextEditor);
   });
   register("database.openQueryFile", async (node) => {
     const connection = connectionFromArg(node) ?? connectionManager.getPreferredConnection();
     const doc = await consoleStore.openOrCreate(connection, "", { reuse: false });
-    await vscode24.window.showTextDocument(doc, { viewColumn: vscode24.ViewColumn.Active, preview: false });
+    await vscode26.window.showTextDocument(doc, { viewColumn: vscode26.ViewColumn.Active, preview: false });
     results.setActiveConnection(connection?.id);
     if (connection) {
       void warmSqlMetadata(connection, "Query file");
     }
     refreshQueryMap();
-    queryMap.updateFromEditor(vscode24.window.activeTextEditor);
+    queryMap.updateFromEditor(vscode26.window.activeTextEditor);
   });
   register("database.executeCurrentQuery", () => executeFromEditor("run"));
   register("database.executeSelection", () => executeFromEditor("selection"));
   register("database.executeFile", () => executeFromEditor("run"));
   register("database.executeStatementRange", async (uriText, startLine, startCharacter, endLine, endCharacter) => {
-    const editor = vscode24.window.activeTextEditor;
+    const editor = vscode26.window.activeTextEditor;
     if (!editor || typeof uriText !== "string" || editor.document.uri.toString() !== uriText) {
       return;
     }
     if (![startLine, startCharacter, endLine, endCharacter].every((value) => typeof value === "number")) {
       return;
     }
-    const range = new vscode24.Range(
-      new vscode24.Position(startLine, startCharacter),
-      new vscode24.Position(endLine, endCharacter)
+    const range = new vscode26.Range(
+      new vscode26.Position(startLine, startCharacter),
+      new vscode26.Position(endLine, endCharacter)
     );
     const selections = selectedSqlDetections(editor);
     if (shouldRunSelectionForStatement(selections, range)) {
@@ -15603,14 +13581,28 @@ function activate(context) {
     if (!(node instanceof TableNode)) {
       return;
     }
-    await TableDataPanel.open(context, connectionManager, node);
+    await TableDataPanel.open(context, connectionManager, node, async (message) => {
+      await handleTableMutation({
+        kind: message.kind,
+        target: {
+          connection: node.connection,
+          schema: node.table.schema,
+          table: node.table.name
+        },
+        originalRow: message.row,
+        updatedRow: message.updatedRow,
+        column: message.column,
+        valueText: message.valueText,
+        rowText: message.rowText
+      });
+    });
   });
   register("database.analyzeTablePerformance", async (node) => {
     if (!(node instanceof TableNode)) {
       return;
     }
-    const report = await vscode24.window.withProgress({
-      location: vscode24.ProgressLocation.Notification,
+    const report = await vscode26.window.withProgress({
+      location: vscode26.ProgressLocation.Notification,
       title: `Analyzing ${qualifiedName(node.table.schema, node.table.name)}`,
       cancellable: false
     }, () => tablePerformanceAdvisor.analyzeTable(node.connection, node.table.schema, node.table.name));
@@ -15620,10 +13612,10 @@ function activate(context) {
     if (!(node instanceof TableNode)) {
       return;
     }
-    const configuredSampleRows = vscode24.workspace.getConfiguration("database").get("dataProfile.sampleRows", 5e3);
+    const configuredSampleRows = vscode26.workspace.getConfiguration("database").get("dataProfile.sampleRows", 5e3);
     const sampleRows = Number.isFinite(configuredSampleRows) && configuredSampleRows && configuredSampleRows > 0 ? Math.floor(configuredSampleRows) : 5e3;
-    const report = await vscode24.window.withProgress({
-      location: vscode24.ProgressLocation.Notification,
+    const report = await vscode26.window.withProgress({
+      location: vscode26.ProgressLocation.Notification,
       title: `Profiling ${qualifiedName(node.table.schema, node.table.name)}`,
       cancellable: false
     }, () => dataProfiler.profileTable(node.connection, node.table.schema, node.table.name, sampleRows));
@@ -15640,23 +13632,192 @@ function activate(context) {
     const stats = await connectionManager.getDriver(target.connection.type).getTableStats(target.connection.id, target.schema, target.name);
     const sql = maintenanceScriptFromStats(stats);
     if (!sql) {
-      void vscode24.window.showInformationMessage(`No Redshift maintenance SQL was generated for ${qualifiedName(target.schema, target.name)}.`);
+      void vscode26.window.showInformationMessage(`No Redshift maintenance SQL was generated for ${qualifiedName(target.schema, target.name)}.`);
       return;
     }
     await openSqlScript(`Maintenance ${target.name}`, `${sql}
 `, target.connection);
   });
+  register("database.compareSchemas", async (node) => {
+    const source = schemaLikeTarget(node);
+    if (!source) {
+      return;
+    }
+    const targetConnection = await pickDestinationConnection(connectionManager, source.connection.id);
+    if (!targetConnection) {
+      return;
+    }
+    if (!connectionManager.isConnected(source.connection.id)) {
+      await connectionManager.connect(source.connection.id);
+    }
+    if (!connectionManager.isConnected(targetConnection.id)) {
+      await connectionManager.connect(targetConnection.id);
+    }
+    const sourceSchema = await schemaContext.loadSchema(source.connection, source.schema);
+    if (sourceSchema.status !== "ready") {
+      void vscode26.window.showWarningMessage(`Could not load source schema ${source.schema}: ${sourceSchema.errorMessage ?? "metadata unavailable"}`);
+      return;
+    }
+    const targetSchemaName = await vscode26.window.showInputBox({
+      title: "Target schema",
+      prompt: "Schema to compare against",
+      value: source.schema,
+      ignoreFocusOut: true
+    });
+    if (!targetSchemaName) {
+      return;
+    }
+    const targetSchema = await schemaContext.loadSchema(targetConnection, targetSchemaName.trim());
+    if (targetSchema.status !== "ready") {
+      void vscode26.window.showWarningMessage(`Could not load target schema ${targetSchemaName.trim()}: ${targetSchema.errorMessage ?? "metadata unavailable"}`);
+      return;
+    }
+    const report = compareSchemas({
+      sourceConnectionName: source.connection.name,
+      targetConnectionName: targetConnection.name,
+      sourceSchema: snapshotFromSchemaEntry(sourceSchema),
+      targetSchema: snapshotFromSchemaEntry(targetSchema)
+    });
+    const doc = await vscode26.workspace.openTextDocument({
+      language: "markdown",
+      content: formatSchemaDiffMarkdown(report)
+    });
+    await vscode26.window.showTextDocument(doc, { preview: true, viewColumn: vscode26.ViewColumn.Beside });
+  });
+  register("database.showErDiagram", async (node) => {
+    const target = schemaLikeTarget(node);
+    if (!target) {
+      return;
+    }
+    const report = await vscode26.window.withProgress({
+      location: vscode26.ProgressLocation.Notification,
+      title: `Building ER diagram for ${target.schema}`,
+      cancellable: false
+    }, () => erDiagramService.build({ connection: target.connection, schemaName: target.schema }));
+    await ErDiagramPanel.open(context, report);
+  });
+  register("database.insertQuerySnippet", async () => {
+    const editor = vscode26.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== "sql") {
+      void vscode26.window.showInformationMessage("Open a SQL editor before inserting a query snippet.");
+      return;
+    }
+    const picked = await vscode26.window.showQuickPick(querySnippets().map((snippet) => ({
+      label: snippet.label,
+      description: snippet.description,
+      snippet
+    })), {
+      placeHolder: "Insert query snippet"
+    });
+    if (!picked) {
+      return;
+    }
+    await editor.insertSnippet(new vscode26.SnippetString(picked.snippet.snippet));
+  });
   register("database.copyName", async (node) => {
     const name = objectName(node);
     if (name) {
-      await vscode24.env.clipboard.writeText(name);
+      await vscode26.env.clipboard.writeText(name);
     }
   });
   register("database.copyQualifiedName", async (node) => {
     const name = qualifiedObjectName(node);
     if (name) {
-      await vscode24.env.clipboard.writeText(name);
+      await vscode26.env.clipboard.writeText(name);
     }
+  });
+  register("database.importTableData", async (node) => {
+    if (!(node instanceof TableNode)) {
+      return;
+    }
+    const files = await vscode26.window.showOpenDialog({
+      canSelectMany: false,
+      openLabel: "Import data",
+      filters: {
+        "Data files": ["csv", "json"]
+      }
+    });
+    const file = files?.[0];
+    if (!file) {
+      return;
+    }
+    const fileBytes = await vscode26.workspace.fs.readFile(file);
+    const fileText = Buffer.from(fileBytes).toString("utf8");
+    const columns = await schemaContext.getColumns(node.connection, node.table.schema, node.table.name);
+    const preview = buildTableImportPreview(node.table.schema, node.table.name, columns, file.path, fileText);
+    const summary = [
+      `-- Import source: ${file.fsPath}`,
+      `-- Source columns: ${preview.columns.join(", ")}`,
+      `-- Row count: ${preview.rowCount}`,
+      ...preview.mapping.map((item) => `-- ${item.source} -> ${item.target}`),
+      ...preview.warnings.map((warning) => `-- ${warning}`),
+      ""
+    ].join("\n");
+    await openSqlScript(`Import ${node.table.name}`, `${summary}${preview.sql}
+`, node.connection);
+  });
+  register("database.copyTableToConnection", async (node) => {
+    if (!(node instanceof TableNode)) {
+      return;
+    }
+    const sourceConnection = node.connection;
+    const destination = await pickDestinationConnection(connectionManager, sourceConnection.id);
+    if (!destination) {
+      return;
+    }
+    const targetSchema = await vscode26.window.showInputBox({
+      title: "Target schema",
+      prompt: "Schema to create the copied table in",
+      value: destination.defaultSchema ?? sourceConnection.defaultSchema ?? node.table.schema,
+      ignoreFocusOut: true
+    });
+    if (!targetSchema) {
+      return;
+    }
+    const targetTable = await vscode26.window.showInputBox({
+      title: "Target table",
+      prompt: "Name of the copied table",
+      value: `${node.table.name}_copy`,
+      ignoreFocusOut: true
+    });
+    if (!targetTable) {
+      return;
+    }
+    if (!connectionManager.isConnected(sourceConnection.id)) {
+      await connectionManager.connect(sourceConnection.id);
+    }
+    const [columns, sourceRows, sourceDdl] = await vscode26.window.withProgress({
+      location: vscode26.ProgressLocation.Notification,
+      title: `Copying ${qualifiedName(node.table.schema, node.table.name)}`,
+      cancellable: false
+    }, async () => Promise.all([
+      schemaContext.getColumns(sourceConnection, node.table.schema, node.table.name),
+      connectionManager.getDriver(sourceConnection.type).executeQuery({
+        connectionId: sourceConnection.id,
+        sql: `select * from ${qualifiedName(node.table.schema, node.table.name)}`
+      }),
+      connectionManager.getDriver(sourceConnection.type).getTableDDL(sourceConnection.id, node.table.schema, node.table.name)
+    ]));
+    const preview = buildTableCopyPreview(
+      node.table.schema,
+      node.table.name,
+      targetSchema.trim(),
+      targetTable.trim(),
+      columns,
+      sourceRows.rows,
+      sourceConnection.name,
+      destination.name
+    );
+    const header = [
+      `-- Source connection: ${sourceConnection.name}`,
+      `-- Destination connection: ${destination.name}`,
+      `-- Source table: ${qualifiedName(node.table.schema, node.table.name)}`,
+      `-- Source DDL:`,
+      ...sourceDdl.trim().split("\n").map((line) => `-- ${line}`),
+      ""
+    ].join("\n");
+    await openSqlScript(`Copy ${node.table.name} to ${destination.name}`, `${header}${preview.sql}
+`, destination);
   });
   async function openSqlScript(title, content, connection) {
     const doc = await openSqlEditor(connectionManager, title, content, connection);
@@ -15666,9 +13827,40 @@ function activate(context) {
     await sqlDocumentConnections.set(doc.uri.toString(), connection.id);
     await connectionManager.setSelectedConnection(connection.id);
     results.setActiveConnection(connection.id);
-    updateSqlConnectionStatus(vscode24.window.activeTextEditor);
+    updateSqlConnectionStatus(vscode26.window.activeTextEditor);
     refreshQueryMap();
     sqlCodeLensRefresh.fire();
+  }
+  async function handleTableMutation(request) {
+    const preview = await tableRowMutator.preview(request);
+    await openSqlScript(preview.title, `${preview.sql}
+`, request.target.connection);
+  }
+  async function handleTableMutationFromResultTab(tab, message) {
+    const resultSet = tab.resultSets[tab.activeResultSetIndex] ?? tab.resultSets[0];
+    const connection = connectionManager.getConnection(tab.connectionId);
+    if (!connection) {
+      void vscode26.window.showInformationMessage("This result tab is no longer connected to a database.");
+      return;
+    }
+    const target = await tableRowMutator.inferTargetFromQuery(connection, tab.queryText);
+    if (!target) {
+      void vscode26.window.showInformationMessage("This result set does not map cleanly to a single editable table.");
+      return;
+    }
+    await handleTableMutation({
+      kind: message.kind,
+      target: {
+        ...target,
+        columns: resultSet?.fields.map((field) => field.name),
+        queryText: tab.queryText
+      },
+      originalRow: message.row,
+      updatedRow: message.updatedRow,
+      column: message.column,
+      valueText: message.valueText,
+      rowText: message.rowText
+    });
   }
   register("database.showObjectDdl", async (node) => {
     const sql = await objectDdl(connectionManager, node);
@@ -15739,7 +13931,7 @@ where ${quoteIdentifier("id")} = '<id>';
     }
   });
   register("database.newObject", async (node) => {
-    const picked = await vscode24.window.showQuickPick([
+    const picked = await vscode26.window.showQuickPick([
       { label: "Query Console", command: "database.openSqlConsole" },
       { label: "Query File", command: "database.openQueryFile" },
       { label: "CREATE TABLE script", command: "database.newTable" },
@@ -15754,7 +13946,7 @@ where ${quoteIdentifier("id")} = '<id>';
       { label: "CREATE SEQUENCE script", command: "database.newSequence" }
     ], { placeHolder: "Generate database SQL script" });
     if (picked) {
-      await vscode24.commands.executeCommand(picked.command, node);
+      await vscode26.commands.executeCommand(picked.command, node);
     }
   });
   register("database.newTable", async (node) => openSqlScript("New Table", newObjectTemplate(node, "table"), schemaFromNode(node).connection));
@@ -15770,19 +13962,19 @@ where ${quoteIdentifier("id")} = '<id>';
   register("database.quickDocumentation", async (node) => {
     const docs = await quickDocumentation(connectionManager, node);
     if (docs) {
-      void vscode24.window.showInformationMessage(docs, { modal: true });
+      void vscode26.window.showInformationMessage(docs, { modal: true });
     }
   });
   register("database.showQueryHistory", async () => {
     const connection = connectionManager.getPreferredConnection();
-    const picked = await vscode24.window.showQuickPick(queryConsoleHistoryItems().filter((item) => !connection || item.connectionId === connection.id).map((item) => ({
+    const picked = await vscode26.window.showQuickPick(queryConsoleHistoryItems().filter((item) => !connection || item.connectionId === connection.id).map((item) => ({
       label: `${item.favorite ? "$(star-full) " : ""}${item.sql.replace(/\s+/g, " ").slice(0, 90)}`,
       description: `${item.status}${item.rowCount !== void 0 ? ` - ${item.rowCount} rows` : ""}`,
       detail: `${new Date(item.executedAt).toLocaleString()}${item.sourceFile ? ` - ${item.sourceFile}` : ""}`,
       item
     })), { placeHolder: "Query console history", matchOnDetail: true });
     if (picked) {
-      const action = await vscode24.window.showQuickPick([
+      const action = await vscode26.window.showQuickPick([
         { label: "Open in Console", action: "open" },
         { label: picked.item.favorite ? "Remove Favorite" : "Favorite", action: "favorite" },
         { label: "Copy SQL", action: "copy" },
@@ -15793,7 +13985,7 @@ where ${quoteIdentifier("id")} = '<id>';
       } else if (action?.action === "favorite") {
         await historyStore.update({ ...picked.item, favorite: !picked.item.favorite });
       } else if (action?.action === "copy") {
-        await vscode24.env.clipboard.writeText(picked.item.sql);
+        await vscode26.env.clipboard.writeText(picked.item.sql);
       } else if (action?.action === "delete") {
         await historyStore.delete(picked.item.id);
       }
@@ -15804,17 +13996,17 @@ where ${quoteIdentifier("id")} = '<id>';
   register("database.visualExplainSql", () => runVisualExplain(false));
   register("database.visualExplainAnalyzeSql", () => runVisualExplain(true));
   async function executeFromEditor(mode, options = {}) {
-    const editor = vscode24.window.activeTextEditor;
+    const editor = vscode26.window.activeTextEditor;
     if (!editor) {
       return;
     }
     const selectedDetections = mode === "file" ? [] : selectedSqlDetections(editor);
     let detections;
     if (mode === "file") {
-      detections = [{ sql: editor.document.getText(), range: new vscode24.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length)) }];
+      detections = [{ sql: editor.document.getText(), range: new vscode26.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length)) }];
     } else if (mode === "run") {
       const detected = sectionService.detectExecutable(editor.document, editor.selection);
-      detections = selectedDetections.length > 0 ? selectedDetections : detected ? [detected] : [{ sql: editor.document.getText(), range: new vscode24.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length)) }];
+      detections = selectedDetections.length > 0 ? selectedDetections : detected ? [detected] : [{ sql: editor.document.getText(), range: new vscode26.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length)) }];
     } else if (mode === "selection" || selectedDetections.length > 0) {
       detections = selectedDetections;
     } else {
@@ -15822,7 +14014,7 @@ where ${quoteIdentifier("id")} = '<id>';
       detections = detected ? [detected] : [];
     }
     if (!detections.some((detected) => detected.sql.trim())) {
-      void vscode24.window.showInformationMessage("No SQL section to run.");
+      void vscode26.window.showInformationMessage("No SQL section to run.");
       return;
     }
     const forceNewResultTab = detections.length > 1;
@@ -15830,15 +14022,54 @@ where ${quoteIdentifier("id")} = '<id>';
       await executeDetected(editor, detected, { forceNewResultTab, maxRows: options.maxRows });
     }
   }
+  async function compareResultTabs(sourceTab, resultSetIndex) {
+    const sourceResultSet = sourceTab.resultSets[resultSetIndex] ?? sourceTab.resultSets[0];
+    if (!sourceResultSet) {
+      void vscode26.window.showInformationMessage("This result tab does not contain rows to compare.");
+      return;
+    }
+    const candidates = results.getTabs().filter((tab) => tab.id !== sourceTab.id && tab.resultSets.length > 0);
+    if (!candidates.length) {
+      void vscode26.window.showInformationMessage("Open another result tab on the same connection to compare against.");
+      return;
+    }
+    const picked = await vscode26.window.showQuickPick(candidates.map((tab) => ({
+      label: tab.customTitle ?? tab.title,
+      description: `${tab.executionStatus}${tab.executionTimeMs !== void 0 ? ` - ${tab.executionTimeMs}ms` : ""}`,
+      detail: `${tab.databaseName ?? "database"} \u2022 ${tab.resultSets[0]?.rowCount ?? 0} rows`,
+      tab
+    })), {
+      placeHolder: `Compare ${sourceTab.customTitle ?? sourceTab.title} against`
+    });
+    if (!picked) {
+      return;
+    }
+    const targetResultSet = picked.tab.resultSets[resultSetIndex] ?? picked.tab.resultSets[0];
+    if (!targetResultSet) {
+      void vscode26.window.showInformationMessage("The selected comparison tab does not contain a matching result set.");
+      return;
+    }
+    const report = compareResultSets(
+      sourceResultSet,
+      targetResultSet,
+      sourceTab.customTitle ?? sourceTab.title,
+      picked.tab.customTitle ?? picked.tab.title
+    );
+    const doc = await vscode26.workspace.openTextDocument({
+      language: "markdown",
+      content: formatResultSetDiffMarkdown(report)
+    });
+    await vscode26.window.showTextDocument(doc, { preview: true, viewColumn: vscode26.ViewColumn.Beside });
+  }
   async function runVisualExplain(analyze) {
-    const editor = vscode24.window.activeTextEditor;
+    const editor = vscode26.window.activeTextEditor;
     if (!editor || editor.document.languageId !== "sql") {
-      void vscode24.window.showInformationMessage("Open a SQL editor before running Visual Explain.");
+      void vscode26.window.showInformationMessage("Open a SQL editor before running Visual Explain.");
       return;
     }
     const resolved = resolveConnectionForDocument(editor.document);
     if (resolved.isBound && !resolved.connection) {
-      void vscode24.window.showErrorMessage(`This SQL console is bound to a connection that no longer exists: ${resolved.boundConnectionId}`);
+      void vscode26.window.showErrorMessage(`This SQL console is bound to a connection that no longer exists: ${resolved.boundConnectionId}`);
       return;
     }
     const connection = resolved.connection ?? await connectionManager.pickConnection();
@@ -15846,7 +14077,7 @@ where ${quoteIdentifier("id")} = '<id>';
       return;
     }
     if (analyze) {
-      const answer = await vscode24.window.showWarningMessage(
+      const answer = await vscode26.window.showWarningMessage(
         "EXPLAIN ANALYZE executes the SQL to collect runtime timings.",
         { modal: true },
         "Run EXPLAIN ANALYZE"
@@ -15863,7 +14094,7 @@ where ${quoteIdentifier("id")} = '<id>';
     }
     const detected = selectedSqlDetections(editor)[0] ?? sectionService.detectExecutable(editor.document, editor.selection);
     if (!detected?.sql.trim()) {
-      void vscode24.window.showInformationMessage("No SQL section to explain.");
+      void vscode26.window.showInformationMessage("No SQL section to explain.");
       return;
     }
     const sourceSql = detected.sql;
@@ -15883,8 +14114,8 @@ where ${quoteIdentifier("id")} = '<id>';
       range: sourceRange
     }), { forceNew: true });
     try {
-      const plan = await vscode24.window.withProgress({
-        location: vscode24.ProgressLocation.Notification,
+      const plan = await vscode26.window.withProgress({
+        location: vscode26.ProgressLocation.Notification,
         title: `${analyze ? "Running EXPLAIN ANALYZE" : "Running EXPLAIN"} for ${connection.name}`,
         cancellable: false
       }, () => queryPlanAnalyzer.explain(connection, executableSql, { analyze }));
@@ -15915,7 +14146,7 @@ where ${quoteIdentifier("id")} = '<id>';
     }
   }
   async function executeActiveMultiStatementSelection(maxRows) {
-    const editor = vscode24.window.activeTextEditor;
+    const editor = vscode26.window.activeTextEditor;
     if (!editor || editor.document.languageId !== "sql") {
       return false;
     }
@@ -15972,10 +14203,10 @@ where ${quoteIdentifier("id")} = '<id>';
     diagnosticTimers.set(documentUri, timer);
   }
   async function showSqlMetadataStatus() {
-    const editor = vscode24.window.activeTextEditor;
+    const editor = vscode26.window.activeTextEditor;
     const connection = editor?.document.languageId === "sql" ? connectionForDocument(editor.document) : connectionManager.getPreferredConnection();
     if (!connection) {
-      void vscode24.window.showInformationMessage("No database connection is selected for this SQL editor.");
+      void vscode26.window.showInformationMessage("No database connection is selected for this SQL editor.");
       return;
     }
     const status2 = await schemaContext.metadataStatus(connection);
@@ -16010,20 +14241,20 @@ where ${quoteIdentifier("id")} = '<id>';
       `- Storage fallback: ${status2.storageError ? `in-memory only (${status2.storageError})` : "disk cache available"}`,
       ""
     ].join("\n");
-    const doc = await vscode24.workspace.openTextDocument({ language: "markdown", content });
-    await vscode24.window.showTextDocument(doc, { preview: true, viewColumn: vscode24.ViewColumn.Beside });
+    const doc = await vscode26.workspace.openTextDocument({ language: "markdown", content });
+    await vscode26.window.showTextDocument(doc, { preview: true, viewColumn: vscode26.ViewColumn.Beside });
   }
   async function warmSqlMetadata(connection, surface) {
     try {
       await connectAndRefreshSqlMetadata(connectionManager, schemaContext, connection);
     } catch (error) {
-      void vscode24.window.showWarningMessage(`${surface} is bound to ${connection.name}, but metadata refresh could not connect: ${error instanceof Error ? error.message : String(error)}`);
+      void vscode26.window.showWarningMessage(`${surface} is bound to ${connection.name}, but metadata refresh could not connect: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   async function setSqlFileConnection(resource) {
     const document = await sqlDocumentFromArg(resource);
     if (!document) {
-      void vscode24.window.showInformationMessage("Open a SQL file before selecting a database connection.");
+      void vscode26.window.showInformationMessage("Open a SQL file before selecting a database connection.");
       return;
     }
     const connection = await connectionManager.pickConnection();
@@ -16037,18 +14268,18 @@ where ${quoteIdentifier("id")} = '<id>';
         await connectionManager.connect(connection.id);
       }
     } catch (error) {
-      void vscode24.window.showWarningMessage(`SQL file is bound to ${connection.name}, but connection failed: ${error instanceof Error ? error.message : String(error)}`);
+      void vscode26.window.showWarningMessage(`SQL file is bound to ${connection.name}, but connection failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     schemaContext.invalidate(connection.id);
     schemaContext.refreshDefaultSchemaInBackground(connection);
     results.setActiveConnection(connection.id);
-    updateSqlConnectionStatus(vscode24.window.activeTextEditor);
-    updateSqlDiagnostics(document, vscode24.window.activeTextEditor?.document.uri.toString() === document.uri.toString() ? vscode24.window.activeTextEditor.selection : void 0);
+    updateSqlConnectionStatus(vscode26.window.activeTextEditor);
+    updateSqlDiagnostics(document, vscode26.window.activeTextEditor?.document.uri.toString() === document.uri.toString() ? vscode26.window.activeTextEditor.selection : void 0);
     refreshQueryMap();
     sqlCodeLensRefresh.fire();
   }
   async function sqlDocumentFromArg(resource) {
-    const document = resource instanceof vscode24.Uri ? await vscode24.workspace.openTextDocument(resource) : vscode24.window.activeTextEditor?.document;
+    const document = resource instanceof vscode26.Uri ? await vscode26.workspace.openTextDocument(resource) : vscode26.window.activeTextEditor?.document;
     if (!document) {
       return void 0;
     }
@@ -16058,7 +14289,7 @@ where ${quoteIdentifier("id")} = '<id>';
   async function executeDetected(editor, detected, options = {}) {
     const resolved = resolveConnectionForDocument(editor.document);
     if (resolved.isBound && !resolved.connection) {
-      void vscode24.window.showErrorMessage(`This SQL console is bound to a connection that no longer exists: ${resolved.boundConnectionId}`);
+      void vscode26.window.showErrorMessage(`This SQL console is bound to a connection that no longer exists: ${resolved.boundConnectionId}`);
       return;
     }
     const connection = resolved.connection ?? await connectionManager.pickConnection();
@@ -16076,7 +14307,7 @@ where ${quoteIdentifier("id")} = '<id>';
     if (executableSql === void 0) {
       return;
     }
-    const decoration = vscode24.window.createTextEditorDecorationType({ backgroundColor: new vscode24.ThemeColor("editor.findMatchHighlightBackground") });
+    const decoration = vscode26.window.createTextEditorDecorationType({ backgroundColor: new vscode26.ThemeColor("editor.findMatchHighlightBackground") });
     editor.setDecorations(decoration, [detected.range]);
     let endDocumentExecution;
     try {
@@ -16213,13 +14444,13 @@ where ${quoteIdentifier("id")} = '<id>';
   }
   async function runAi(action) {
     if (!await aiAdapter.isAvailable()) {
-      void vscode24.window.showInformationMessage("AI SQL actions require an available VS Code language model.");
+      void vscode26.window.showInformationMessage("AI SQL actions require an available VS Code language model.");
       return;
     }
-    const editor = vscode24.window.activeTextEditor;
+    const editor = vscode26.window.activeTextEditor;
     const connection = editor ? connectionForDocument(editor.document) : void 0;
     if (!editor || !connection) {
-      void vscode24.window.showInformationMessage("Open a SQL editor and select a connection first.");
+      void vscode26.window.showInformationMessage("Open a SQL editor and select a connection first.");
       return;
     }
     const section = sectionService.detect(editor.document, editor.selection);
@@ -16239,22 +14470,22 @@ where ${quoteIdentifier("id")} = '<id>';
         }))
       }
     });
-    const doc = await vscode24.workspace.openTextDocument({ language: "sql", content: `${sql}
+    const doc = await vscode26.workspace.openTextDocument({ language: "sql", content: `${sql}
 ` });
-    await vscode24.window.showTextDocument(doc, { preview: true, viewColumn: vscode24.ViewColumn.Beside });
+    await vscode26.window.showTextDocument(doc, { preview: true, viewColumn: vscode26.ViewColumn.Beside });
   }
   async function openHistoryItem(item) {
     if (item.documentUri) {
       try {
-        const doc2 = await vscode24.workspace.openTextDocument(vscode24.Uri.parse(item.documentUri));
-        const editor2 = await vscode24.window.showTextDocument(doc2, { preview: false });
+        const doc2 = await vscode26.workspace.openTextDocument(vscode26.Uri.parse(item.documentUri));
+        const editor2 = await vscode26.window.showTextDocument(doc2, { preview: false });
         const currentText = doc2.getText();
         if (item.sourceRange && currentText.includes(item.sql.trim())) {
           const range = rangeFromPlain2(item.sourceRange);
-          editor2.selection = new vscode24.Selection(range.start, range.end);
+          editor2.selection = new vscode26.Selection(range.start, range.end);
           editor2.revealRange(range);
         } else {
-          const fullRange = new vscode24.Range(doc2.positionAt(0), doc2.positionAt(currentText.length));
+          const fullRange = new vscode26.Range(doc2.positionAt(0), doc2.positionAt(currentText.length));
           await editor2.edit((edit) => edit.replace(fullRange, `${item.sql}
 `));
         }
@@ -16266,7 +14497,7 @@ where ${quoteIdentifier("id")} = '<id>';
     }
     const doc = await consoleStore.openOrCreate(connectionManager.getConnection(item.connectionId), `${item.sql}
 `, { reuse: false });
-    const editor = await vscode24.window.showTextDocument(doc, { preview: false });
+    const editor = await vscode26.window.showTextDocument(doc, { preview: false });
     results.setActiveConnection(item.connectionId);
     refreshQueryMap();
   }
@@ -16275,7 +14506,7 @@ where ${quoteIdentifier("id")} = '<id>';
       return;
     }
     await highlighter.reveal(tab.sourceDocumentUri, tab.sourceRange, tab.queryText);
-    const editor = vscode24.window.activeTextEditor;
+    const editor = vscode26.window.activeTextEditor;
     queryMap.updateFromEditor(editor?.document.uri.toString() === tab.sourceDocumentUri ? editor : void 0);
   }
 }
@@ -16297,7 +14528,7 @@ function trimSelection(document, selection) {
   const trailing = text.match(/\s*$/)?.[0].length ?? 0;
   const startOffset = document.offsetAt(selection.start) + leading;
   const endOffset = document.offsetAt(selection.end) - trailing;
-  return new vscode24.Range(document.positionAt(startOffset), document.positionAt(Math.max(startOffset, endOffset)));
+  return new vscode26.Range(document.positionAt(startOffset), document.positionAt(Math.max(startOffset, endOffset)));
 }
 function compareRanges(a, b) {
   return a.start.compareTo(b.start) || a.end.compareTo(b.end);
@@ -16377,11 +14608,11 @@ function registerSqlCompletions(connectionManager, schemaContext, sectionService
     "having",
     "union all"
   ];
-  return vscode24.languages.registerCompletionItemProvider("sql", {
+  return vscode26.languages.registerCompletionItemProvider("sql", {
     async provideCompletionItems(document, position) {
       const linePrefix = document.lineAt(position).text.slice(0, position.character);
       const items = keywords.map((keyword) => {
-        const item = new vscode24.CompletionItem(keyword, vscode24.CompletionItemKind.Keyword);
+        const item = new vscode26.CompletionItem(keyword, vscode26.CompletionItemKind.Keyword);
         item.insertText = keyword;
         return item;
       });
@@ -16407,8 +14638,8 @@ async function getMetadataCompletionItems(connectionManager, schemaContext, sect
   if (connectionManager.isConnected(config.id)) {
     schemaContext.refreshDefaultSchemaInBackground(config);
   }
-  const section = sectionService.detect(document, new vscode24.Selection(position, position));
-  const statementPrefix = section ? document.getText(new vscode24.Range(section.range.start, position)) : linePrefix;
+  const section = sectionService.detect(document, new vscode26.Selection(position, position));
+  const statementPrefix = section ? document.getText(new vscode26.Range(section.range.start, position)) : linePrefix;
   const relationContext = relationCompletionContext(linePrefix);
   if (relationContext?.schema) {
     const entry2 = await schemaContext.getCachedForConnection(config, defaultSchema);
@@ -16416,7 +14647,7 @@ async function getMetadataCompletionItems(connectionManager, schemaContext, sect
       return [];
     }
     return relationCompletionCandidates(entry2, relationContext).slice(0, 300).map((relation) => {
-      const item = new vscode24.CompletionItem(relation.name, vscode24.CompletionItemKind.Struct);
+      const item = new vscode26.CompletionItem(relation.name, vscode26.CompletionItemKind.Struct);
       item.detail = `${relation.schema}.${relation.name}`;
       item.insertText = relation.name;
       return item;
@@ -16433,7 +14664,7 @@ async function getMetadataCompletionItems(connectionManager, schemaContext, sect
       return [];
     }
     return columns.slice(0, 300).map((column) => {
-      const item = new vscode24.CompletionItem(column.name, vscode24.CompletionItemKind.Field);
+      const item = new vscode26.CompletionItem(column.name, vscode26.CompletionItemKind.Field);
       item.detail = column.dataType;
       item.insertText = column.name;
       return item;
@@ -16448,10 +14679,10 @@ async function getMetadataCompletionItems(connectionManager, schemaContext, sect
   }
   const items = [];
   for (const schema of entry.schemas.slice(0, 30)) {
-    items.push(new vscode24.CompletionItem(schema.name, vscode24.CompletionItemKind.Module));
+    items.push(new vscode26.CompletionItem(schema.name, vscode26.CompletionItemKind.Module));
   }
   for (const table of [...entry.tables, ...entry.views].slice(0, 300)) {
-    const tableItem = new vscode24.CompletionItem(table.name, vscode24.CompletionItemKind.Struct);
+    const tableItem = new vscode26.CompletionItem(table.name, vscode26.CompletionItemKind.Struct);
     tableItem.detail = `${table.schema}.${table.name}`;
     tableItem.insertText = table.name;
     items.push(tableItem);
@@ -16466,7 +14697,7 @@ async function getSectionColumnCompletionItems(schemaContext, config, tables, de
       if (items.some((item2) => item2.label === column.name)) {
         continue;
       }
-      const item = new vscode24.CompletionItem(column.name, vscode24.CompletionItemKind.Field);
+      const item = new vscode26.CompletionItem(column.name, vscode26.CompletionItemKind.Field);
       item.detail = `${table.schema ?? defaultSchema}.${table.table} ${column.dataType}`;
       item.insertText = column.name;
       items.push(item);
@@ -16480,28 +14711,28 @@ async function showFirstSchemaCompletionMessage(context, connection) {
     return;
   }
   await context.globalState.update(key, true);
-  void vscode24.window.showInformationMessage(`Schema-backed SQL completions are ready for ${connection.name}.`);
+  void vscode26.window.showInformationMessage(`Schema-backed SQL completions are ready for ${connection.name}.`);
 }
 function filterMetadataItems(items, linePrefix) {
   if (/\b(from|join|update|into)\s+[\w"]*$/i.test(linePrefix) || /\.$/.test(linePrefix)) {
     return items;
   }
-  return items.filter((item) => item.kind === vscode24.CompletionItemKind.Keyword);
+  return items.filter((item) => item.kind === vscode26.CompletionItemKind.Keyword);
 }
 function registerSqlConnectionCodeLens(connectionLensTitle, sectionService, refreshEvent) {
-  const emitter = new vscode24.EventEmitter();
-  const documentEvents = vscode24.workspace.onDidChangeTextDocument((event) => {
+  const emitter = new vscode26.EventEmitter();
+  const documentEvents = vscode26.workspace.onDidChangeTextDocument((event) => {
     if (event.document.languageId === "sql") {
       emitter.fire();
     }
   });
   const refreshEvents = refreshEvent?.(() => emitter.fire());
-  const provider = vscode24.languages.registerCodeLensProvider("sql", {
+  const provider = vscode26.languages.registerCodeLensProvider("sql", {
     onDidChangeCodeLenses: emitter.event,
     provideCodeLenses(document) {
-      const top = new vscode24.Range(0, 0, 0, 0);
+      const top = new vscode26.Range(0, 0, 0, 0);
       const lenses = [
-        new vscode24.CodeLens(top, {
+        new vscode26.CodeLens(top, {
           title: connectionLensTitle(document),
           tooltip: "Select the database connection for this SQL file",
           command: "database.setSqlFileConnection",
@@ -16512,8 +14743,8 @@ function registerSqlConnectionCodeLens(connectionLensTitle, sectionService, refr
         if (!section.sql.trim()) {
           continue;
         }
-        const range = new vscode24.Range(section.range.start, section.range.start);
-        lenses.push(new vscode24.CodeLens(range, {
+        const range = new vscode26.Range(section.range.start, section.range.start);
+        lenses.push(new vscode26.CodeLens(range, {
           title: "$(play) Execute SQL Section",
           tooltip: "Run this SQL section.",
           command: "database.executeStatementRange",
@@ -16529,7 +14760,7 @@ function registerSqlConnectionCodeLens(connectionLensTitle, sectionService, refr
       return lenses;
     }
   });
-  return refreshEvents ? vscode24.Disposable.from(documentEvents, refreshEvents, provider, emitter) : vscode24.Disposable.from(documentEvents, provider, emitter);
+  return refreshEvents ? vscode26.Disposable.from(documentEvents, refreshEvents, provider, emitter) : vscode26.Disposable.from(documentEvents, provider, emitter);
 }
 function stripQuotes3(value) {
   return value.replace(/^"|"$/g, "");
@@ -16546,20 +14777,20 @@ function rangeToPlain(range) {
   };
 }
 async function openSqlEditor(connectionManager, title, content = "", connection = connectionManager.getPreferredConnection()) {
-  const uri = vscode24.Uri.parse(`untitled:${title}${connection ? ` - ${connection.name}` : ""}.sql`);
-  const doc = await vscode24.workspace.openTextDocument(uri);
-  const editor = await vscode24.window.showTextDocument(doc, {
-    viewColumn: vscode24.ViewColumn.Active,
+  const uri = vscode26.Uri.parse(`untitled:${title}${connection ? ` - ${connection.name}` : ""}.sql`);
+  const doc = await vscode26.workspace.openTextDocument(uri);
+  const editor = await vscode26.window.showTextDocument(doc, {
+    viewColumn: vscode26.ViewColumn.Active,
     preview: false
   });
-  await vscode24.languages.setTextDocumentLanguage(doc, "sql");
+  await vscode26.languages.setTextDocumentLanguage(doc, "sql");
   if (content && doc.getText().length === 0) {
-    await editor.edit((edit) => edit.insert(new vscode24.Position(0, 0), content));
+    await editor.edit((edit) => edit.insert(new vscode26.Position(0, 0), content));
   }
   return doc;
 }
 function configuredDefaultMaxRows() {
-  const maxRows = vscode24.workspace.getConfiguration("database").get("defaultMaxRows", 500);
+  const maxRows = vscode26.workspace.getConfiguration("database").get("defaultMaxRows", 500);
   return Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : void 0;
 }
 function objectName(node) {
@@ -16581,6 +14812,12 @@ function objectName(node) {
   if (node instanceof ViewNode) {
     return node.view.name;
   }
+  if (node instanceof RoutineNode) {
+    return node.routine.name;
+  }
+  if (node instanceof TriggerNode) {
+    return node.trigger.name;
+  }
   if (node instanceof ColumnNode) {
     return node.column.name;
   }
@@ -16598,6 +14835,12 @@ function qualifiedObjectName(node) {
   }
   if (node instanceof ViewNode) {
     return qualifiedName(node.view.schema, node.view.name);
+  }
+  if (node instanceof RoutineNode) {
+    return qualifiedName(node.routine.schema, node.routine.name);
+  }
+  if (node instanceof TriggerNode) {
+    return qualifiedName(node.trigger.schema, node.trigger.table) + "." + quoteIdentifier(node.trigger.name);
   }
   if (node instanceof ColumnNode) {
     return `${qualifiedName(node.column.schema, node.column.table)}.${quoteIdentifier(node.column.name)}`;
@@ -16621,6 +14864,20 @@ function tableLikeTarget(node) {
     return { connection: node.connection, schema: node.column.schema, name: node.column.table, kind: "table" };
   }
   return void 0;
+}
+async function pickDestinationConnection(connectionManager, sourceConnectionId) {
+  const connections = connectionManager.getConnections().filter((connection) => connection.id !== sourceConnectionId);
+  if (!connections.length) {
+    void vscode26.window.showInformationMessage("Add another database connection before copying a table.");
+    return void 0;
+  }
+  const picked = await vscode26.window.showQuickPick(connections.map((connection) => ({
+    label: connection.name,
+    description: `${connection.type}${connection.production ? " - prod" : ""}`,
+    detail: `${connection.username}@${connection.host}:${connection.port}/${connection.database}`,
+    connection
+  })), { placeHolder: "Copy table to which connection?" });
+  return picked?.connection;
 }
 function maintenanceScriptFromStats(stats) {
   if (stats.databaseType !== "redshift") {
@@ -16680,8 +14937,49 @@ function schemaFromNode(node) {
   if (node instanceof ColumnNode) {
     return { schema: node.column.schema, connection: node.connection };
   }
+  if (node instanceof RoutineNode) {
+    return { schema: node.routine.schema, connection: node.connection };
+  }
+  if (node instanceof TriggerNode) {
+    return { schema: node.trigger.schema, connection: node.connection };
+  }
   const connection = node instanceof ConnectionNode || node instanceof CatalogNode ? node.connection : void 0;
   return { schema: connection?.defaultSchema ?? "public", connection };
+}
+function schemaLikeTarget(node) {
+  if (node instanceof SchemaNode) {
+    return { connection: node.connection, schema: node.schema.name };
+  }
+  if (node instanceof FolderNode) {
+    return { connection: node.connection, schema: node.schema };
+  }
+  if (node instanceof TableNode) {
+    return { connection: node.connection, schema: node.table.schema };
+  }
+  if (node instanceof ViewNode) {
+    return { connection: node.connection, schema: node.view.schema };
+  }
+  if (node instanceof ColumnNode) {
+    return { connection: node.connection, schema: node.column.schema };
+  }
+  if (node instanceof RoutineNode) {
+    return { connection: node.connection, schema: node.routine.schema };
+  }
+  if (node instanceof TriggerNode) {
+    return { connection: node.connection, schema: node.trigger.schema };
+  }
+  if (node instanceof ConnectionNode || node instanceof CatalogNode) {
+    return { connection: node.connection, schema: node.connection.defaultSchema ?? "public" };
+  }
+  return void 0;
+}
+function snapshotFromSchemaEntry(entry) {
+  return {
+    schemaName: entry.schemaName,
+    tables: entry.tables,
+    views: entry.views,
+    columns: entry.columns
+  };
 }
 function newObjectTemplate(node, type) {
   const { schema } = schemaFromNode(node);
@@ -16803,6 +15101,24 @@ ${columns.map((column) => `${column.name} ${column.dataType}${column.nullable ? 
   if (node instanceof ColumnNode) {
     return `${qualifiedName(node.column.schema, node.column.table)}.${quoteIdentifier(node.column.name)}
 ${node.column.dataType}${node.column.nullable ? "" : " not null"}`;
+  }
+  if (node instanceof RoutineNode) {
+    return [
+      `${qualifiedName(node.routine.schema, node.routine.name)}`,
+      node.routine.kind === "procedure" ? "Procedure" : "Function",
+      node.routine.returnType ? `Returns: ${node.routine.returnType}` : void 0,
+      node.routine.language ? `Language: ${node.routine.language}` : void 0,
+      node.routine.comment
+    ].filter(Boolean).join("\n");
+  }
+  if (node instanceof TriggerNode) {
+    return [
+      `${qualifiedName(node.trigger.schema, node.trigger.table)}.${quoteIdentifier(node.trigger.name)}`,
+      node.trigger.timing ? `Timing: ${node.trigger.timing}` : void 0,
+      node.trigger.orientation ? `Orientation: ${node.trigger.orientation}` : void 0,
+      node.trigger.events?.length ? `Events: ${node.trigger.events.join(", ")}` : void 0,
+      node.trigger.enabled ? `Enabled: ${node.trigger.enabled}` : void 0
+    ].filter(Boolean).join("\n");
   }
   return qualifiedObjectName(node);
 }

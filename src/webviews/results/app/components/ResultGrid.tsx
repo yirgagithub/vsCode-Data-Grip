@@ -72,6 +72,7 @@ interface GridContextMenu {
   rowIndex?: number;
   column?: string;
   value?: unknown;
+  row?: Record<string, unknown>;
 }
 
 interface OpenColumnFilter {
@@ -94,12 +95,13 @@ export function ResultGrid({
   const [openFilter, setOpenFilter] = useState<OpenColumnFilter>();
   const [selection, setSelection] = useState<Selection>();
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [pageOffset, setPageOffset] = useState(0);
   const [pageSize, setPageSize] = useState<number | 'all'>(100);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const [contextMenu, setContextMenu] = useState<GridContextMenu>();
   const rows = resultSet?.rows ?? [];
   const fields = resultSet?.fields ?? [];
+  const currentOffset = tab.rowOffset ?? 0;
+  const hasMore = !!resultSet?.hasMore;
   const gridColumnStyle = {
     gridTemplateColumns: `var(--row-number-width) ${fields.map((field) => `${columnWidths[field.name] ?? DEFAULT_COLUMN_WIDTH}px`).join(' ')}`
   } as CSSProperties;
@@ -117,8 +119,6 @@ export function ResultGrid({
         : bv.localeCompare(av, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [rows, filters, sort]);
-  const pageLimit = pageSize === 'all' ? Math.max(visibleRows.length, 1) : pageSize;
-
   const selectedColumnStats = useMemo(() => {
     if (selection?.type !== 'column') {
       return undefined;
@@ -127,16 +127,12 @@ export function ResultGrid({
     return field ? calculateColumnStats(field, visibleRows) : undefined;
   }, [selection, fields, visibleRows]);
 
-  const pageStart = Math.min(pageOffset, Math.max(0, Math.floor((visibleRows.length - 1) / pageLimit) * pageLimit));
-  const pageRows = visibleRows.slice(pageStart, pageStart + pageLimit);
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER);
-  const end = Math.min(pageRows.length, start + 80);
-  const slice = pageRows.slice(start, end);
+  const end = Math.min(visibleRows.length, start + 80);
+  const slice = visibleRows.slice(start, end);
   const selectedCell = selection?.type === 'cell' ? selection : undefined;
   const selectedRow = selection?.type === 'row' ? selection.rowIndex : undefined;
   const selectedColumn = selection?.type === 'column' ? selection.column : selectedCell?.column;
-  const pageEnd = pageStart + pageRows.length;
-  const hasNextPage = pageEnd < visibleRows.length;
   const visibleColumnNames = fields.map((field) => field.name);
 
   useEffect(() => {
@@ -144,6 +140,10 @@ export function ResultGrid({
       setOpenFilter(undefined);
     }
   }, [columnFiltersVisible]);
+
+  useEffect(() => {
+    setPageSize(tab.maxRows ?? 'all');
+  }, [tab.id, tab.maxRows]);
 
   if (!resultSet) {
     return <section className="grid-empty">No result set.</section>;
@@ -175,7 +175,7 @@ export function ResultGrid({
       ? selection.rowIndex
       : selection?.type === 'row'
         ? selection.rowIndex
-        : pageStart;
+        : 0;
     const columnIndex = selection?.type === 'cell'
       ? Math.max(0, visibleColumnNames.indexOf(selection.column))
       : selection?.type === 'column'
@@ -220,6 +220,16 @@ export function ResultGrid({
   const openContextMenu = (event: ReactMouseEvent, menu: Omit<GridContextMenu, 'x' | 'y'>) => {
     event.preventDefault();
     setContextMenu({ ...menu, x: event.clientX, y: event.clientY });
+  };
+  const requestMutation = (message: {
+    kind: 'edit-cell' | 'insert-row' | 'delete-row';
+    row?: Record<string, unknown>;
+    updatedRow?: Record<string, unknown>;
+    column?: string;
+    valueText?: string;
+    rowText?: string;
+  }) => {
+    vscode.postMessage({ type: 'mutation', ...message });
   };
   const startColumnResize = (event: ReactMouseEvent, column: string) => {
     event.preventDefault();
@@ -267,14 +277,12 @@ export function ResultGrid({
   const changePageSize = (value: string) => {
     if (value === 'all') {
       setPageSize('all');
-      setPageOffset(0);
-      if ((tab.maxRows ?? resultSet?.maxRows ?? 0) > 0) {
-        vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: null });
-      }
+      vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: null, offset: 0 });
       return;
     }
-    setPageSize(Number(value));
-    setPageOffset(0);
+    const nextSize = Number(value);
+    setPageSize(nextSize);
+    vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: nextSize, offset: 0 });
   };
 
   return (
@@ -321,7 +329,6 @@ export function ResultGrid({
                       const nextSort = sort?.column === field.name && sort.direction === 'asc' ? { column: field.name, direction: 'desc' as const } : { column: field.name, direction: 'asc' as const };
                       setSort(nextSort);
                       setSelection({ type: 'column', column: field.name });
-                      setPageOffset(0);
                     }}
                   >
                     {sort?.column === field.name ? (sort.direction === 'asc' ? '▲' : '▼') : '↕'}
@@ -336,20 +343,20 @@ export function ResultGrid({
               );
             })}
           </div>
-          <div className="grid-body" style={{ height: pageRows.length * ROW_HEIGHT }}>
+          <div className="grid-body" style={{ height: visibleRows.length * ROW_HEIGHT }}>
             <div style={{ transform: `translateY(${start * ROW_HEIGHT}px)` }}>
               {slice.map((row, index) => (
-                <div className={`grid-row ${selectedRow === pageStart + start + index ? 'selected-row' : ''}`} key={start + index} style={gridColumnStyle} role="row">
+                <div className={`grid-row ${selectedRow === start + index ? 'selected-row' : ''}`} key={start + index} style={gridColumnStyle} role="row">
                   <div
                     className="cell rownum"
                     role="rowheader"
-                    onClick={() => setSelection({ type: 'row', rowIndex: pageStart + start + index })}
-                    onContextMenu={(event) => openContextMenu(event, { rowIndex: pageStart + start + index })}
+                    onClick={() => setSelection({ type: 'row', rowIndex: start + index })}
+                    onContextMenu={(event) => openContextMenu(event, { rowIndex: start + index, row })}
                   >
-                    {pageStart + start + index + 1}
+                    {currentOffset + start + index + 1}
                   </div>
                   {fields.map((field) => {
-                    const rowIndex = pageStart + start + index;
+                    const rowIndex = start + index;
                     const value = row[field.name];
                     const isSelected = selectedCell?.rowIndex === rowIndex && selectedCell.column === field.name;
                     return (
@@ -360,11 +367,22 @@ export function ResultGrid({
                         onClick={() => setSelection({ type: 'cell', rowIndex, column: field.name, value })}
                         onContextMenu={(event) => {
                           setSelection({ type: 'cell', rowIndex, column: field.name, value });
-                          openContextMenu(event, { rowIndex, column: field.name, value });
+                          openContextMenu(event, { rowIndex, column: field.name, value, row });
                         }}
                         onDoubleClick={() => {
                           setSelection({ type: 'cell', rowIndex, column: field.name, value });
-                          setInspectorOpen(true);
+                          const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', formatValue(value));
+                          if (valueText === null) {
+                            setInspectorOpen(true);
+                            return;
+                          }
+                          requestMutation({
+                            kind: 'edit-cell',
+                            row,
+                            updatedRow: { ...row, [field.name]: valueText },
+                            column: field.name,
+                            valueText
+                          });
                         }}
                         role="gridcell"
                         aria-selected={isSelected}
@@ -402,6 +420,40 @@ export function ResultGrid({
           }}>
             <span>⧉</span><span>Copy</span><kbd>Ctrl+C</kbd>
           </button>
+          <button role="menuitem" disabled={contextMenu.rowIndex === undefined || !contextMenu.row} onClick={() => {
+            if (contextMenu.row) {
+              const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', formatValue(contextMenu.value));
+              if (valueText !== null && contextMenu.column) {
+                requestMutation({
+                  kind: 'edit-cell',
+                  row: contextMenu.row,
+                  updatedRow: { ...contextMenu.row, [contextMenu.column]: valueText },
+                  column: contextMenu.column,
+                  valueText
+                });
+              }
+            }
+            setContextMenu(undefined);
+          }}>
+            <span>✎</span><span>Edit Cell</span>
+          </button>
+          <button role="menuitem" onClick={() => {
+            const rowText = window.prompt('Insert row as JSON object', '{}');
+            if (rowText !== null) {
+              requestMutation({ kind: 'insert-row', rowText });
+            }
+            setContextMenu(undefined);
+          }}>
+            <span>＋</span><span>Insert Row</span>
+          </button>
+          <button role="menuitem" disabled={contextMenu.rowIndex === undefined || !contextMenu.row} onClick={() => {
+            if (contextMenu.row) {
+              requestMutation({ kind: 'delete-row', row: contextMenu.row });
+            }
+            setContextMenu(undefined);
+          }}>
+            <span>⌫</span><span>Delete Row</span>
+          </button>
           <button role="menuitem" disabled={contextMenu.rowIndex === undefined} onClick={() => {
             const row = contextMenu.rowIndex !== undefined ? rowForIndex(contextMenu.rowIndex) : undefined;
             if (row) vscode.postMessage({ type: 'copy', text: rowsToTsv([row]) });
@@ -434,11 +486,9 @@ export function ResultGrid({
           style={openFilter.style}
           onApply={(filter) => {
             setFilters((current) => [...current.filter((item) => item.column !== openFilter.column), filter]);
-            setPageOffset(0);
           }}
           onClear={() => {
             setFilters((current) => current.filter((item) => item.column !== openFilter.column));
-            setPageOffset(0);
           }}
         />
       )}
@@ -458,8 +508,8 @@ export function ResultGrid({
       )}
       <div className="result-pager">
         <span className="pager-group">
-          <button className="pager-button" disabled={pageStart === 0} onClick={() => setPageOffset(0)}>|‹</button>
-          <button className="pager-button" disabled={pageStart === 0} onClick={() => setPageOffset(Math.max(0, pageStart - pageLimit))}>‹</button>
+          <button className="pager-button" disabled={currentOffset === 0 || pageSize === 'all'} onClick={() => vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: 0 })}>|‹</button>
+          <button className="pager-button" disabled={currentOffset === 0 || pageSize === 'all'} onClick={() => vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: Math.max(0, currentOffset - Number(pageSize)) })}>‹</button>
           <select
             value={pageSize === 'all' ? 'all' : String(pageSize)}
             onChange={(event) => changePageSize(event.target.value)}
@@ -471,8 +521,8 @@ export function ResultGrid({
             ))}
             <option value="all">All rows</option>
           </select>
-          <span>of {hasNextPage ? `${(pageEnd + 1).toLocaleString()}+` : pageEnd.toLocaleString()}</span>
-          <button className="pager-button" disabled={!hasNextPage} onClick={() => setPageOffset(pageStart + pageLimit)}>›</button>
+          <span>of {hasMore ? `${(currentOffset + visibleRows.length + 1).toLocaleString()}+` : (currentOffset + visibleRows.length).toLocaleString()}</span>
+          <button className="pager-button" disabled={!hasMore || pageSize === 'all'} onClick={() => vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: currentOffset + Number(pageSize) })}>›</button>
         </span>
       </div>
     </section>

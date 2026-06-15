@@ -13,6 +13,7 @@ export default defineConfig({
       input: 'src/webviews/results/app/main.tsx',
       output: {
         entryFileNames: 'results.js',
+        chunkFileNames: 'chunks/[name]-[hash].js',
         assetFileNames: 'results.css'
       }
     }

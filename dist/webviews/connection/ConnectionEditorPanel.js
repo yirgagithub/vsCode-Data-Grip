@@ -134,7 +134,27 @@ class ConnectionEditorPanel {
             connectTimeoutMs: toOptionalNumber(form.connectTimeoutMs),
             queryTimeoutMs: toOptionalNumber(form.queryTimeoutMs),
             production: form.production === true,
-            readOnlyDefault: form.readOnlyDefault === true
+            readOnlyDefault: form.readOnlyDefault === true,
+            sshTunnel: this.sshTunnelFromForm(form)
+        };
+    }
+    sshTunnelFromForm(form) {
+        if (form.sshTunnelEnabled !== true) {
+            return undefined;
+        }
+        const host = form.sshTunnelHost?.trim() || '';
+        const username = form.sshTunnelUser?.trim() || '';
+        if (!host || !username) {
+            throw new Error('SSH tunnel requires a bastion host and username.');
+        }
+        return {
+            enabled: true,
+            host,
+            port: toOptionalNumber(form.sshTunnelPort),
+            username,
+            privateKeyPath: form.sshTunnelKeyPath?.trim() || undefined,
+            localHost: form.sshTunnelLocalHost?.trim() || undefined,
+            localPort: toOptionalNumber(form.sshTunnelLocalPort)
         };
     }
     toForm(connection) {
@@ -154,7 +174,14 @@ class ConnectionEditorPanel {
             connectTimeoutMs: connection?.connectTimeoutMs ? String(connection.connectTimeoutMs) : '',
             queryTimeoutMs: connection?.queryTimeoutMs ? String(connection.queryTimeoutMs) : String(vscode.workspace.getConfiguration('database').get('query.timeoutMs', 300000)),
             production: connection?.production ?? false,
-            readOnlyDefault: connection?.readOnlyDefault ?? false
+            readOnlyDefault: connection?.readOnlyDefault ?? false,
+            sshTunnelEnabled: connection?.sshTunnel?.enabled ?? false,
+            sshTunnelHost: connection?.sshTunnel?.host ?? '',
+            sshTunnelPort: connection?.sshTunnel?.port ? String(connection.sshTunnel.port) : '22',
+            sshTunnelUser: connection?.sshTunnel?.username ?? '',
+            sshTunnelKeyPath: connection?.sshTunnel?.privateKeyPath ?? '',
+            sshTunnelLocalHost: connection?.sshTunnel?.localHost ?? '127.0.0.1',
+            sshTunnelLocalPort: connection?.sshTunnel?.localPort ? String(connection.sshTunnel.localPort) : ''
         };
     }
     html(webview, form) {
@@ -677,6 +704,7 @@ class ConnectionEditorPanel {
             <select name="type" id="typeField" aria-label="Database type">
               <option value="postgres">PostgreSQL</option>
               <option value="redshift">Amazon Redshift</option>
+              <option value="mysql">MySQL</option>
             </select>
             <span class="field-label">Color:</span>
             <select name="color" aria-label="Connection color">
@@ -700,6 +728,7 @@ class ConnectionEditorPanel {
               <div class="segment full-row" role="group" aria-label="Connection type">
                 <button type="button" data-db-type="postgres">default</button>
                 <button type="button" data-db-type="redshift">IAM cluster/region</button>
+                <button type="button" data-db-type="mysql">MySQL</button>
               </div>
               <span class="field-label">Host:</span>
               <div class="inline-row full-row">
@@ -732,6 +761,22 @@ class ConnectionEditorPanel {
           </div>
           <div class="tab-panel" data-panel="ssh">
             <div class="advanced-grid">
+              <span class="field-label">SSH tunnel:</span>
+              <label class="check"><input name="sshTunnelEnabled" type="checkbox">Use SSH tunnel</label>
+              <span class="field-label">Bastion host:</span>
+              <div class="inline-row full-row">
+                <input name="sshTunnelHost" autocomplete="off" aria-label="SSH tunnel host">
+                <input name="sshTunnelPort" inputmode="numeric" aria-label="SSH tunnel port">
+              </div>
+              <span class="field-label">Bastion user:</span>
+              <input class="full-row" name="sshTunnelUser" autocomplete="off" aria-label="SSH tunnel username">
+              <span class="field-label">Private key:</span>
+              <input class="full-row" name="sshTunnelKeyPath" autocomplete="off" aria-label="SSH private key path">
+              <span class="field-label">Local bind:</span>
+              <div class="inline-row full-row">
+                <input name="sshTunnelLocalHost" autocomplete="off" aria-label="SSH tunnel local host">
+                <input name="sshTunnelLocalPort" inputmode="numeric" aria-label="SSH tunnel local port">
+              </div>
               <span class="field-label">SSL mode:</span>
               <select name="sslMode" aria-label="SSL mode"><option>disable</option><option>prefer</option><option>require</option></select>
             </div>
@@ -813,7 +858,14 @@ class ConnectionEditorPanel {
         password: '',
         sslMode: defaultsByType[form.elements.namedItem('type').value || 'postgres'].sslMode,
         defaultSchema: 'public',
-        color: defaultsByType[form.elements.namedItem('type').value || 'postgres'].color
+        color: defaultsByType[form.elements.namedItem('type').value || 'postgres'].color,
+        sshTunnelEnabled: false,
+        sshTunnelHost: '',
+        sshTunnelPort: '22',
+        sshTunnelUser: '',
+        sshTunnelKeyPath: '',
+        sshTunnelLocalHost: '127.0.0.1',
+        sshTunnelLocalPort: ''
       };
       for (const [key, value] of Object.entries(next)) {
         const field = form.elements.namedItem(key);
@@ -840,7 +892,14 @@ class ConnectionEditorPanel {
           password: '',
           sslMode: defaultsByType[typeField.value || 'postgres'].sslMode,
           defaultSchema: 'public',
-          color: defaultsByType[typeField.value || 'postgres'].color
+          color: defaultsByType[typeField.value || 'postgres'].color,
+          sshTunnelEnabled: false,
+          sshTunnelHost: '',
+          sshTunnelPort: '22',
+          sshTunnelUser: '',
+          sshTunnelKeyPath: '',
+          sshTunnelLocalHost: '127.0.0.1',
+          sshTunnelLocalPort: ''
         });
         return;
       }
@@ -848,7 +907,14 @@ class ConnectionEditorPanel {
       if (existing) {
         loadConnection({
           ...existing,
-          password: ''
+          password: '',
+          sshTunnelEnabled: existing.sshTunnel?.enabled ?? false,
+          sshTunnelHost: existing.sshTunnel?.host ?? '',
+          sshTunnelPort: existing.sshTunnel?.port ? String(existing.sshTunnel.port) : '22',
+          sshTunnelUser: existing.sshTunnel?.username ?? '',
+          sshTunnelKeyPath: existing.sshTunnel?.privateKeyPath ?? '',
+          sshTunnelLocalHost: existing.sshTunnel?.localHost ?? '127.0.0.1',
+          sshTunnelLocalPort: existing.sshTunnel?.localPort ? String(existing.sshTunnel.localPort) : ''
         });
       }
     }
@@ -859,7 +925,7 @@ class ConnectionEditorPanel {
       const port = form.elements.namedItem('port').value || '';
       const database = form.elements.namedItem('database').value || 'database';
       sourceName.textContent = name;
-      urlPreview.value = 'jdbc:' + (type === 'redshift' ? 'redshift' : 'postgresql') + '://' + host + (port ? ':' + port : '') + '/' + database;
+      urlPreview.value = 'jdbc:' + (type === 'redshift' ? 'redshift' : type === 'mysql' ? 'mysql' : 'postgresql') + '://' + host + (port ? ':' + port : '') + '/' + database;
       typeButtons.forEach((button) => button.classList.toggle('active', button.dataset.dbType === type));
       renderSourceList();
     }
