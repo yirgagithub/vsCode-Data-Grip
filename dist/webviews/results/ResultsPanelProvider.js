@@ -68,7 +68,7 @@ class ResultsPanelProvider {
         this.view = webviewView;
         webviewView.webview.options = {
             enableScripts: true,
-            localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media', 'results')]
+            localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')]
         };
         webviewView.webview.html = this.html(webviewView.webview);
         webviewView.webview.onDidReceiveMessage((message) => this.onMessage(message));
@@ -311,13 +311,15 @@ class ResultsPanelProvider {
     html(webview) {
         const script = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'results', 'results.js'));
         const style = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'results', 'results.css'));
+        const codicons = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'codicons', 'codicon.css'));
         const nonce = Date.now().toString();
         return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="${codicons}" rel="stylesheet">
   <link href="${style}" rel="stylesheet">
   <title>SQL Results</title>
 </head>

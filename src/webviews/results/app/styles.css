@@ -36,6 +36,20 @@
   box-sizing: border-box;
 }
 
+/* Codicons inherit the host control's accent colour and scale with --icon-size.
+   The attribute selector matches codicon.css's own specificity; this rule wins
+   on source order because results.css is linked after codicon.css. */
+.codicon[class*='codicon-'] {
+  font-size: var(--icon-size);
+  line-height: 1;
+  color: inherit;
+  vertical-align: middle;
+}
+
+.sort-neutral {
+  opacity: 0.4;
+}
+
 body {
   margin: 0;
   color: var(--text-main);
@@ -55,6 +69,14 @@ button {
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation-duration: 0.001ms !important;
+  }
 }
 
 button:hover:not(:disabled) {
@@ -113,18 +135,21 @@ input:disabled {
 
 .empty-panel {
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
-  gap: var(--space-sm);
-  min-height: var(--tab-height);
-  padding: 0 var(--space-md);
+  gap: var(--space-md);
+  padding: calc(var(--space-lg) * 1.25) calc(var(--space-lg) * 1.75);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--bg-header);
   color: var(--text-muted);
+  text-align: center;
 }
 
-.empty-icon {
+.empty-panel .empty-icon {
   color: var(--accent);
+  font-size: clamp(1.6rem, 1.25rem + 1vw, 2.4rem);
+  opacity: 0.85;
 }
 
 .result-loading {
@@ -187,6 +212,11 @@ input:disabled {
   background: var(--vscode-tab-inactiveBackground, transparent);
   border-right: 1px solid var(--border);
   border-top: 1px solid transparent;
+  transition: background-color 0.12s ease, color 0.12s ease, border-top-color 0.12s ease;
+}
+
+.tab:hover:not(.active) {
+  background: var(--bg-hover);
 }
 
 .tab.active {
@@ -228,6 +258,7 @@ input:disabled {
   border: 0;
   border-radius: 0;
   opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
 }
 
 .tab:hover .tab-icon-action,
@@ -863,6 +894,10 @@ input:disabled {
   background: color-mix(in srgb, var(--bg-main) 94%, var(--text-main));
 }
 
+.grid-row:hover .cell {
+  background: color-mix(in srgb, var(--bg-hover) 45%, var(--bg-main));
+}
+
 .cell {
   min-width: 0;
   height: var(--row-height);
@@ -987,17 +1022,6 @@ input:disabled {
   color: var(--accent);
   background: color-mix(in srgb, var(--bg-active) 32%, transparent);
   opacity: 1;
-}
-
-.filter-icon {
-  width: calc(var(--icon-size) * 1.05);
-  height: calc(var(--icon-size) * 1.05);
-  display: block;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.9;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .resize-handle {

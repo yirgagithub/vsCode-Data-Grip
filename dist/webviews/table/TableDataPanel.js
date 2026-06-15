@@ -45,7 +45,7 @@ class TableDataPanel {
             retainContextWhenHidden: true
         });
         panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'database.svg');
-        panel.webview.html = this.html(panel.webview, node, [], [], 0, maxRows, false, true);
+        panel.webview.html = this.html(panel.webview, context.extensionUri, node, [], [], 0, maxRows, false, true);
         let initialFetchStarted = false;
         panel.webview.onDidReceiveMessage(async (message) => {
             if (message.type === 'ready') {
@@ -119,7 +119,7 @@ class TableDataPanel {
             retainContextWhenHidden: true
         });
         panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'database.svg');
-        panel.webview.html = this.advisorHtml(node, report);
+        panel.webview.html = this.advisorHtml(panel.webview, context.extensionUri, node, report);
         panel.webview.onDidReceiveMessage(async (message) => {
             if (message.type === 'copy' && typeof message.text === 'string') {
                 await vscode.env.clipboard.writeText(message.text);
@@ -135,7 +135,7 @@ class TableDataPanel {
             retainContextWhenHidden: true
         });
         panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'database.svg');
-        panel.webview.html = this.profileHtml(node, report);
+        panel.webview.html = this.profileHtml(panel.webview, context.extensionUri, node, report);
         panel.webview.onDidReceiveMessage(async (message) => {
             if (message.type === 'copy' && typeof message.text === 'string') {
                 await vscode.env.clipboard.writeText(message.text);
@@ -169,15 +169,21 @@ class TableDataPanel {
             });
         }
     }
-    static html(webview, node, rows, columns, durationMs, maxRows, hasMore, initialLoading = false) {
+    /** Shared <head> tags: CSP (allowing the codicon font/stylesheet) and the codicon stylesheet link. */
+    static headTags(webview, extensionUri, nonce) {
+        const codicon = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'codicons', 'codicon.css'));
+        return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="${codicon}" rel="stylesheet">`;
+    }
+    static html(webview, extensionUri, node, rows, columns, durationMs, maxRows, hasMore, initialLoading = false) {
         const nonce = Date.now().toString();
         const safeTable = escapeHtml((0, identifiers_1.qualifiedName)(node.table.schema, node.table.name));
         return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${this.headTags(webview, extensionUri, nonce)}
   <title>${safeTable}</title>
   <style>
     :root {
@@ -206,6 +212,12 @@ class TableDataPanel {
     }
     * {
       box-sizing: border-box;
+    }
+    .codicon[class*='codicon-'] {
+      font-size: var(--icon-size);
+      line-height: 1;
+      color: inherit;
+      vertical-align: middle;
     }
     body {
       margin: 0;
@@ -345,6 +357,10 @@ class TableDataPanel {
       border-radius: var(--radius-sm);
       font: inherit;
       padding: 0 var(--space-sm);
+      transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; animation-duration: 0.001ms !important; }
     }
     .icon-button {
       width: var(--toolbar-button-size);
@@ -534,15 +550,8 @@ class TableDataPanel {
       background: color-mix(in srgb, var(--bg-active) 32%, transparent);
       opacity: 1;
     }
-    .filter-icon {
-      width: calc(var(--icon-size) * 1.05);
-      height: calc(var(--icon-size) * 1.05);
-      display: block;
-      fill: none;
-      stroke: currentColor;
-      stroke-width: 1.9;
-      stroke-linecap: round;
-      stroke-linejoin: round;
+    .sort-neutral {
+      opacity: 0.4;
     }
     .resize-handle {
       position: absolute;
@@ -825,23 +834,23 @@ class TableDataPanel {
 <body>
   <div class="shell">
     <div class="toolbar">
-      <button class="icon-button" id="refresh" data-tone="blue" title="Refresh data">↻</button>
-      <button class="icon-button" id="copyRows" data-tone="purple" title="Copy visible rows as TSV">⧉</button>
-      <button class="icon-button" id="focusWhere" data-tone="blue" title="Focus WHERE">⌕</button>
+      <button class="icon-button" id="refresh" data-tone="blue" title="Refresh data" aria-label="Refresh data"><i class="codicon codicon-refresh"></i></button>
+      <button class="icon-button" id="copyRows" data-tone="purple" title="Copy visible rows as TSV" aria-label="Copy visible rows as TSV"><i class="codicon codicon-copy"></i></button>
+      <button class="icon-button" id="focusWhere" data-tone="blue" title="Focus WHERE" aria-label="Focus WHERE"><i class="codicon codicon-search"></i></button>
       <span class="toolbar-separator"></span>
-      <button class="icon-button" id="editCell" data-tone="purple" title="Edit selected cell">✎</button>
-      <button class="icon-button" id="insertRow" data-tone="green" title="Insert row">＋</button>
-      <button class="icon-button" id="deleteRow" data-tone="red" title="Delete selected row">⌫</button>
+      <button class="icon-button" id="editCell" data-tone="purple" title="Edit selected cell" aria-label="Edit selected cell"><i class="codicon codicon-edit"></i></button>
+      <button class="icon-button" id="insertRow" data-tone="green" title="Insert row" aria-label="Insert row"><i class="codicon codicon-add"></i></button>
+      <button class="icon-button" id="deleteRow" data-tone="red" title="Delete selected row" aria-label="Delete selected row"><i class="codicon codicon-trash"></i></button>
       <span class="toolbar-separator"></span>
-      <button class="icon-button" id="generateSelect" data-tone="green" title="Generate SELECT">＋</button>
-      <button class="icon-button" id="copyTable" data-tone="purple" title="Copy table to another connection">⇄</button>
-      <button class="icon-button" id="importData" data-tone="blue" title="Import CSV or JSON">⇪</button>
-      <button class="icon-button" id="clearCriteria" data-tone="red" title="Clear WHERE, ORDER BY, and column filters">−</button>
-      <button class="icon-button" id="resetRows" data-tone="orange" title="Reset to 500 rows">↶</button>
+      <button class="icon-button" id="generateSelect" data-tone="green" title="Generate SELECT" aria-label="Generate SELECT"><i class="codicon codicon-file-code"></i></button>
+      <button class="icon-button" id="copyTable" data-tone="purple" title="Copy table to another connection" aria-label="Copy table to another connection"><i class="codicon codicon-arrow-swap"></i></button>
+      <button class="icon-button" id="importData" data-tone="blue" title="Import CSV or JSON" aria-label="Import CSV or JSON"><i class="codicon codicon-cloud-upload"></i></button>
+      <button class="icon-button" id="clearCriteria" data-tone="red" title="Clear WHERE, ORDER BY, and column filters" aria-label="Clear WHERE, ORDER BY, and column filters"><i class="codicon codicon-discard"></i></button>
+      <button class="icon-button" id="resetRows" data-tone="orange" title="Reset to 500 rows" aria-label="Reset to 500 rows"><i class="codicon codicon-history"></i></button>
       <button id="showDdl" title="Show DDL">DDL</button>
-      <button class="icon-button" id="applyWhere" data-tone="green" title="Apply WHERE">▶</button>
-      <button class="icon-button" id="toggleFilters" data-tone="blue" title="Show or hide per-column filters"><svg class="filter-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.5 3.5h11l-4.4 5v3.6l-2.2 1.1V8.5l-4.4-5Z"></path></svg></button>
-      <button class="icon-button" id="clearFilters" data-tone="orange" title="Clear column filters">◇</button>
+      <button class="icon-button" id="applyWhere" data-tone="green" title="Apply WHERE" aria-label="Apply WHERE"><i class="codicon codicon-play"></i></button>
+      <button class="icon-button" id="toggleFilters" data-tone="blue" title="Show or hide per-column filters" aria-label="Show or hide per-column filters"><i class="codicon codicon-list-filter"></i></button>
+      <button class="icon-button" id="clearFilters" data-tone="orange" title="Clear column filters" aria-label="Clear column filters"><i class="codicon codicon-clear-all"></i></button>
       <span class="toolbar-spacer"></span>
       <select id="exportFormat" class="tool-select" title="Export visible rows">
         <option value="csv">CSV</option>
@@ -851,16 +860,16 @@ class TableDataPanel {
         <option value="insert">INSERT</option>
         <option value="xlsx">XLSX</option>
       </select>
-      <button class="icon-button" id="export" data-tone="green" title="Export">⇩</button>
+      <button class="icon-button" id="export" data-tone="green" title="Export" aria-label="Export"><i class="codicon codicon-desktop-download"></i></button>
     </div>
     <div class="criteria-row">
       <div class="criteria">
-        <span class="criteria-icon"><svg class="filter-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.5 3.5h11l-4.4 5v3.6l-2.2 1.1V8.5l-4.4-5Z"></path></svg></span>
+        <span class="criteria-icon"><i class="codicon codicon-filter"></i></span>
         <strong>WHERE</strong>
         <input id="where" aria-label="Filter rows">
       </div>
       <div class="criteria">
-        <span class="criteria-icon">≡</span>
+        <span class="criteria-icon"><i class="codicon codicon-list-ordered"></i></span>
         <strong>ORDER BY</strong>
         <input id="orderBy" aria-label="Order rows">
       </div>
@@ -1288,7 +1297,7 @@ class TableDataPanel {
       filterPopover.hidden = false;
       filterPopover.innerHTML =
         '<div class="filter-title">Local Filter For \\'' + html(activeFilterColumn) + '\\'</div>' +
-        '<label class="filter-search"><span>⌕</span><input id="filterSearchInput" value="' + html(filterSearch) + '"></label>' +
+        '<label class="filter-search"><i class="codicon codicon-search"></i><input id="filterSearchInput" value="' + html(filterSearch) + '"></label>' +
         '<label class="filter-option filter-option-heading"><input id="filterSelectVisible" type="checkbox" ' + (allVisibleSelected ? 'checked' : '') + '><span>Value</span><span class="filter-count">Count</span></label>' +
         '<div class="filter-option-list">' + visibleOptions.map((option) => {
           return '<label class="filter-option"><input type="checkbox" data-filter-value="' + html(option.key) + '" ' + (filterDraft.has(option.key) ? 'checked' : '') + '><span title="' + html(option.label) + '">' + html(option.label) + '</span><span class="filter-count">' + option.count.toLocaleString() + '</span></label>';
@@ -1348,11 +1357,11 @@ class TableDataPanel {
       loadingSpinner.hidden = !loading;
       loadingText.textContent = loading ? 'Loading table data...' : errorMessage;
     }
-    const filterIconMarkup = '<svg class="filter-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.5 3.5h11l-4.4 5v3.6l-2.2 1.1V8.5l-4.4-5Z"></path></svg>';
+    const filterIconMarkup = '<i class="codicon codicon-filter"></i>';
     function renderHeader() {
       colgroup.innerHTML = '<col class="rownum-col">' + columns.map((column) => '<col class="data-col" style="width: ' + (columnWidths[column] || DEFAULT_COLUMN_WIDTH) + 'px">').join('');
       thead.innerHTML = '<tr><th>#</th>' + columns.map((column) => {
-        const mark = sort?.column === column ? (sort.direction === 'asc' ? '▲' : '▼') : '↕';
+        const mark = sort?.column === column ? '<i class="codicon codicon-arrow-' + (sort.direction === 'asc' ? 'up' : 'down') + '"></i>' : '<i class="codicon codicon-fold sort-neutral"></i>';
         const filterButton = columnFiltersVisible ? '<button class="filter-button ' + (columnFilters.has(column) ? 'active' : '') + '" data-filter-button="' + html(column) + '" title="Filter ' + html(column) + '">' + filterIconMarkup + '</button>' : '';
         return '<th class="' + (selectedColumn === column ? 'selected-column' : '') + '"><div class="header-cell-actions"><button class="header-button" data-select-column="' + html(column) + '" title="Select column ' + html(column) + '"><span class="column-type-icon"></span><span>' + html(column) + '</span></button><button class="sort-button ' + (sort?.column === column ? 'active' : '') + '" data-sort="' + html(column) + '" title="Order by ' + html(column) + '">' + mark + '</button>' + filterButton + '</div><span class="resize-handle" data-resize-column="' + html(column) + '" title="Resize column"></span></th>';
       }).join('') + '</tr>';
@@ -1668,7 +1677,7 @@ class TableDataPanel {
 </body>
 </html>`;
     }
-    static advisorHtml(node, report) {
+    static advisorHtml(webview, extensionUri, node, report) {
         const nonce = Date.now().toString();
         const table = (0, identifiers_1.qualifiedName)(node.table.schema, node.table.name);
         const recommendations = report.advice.recommendations;
@@ -1683,8 +1692,7 @@ class TableDataPanel {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${this.headTags(webview, extensionUri, nonce)}
   <title>Advisor ${escapeHtml(table)}</title>
   <style>
     :root {
@@ -1913,7 +1921,7 @@ class TableDataPanel {
 </body>
 </html>`;
     }
-    static profileHtml(node, report) {
+    static profileHtml(webview, extensionUri, node, report) {
         const nonce = Date.now().toString();
         const table = (0, identifiers_1.qualifiedName)(node.table.schema, node.table.name);
         const json = JSON.stringify(report, null, 2);
@@ -1922,8 +1930,7 @@ class TableDataPanel {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${this.headTags(webview, extensionUri, nonce)}
   <title>Profile ${escapeHtml(table)}</title>
   <style>
     :root {

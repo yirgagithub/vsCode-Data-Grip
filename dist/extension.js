@@ -5070,95 +5070,323 @@ function escapeRegExp2(value) {
 var vscode12 = __toESM(require("vscode"));
 var SqlParameterPrompt = class {
   async resolve(sql) {
-    const names = uniqueSqlParameterNames(findSqlParameters(sql));
+    const parameters = findSqlParameters(sql);
+    const names = uniqueSqlParameterNames(parameters);
     if (!names.length) {
       return sql;
     }
-    const values = await this.collectValues(sql, names);
+    const values = await this.collectValues(sql, this.parameterRows(sql, parameters, names));
     return values ? applySqlParameterValues(sql, values) : void 0;
   }
-  async collectValues(sql, names) {
-    const values = {};
-    const preview = this.sqlPreview(sql);
-    while (true) {
-      const picked = await vscode12.window.showQuickPick(this.pickItems(names, values, preview), {
-        title: "SQL Parameters",
-        placeHolder: `Current SQL query: ${preview}`,
-        ignoreFocusOut: true,
-        matchOnDescription: true,
-        matchOnDetail: true
-      });
-      if (!picked || picked.action === "cancel") {
-        return void 0;
-      }
-      if (picked.action === "preview") {
-        continue;
-      }
-      if (picked.action === "run") {
-        const missing = names.find((name) => values[name] === void 0);
-        if (!missing) {
-          return values;
-        }
-        const value = await this.promptValue(missing, preview, values[missing]);
-        if (value === void 0) {
-          return void 0;
-        }
-        values[missing] = value;
-        continue;
-      }
-      if (picked.name) {
-        const value = await this.promptValue(picked.name, preview, values[picked.name]);
-        if (value === void 0) {
-          return void 0;
-        }
-        values[picked.name] = value;
-      }
-    }
-  }
-  pickItems(names, values, preview) {
-    const missing = names.filter((name) => values[name] === void 0).length;
-    return [
+  collectValues(sql, rows) {
+    const panel = vscode12.window.createWebviewPanel(
+      "databaseSqlParameters",
+      "Parameters",
+      vscode12.ViewColumn.Active,
       {
-        label: "$(code) Current SQL query",
-        detail: preview,
-        action: "preview"
-      },
-      ...names.map((name) => ({
-        label: `$(symbol-variable) ${name}`,
-        description: values[name] === void 0 ? "missing" : this.valuePreview(values[name]),
-        detail: `Set value for ${name}`,
-        action: "parameter",
-        name
-      })),
-      {
-        label: "$(play) Run SQL",
-        description: missing ? `${missing} missing` : "ready",
-        detail: missing ? "Set all parameter values before running." : "Run the current SQL query with these values.",
-        action: "run"
-      },
-      {
-        label: "$(close) Cancel",
-        action: "cancel"
+        enableScripts: true,
+        retainContextWhenHidden: false
       }
-    ];
-  }
-  async promptValue(name, preview, currentValue) {
-    return vscode12.window.showInputBox({
-      title: `SQL Parameter: ${name}`,
-      prompt: `Current SQL query: ${preview}`,
-      placeHolder: `Value for ${name}`,
-      value: currentValue,
-      ignoreFocusOut: true
+    );
+    panel.webview.html = this.html(panel.webview, sql, rows);
+    return new Promise((resolve) => {
+      let settled = false;
+      const subscriptions = [];
+      const finish = (values) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        for (const subscription of subscriptions) {
+          subscription.dispose();
+        }
+        resolve(values);
+        panel.dispose();
+      };
+      subscriptions.push(panel.webview.onDidReceiveMessage((message) => {
+        if (message.type === "cancel") {
+          finish(void 0);
+          return;
+        }
+        if (message.type === "execute") {
+          const values = message.values ?? {};
+          const missing = rows.find((row) => values[row.name] === void 0 || values[row.name].trim() === "");
+          if (!missing) {
+            finish(values);
+          }
+        }
+      }));
+      subscriptions.push(panel.onDidDispose(() => finish(void 0)));
     });
+  }
+  parameterRows(sql, parameters, names) {
+    return names.map((name) => {
+      const parameter = parameters.find((item) => item.name === name);
+      return {
+        name,
+        placeholder: parameter?.placeholder ?? `:${name}`,
+        context: parameter ? this.contextPreview(sql, parameter) : ""
+      };
+    });
+  }
+  html(webview, sql, rows) {
+    const nonce = Date.now().toString();
+    const data = jsonForScript({ preview: this.sqlPreview(sql), rows });
+    return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Parameters</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: var(--vscode-editor-background, #1f1f1f);
+      --panel: var(--vscode-quickInput-background, #252526);
+      --border: var(--vscode-panel-border, #3c3c3c);
+      --text: var(--vscode-foreground, #cccccc);
+      --muted: var(--vscode-descriptionForeground, #9d9d9d);
+      --accent: var(--vscode-focusBorder, #007fd4);
+      --button: var(--vscode-button-background, #0e639c);
+      --button-text: var(--vscode-button-foreground, #ffffff);
+      --button-secondary: var(--vscode-button-secondaryBackground, #3a3d41);
+      --input: var(--vscode-input-background, #1b1b1b);
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--vscode-font-family, system-ui, sans-serif);
+      font-size: 12px;
+    }
+    .dialog {
+      width: min(560px, calc(100vw - 48px));
+      border: 1px solid var(--border);
+      background: var(--panel);
+      box-shadow: 0 14px 36px rgb(0 0 0 / 0.42);
+    }
+    .titlebar {
+      height: 28px;
+      display: grid;
+      grid-template-columns: 28px 1fr 28px;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in srgb, var(--panel) 88%, white 12%);
+    }
+    .titlebar strong {
+      text-align: center;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .close {
+      width: 28px;
+      height: 28px;
+      border: 0;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+    }
+    .close:hover {
+      color: var(--text);
+      background: var(--button-secondary);
+    }
+    .content {
+      padding: 10px;
+    }
+    .preview {
+      margin-bottom: 8px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid var(--border);
+      table-layout: fixed;
+    }
+    th, td {
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+      text-align: left;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      background: color-mix(in srgb, var(--panel) 82%, black 18%);
+    }
+    th:first-child,
+    td:first-child {
+      width: 34%;
+    }
+    th:nth-child(2),
+    td:nth-child(2) {
+      width: 42%;
+    }
+    th:last-child,
+    td:last-child {
+      width: 24%;
+    }
+    .name {
+      color: var(--text);
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-weight: 600;
+    }
+    .context {
+      color: var(--muted);
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11px;
+    }
+    input {
+      width: 100%;
+      height: 24px;
+      border: 1px solid var(--border);
+      outline: 0;
+      color: var(--text);
+      background: var(--input);
+      padding: 3px 6px;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 12px;
+    }
+    input:focus {
+      border-color: var(--accent);
+    }
+    .actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    button.action {
+      min-width: 74px;
+      height: 26px;
+      border: 1px solid transparent;
+      color: var(--button-text);
+      background: var(--button);
+      cursor: pointer;
+      font-size: 12px;
+    }
+    button.secondary {
+      color: var(--text);
+      background: var(--button-secondary);
+    }
+    button:disabled {
+      cursor: default;
+      opacity: 0.45;
+    }
+  </style>
+</head>
+<body>
+  <section class="dialog" role="dialog" aria-labelledby="parameter-title">
+    <div class="titlebar">
+      <span></span>
+      <strong id="parameter-title">Parameters</strong>
+      <button class="close" id="closeTop" title="Close" aria-label="Close">x</button>
+    </div>
+    <div class="content">
+      <div class="preview" id="preview"></div>
+      <table>
+        <thead>
+          <tr>
+            <th>Parameter</th>
+            <th>SQL context</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="actions">
+        <button class="action" id="execute" disabled>Execute</button>
+        <button class="action secondary" id="closeBottom">Close</button>
+      </div>
+    </div>
+  </section>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    const state = ${data};
+    const preview = document.getElementById('preview');
+    const tbody = document.getElementById('rows');
+    const execute = document.getElementById('execute');
+    preview.textContent = state.preview;
+    tbody.innerHTML = state.rows.map((row) => (
+      '<tr>' +
+      '<td><span class="name">' + html(row.name) + '</span></td>' +
+      '<td><div class="context" title="' + html(row.context) + '">' + html(row.context) + '</div></td>' +
+      '<td><input data-name="' + html(row.name) + '" placeholder="&lt;null&gt;" autocomplete="off"></td>' +
+      '</tr>'
+    )).join('');
+    const inputs = Array.from(tbody.querySelectorAll('input'));
+    function html(value) {
+      return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      }[char]));
+    }
+    function values() {
+      return Object.fromEntries(inputs.map((input) => [input.dataset.name, input.value]));
+    }
+    function refresh() {
+      execute.disabled = inputs.some((input) => input.value.trim() === '');
+    }
+    function cancel() {
+      vscode.postMessage({ type: 'cancel' });
+    }
+    for (const input of inputs) {
+      input.addEventListener('input', refresh);
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !execute.disabled) {
+          vscode.postMessage({ type: 'execute', values: values() });
+        }
+      });
+    }
+    execute.addEventListener('click', () => {
+      if (!execute.disabled) {
+        vscode.postMessage({ type: 'execute', values: values() });
+      }
+    });
+    document.getElementById('closeTop').addEventListener('click', cancel);
+    document.getElementById('closeBottom').addEventListener('click', cancel);
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        cancel();
+      }
+    });
+    inputs[0]?.focus();
+    refresh();
+  </script>
+</body>
+</html>`;
+  }
+  contextPreview(sql, parameter) {
+    const before = sql.slice(Math.max(0, parameter.start - 42), parameter.start).replace(/\s+/g, " ").trim();
+    const after = sql.slice(parameter.end, Math.min(sql.length, parameter.end + 34)).replace(/\s+/g, " ").trim();
+    return [before, parameter.placeholder, after].filter(Boolean).join(" ");
   }
   sqlPreview(sql) {
     const compact = sql.replace(/\s+/g, " ").trim();
-    return compact.length > 220 ? `${compact.slice(0, 217)}...` : compact;
-  }
-  valuePreview(value) {
-    return value.length > 80 ? `${value.slice(0, 77)}...` : value;
+    return compact.length > 180 ? `${compact.slice(0, 177)}...` : compact;
   }
 };
+function jsonForScript(value) {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
 
 // src/services/sqlSectionHighlighter.ts
 var vscode13 = __toESM(require("vscode"));
@@ -5473,6 +5701,7 @@ var SqlQueryTreeService = class {
     if (dollarTag) {
       issues.push(this.endOfDocumentIssue(document, `Unterminated dollar quote ${dollarTag}.`));
     }
+    issues.push(...this.getIncompleteBetweenIssues(document));
     issues.push(...this.getDanglingClauseIssues(document));
     return issues;
   }
@@ -5860,14 +6089,60 @@ var SqlQueryTreeService = class {
     }
     return issues;
   }
-  wordTokens(text, start, end) {
+  getIncompleteBetweenIssues(document) {
+    const text = document.getText();
+    const issues = [];
+    for (const statement of splitSqlStatements(text)) {
+      const tokens = this.wordTokens(text, statement.start, statement.end, { includeQuotedValues: true });
+      for (let index = 0; index < tokens.length; index += 1) {
+        const token = tokens[index];
+        if (token.word.toLowerCase() !== "between") {
+          continue;
+        }
+        const lowerBound = tokens[index + 1]?.word.toLowerCase();
+        if (!lowerBound || lowerBound === "and" || this.isBetweenBoundary(lowerBound)) {
+          issues.push({
+            message: "BETWEEN requires a lower bound and an AND upper bound.",
+            range: new vscode14.Range(document.positionAt(token.start), document.positionAt(token.end))
+          });
+          continue;
+        }
+        const andIndex = this.findBetweenAnd(tokens, index + 2);
+        if (andIndex < 0) {
+          issues.push({
+            message: "BETWEEN requires an AND upper bound.",
+            range: new vscode14.Range(document.positionAt(token.start), document.positionAt(token.end))
+          });
+          continue;
+        }
+        const upperBound = tokens[andIndex + 1]?.word.toLowerCase();
+        if (!upperBound || upperBound === "and" || this.isBetweenBoundary(upperBound)) {
+          issues.push({
+            message: "BETWEEN requires an upper bound after AND.",
+            range: new vscode14.Range(document.positionAt(tokens[andIndex].start), document.positionAt(tokens[andIndex].end))
+          });
+        }
+      }
+    }
+    return issues;
+  }
+  findBetweenAnd(tokens, startIndex) {
+    for (let index = startIndex; index < tokens.length; index += 1) {
+      const word = tokens[index].word.toLowerCase();
+      if (word === "and") {
+        return index;
+      }
+      if (this.isBetweenBoundary(word)) {
+        return -1;
+      }
+    }
+    return -1;
+  }
+  wordTokens(text, start, end, options = {}) {
     const tokens = [];
     let i = start;
-    let single = false;
-    let double = false;
     let lineComment = false;
     let blockComment = false;
-    let dollarTag;
     while (i < end) {
       const char = text[i];
       const next = text[i + 1];
@@ -5885,33 +6160,6 @@ var SqlQueryTreeService = class {
         }
         continue;
       }
-      if (dollarTag) {
-        if (text.startsWith(dollarTag, i)) {
-          i += dollarTag.length;
-          dollarTag = void 0;
-        } else {
-          i += 1;
-        }
-        continue;
-      }
-      if (single) {
-        if (char === "'" && next === "'") {
-          i += 2;
-        } else {
-          single = char !== "'";
-          i += 1;
-        }
-        continue;
-      }
-      if (double) {
-        if (char === '"' && next === '"') {
-          i += 2;
-        } else {
-          double = char !== '"';
-          i += 1;
-        }
-        continue;
-      }
       if (char === "-" && next === "-") {
         lineComment = true;
         i += 2;
@@ -5923,20 +6171,51 @@ var SqlQueryTreeService = class {
         continue;
       }
       if (char === "'") {
-        single = true;
+        const tokenStart = i;
         i += 1;
+        while (i < end) {
+          if (text[i] === "'" && text[i + 1] === "'") {
+            i += 2;
+          } else if (text[i] === "'") {
+            i += 1;
+            break;
+          } else {
+            i += 1;
+          }
+        }
+        if (options.includeQuotedValues) {
+          tokens.push({ word: text.slice(tokenStart, i), start: tokenStart, end: i });
+        }
         continue;
       }
       if (char === '"') {
-        double = true;
+        const tokenStart = i;
         i += 1;
+        while (i < end) {
+          if (text[i] === '"' && text[i + 1] === '"') {
+            i += 2;
+          } else if (text[i] === '"') {
+            i += 1;
+            break;
+          } else {
+            i += 1;
+          }
+        }
+        if (options.includeQuotedValues) {
+          tokens.push({ word: text.slice(tokenStart, i), start: tokenStart, end: i });
+        }
         continue;
       }
       if (char === "$") {
         const match = text.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
         if (match) {
-          dollarTag = match[0];
-          i += dollarTag.length;
+          const tokenStart = i;
+          const tag = match[0];
+          const close = text.indexOf(tag, i + tag.length);
+          i = close >= 0 ? close + tag.length : end;
+          if (options.includeQuotedValues) {
+            tokens.push({ word: text.slice(tokenStart, i), start: tokenStart, end: i });
+          }
           continue;
         }
       }
@@ -5951,6 +6230,15 @@ var SqlQueryTreeService = class {
       i += 1;
     }
     return tokens;
+  }
+  isBetweenBoundary(word) {
+    return [
+      "or",
+      "when",
+      "then",
+      "else",
+      "end"
+    ].includes(word) || this.isClauseBoundary(word);
   }
   isClauseBoundary(word) {
     return [
@@ -8245,8 +8533,9 @@ function escapeHtml(value) {
 // src/webviews/connection/ConnectionEditorPanel.ts
 var vscode21 = __toESM(require("vscode"));
 var ConnectionEditorPanel = class _ConnectionEditorPanel {
-  constructor(panel, connectionManager, existing, resolve) {
+  constructor(panel, extensionUri, connectionManager, existing, resolve) {
     this.panel = panel;
+    this.extensionUri = extensionUri;
     this.connectionManager = connectionManager;
     this.existing = existing;
     this.resolve = resolve;
@@ -8261,7 +8550,7 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
         vscode21.ViewColumn.Active,
         { enableScripts: true, retainContextWhenHidden: true }
       );
-      const editor = new _ConnectionEditorPanel(panel, connectionManager, existing, resolve);
+      const editor = new _ConnectionEditorPanel(panel, context.extensionUri, connectionManager, existing, resolve);
       context.subscriptions.push(panel);
       editor.render();
     });
@@ -8395,12 +8684,14 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
     const data = JSON.stringify(form).replace(/</g, "\\u003c");
     const connections = JSON.stringify(this.connectionManager.getConnections()).replace(/</g, "\\u003c");
     const defaults = JSON.stringify(DEFAULTS_BY_DATABASE_TYPE).replace(/</g, "\\u003c");
+    const codicons = webview.asWebviewUri(vscode21.Uri.joinPath(this.extensionUri, "media", "codicons", "codicon.css"));
     return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <link href="${codicons}" rel="stylesheet">
   <style>
     :root {
       color-scheme: light dark;
@@ -8433,6 +8724,7 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       line-height: 1.35;
     }
     * { box-sizing: border-box; }
+    .codicon[class*='codicon-'] { font-size: var(--icon-size); line-height: 1; color: inherit; vertical-align: middle; }
     body {
       margin: 0;
       color: var(--text-main);
@@ -8449,6 +8741,10 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       border: 1px solid transparent;
       border-radius: var(--radius-sm);
       cursor: pointer;
+      transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; animation-duration: 0.001ms !important; }
     }
     button:hover:not(:disabled) {
       background: var(--bg-hover);
@@ -8883,20 +9179,20 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
     <form id="form" class="dialog">
       <div class="dialog-titlebar">
         <h1>Data Sources and Drivers</h1>
-        <button type="button" id="cancelTop" class="close" aria-label="Close">\xD7</button>
+        <button type="button" id="cancelTop" class="close" aria-label="Close"><i class="codicon codicon-close"></i></button>
       </div>
       <div class="dialog-body">
         <aside class="sidebar" aria-label="Data sources">
           <div class="sidebar-header">
             <span class="section-label">Data Sources</span>
             <div class="rail-toolbar" role="toolbar" aria-label="Data source actions">
-              <button type="button" class="icon-button" title="Add data source" aria-label="Add data source">\uFF0B</button>
-              <button type="button" class="icon-button" title="Remove data source" aria-label="Remove data source">\u2212</button>
+              <button type="button" class="icon-button" title="Add data source" aria-label="Add data source"><i class="codicon codicon-add"></i></button>
+              <button type="button" class="icon-button" title="Remove data source" aria-label="Remove data source"><i class="codicon codicon-remove"></i></button>
             </div>
           </div>
           <div class="data-source-list">
             <button type="button" class="source-row active">
-              <span class="db-icon">\u25A3</span>
+              <span class="db-icon"><i class="codicon codicon-database"></i></span>
               <span class="source-name" id="sourceName">Connection</span>
               <span class="status-dot" title="Configured"></span>
             </button>
@@ -9039,14 +9335,14 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       const draftRow = document.createElement('button');
       draftRow.type = 'button';
       draftRow.className = 'source-row' + (selected === 'new' ? ' active' : '');
-      draftRow.innerHTML = '<span class="db-icon">\uFF0B</span><span class="source-name">New connection</span><span class="status-dot" title="Draft"></span>';
+      draftRow.innerHTML = '<span class="db-icon"><i class="codicon codicon-add"></i></span><span class="source-name">New connection</span><span class="status-dot" title="Draft"></span>';
       draftRow.addEventListener('click', () => selectConnection('new'));
       sourceRows.appendChild(draftRow);
       for (const connection of connectionList) {
         const row = document.createElement('button');
         row.type = 'button';
         row.className = 'source-row' + (selected === connection.id ? ' active' : '');
-        row.innerHTML = '<span class="db-icon">\u25A3</span><span class="source-name"></span><span class="status-dot" title="Configured"></span>';
+        row.innerHTML = '<span class="db-icon"><i class="codicon codicon-database"></i></span><span class="source-name"></span><span class="status-dot" title="Configured"></span>';
         row.querySelector('.source-name').textContent = connectionLabel(connection);
         row.addEventListener('click', () => selectConnection(connection.id));
         sourceRows.appendChild(row);
@@ -9250,7 +9546,8 @@ function getNonce() {
 var vscode22 = __toESM(require("vscode"));
 var PROJECT_SQL_SESSION_PREFIX = "project-sql:";
 var QueryMapProvider = class {
-  constructor(sectionService, revealSection, runSection, getHistoryItems, openHistoryItem, setConsolePinned, untrackConsole, moveConsole, touchConsoleDocument, updateHistoryItem, deleteHistoryItem, clearActiveSessions, clearHistoryItems, refreshData) {
+  constructor(extensionUri, sectionService, revealSection, runSection, getHistoryItems, openHistoryItem, setConsolePinned, untrackConsole, moveConsole, touchConsoleDocument, updateHistoryItem, deleteHistoryItem, clearActiveSessions, clearHistoryItems, refreshData) {
+    this.extensionUri = extensionUri;
     this.sectionService = sectionService;
     this.revealSection = revealSection;
     this.runSection = runSection;
@@ -9590,12 +9887,14 @@ var QueryMapProvider = class {
   }
   html(webview) {
     const nonce = Date.now().toString();
+    const codicons = webview.asWebviewUri(vscode22.Uri.joinPath(this.extensionUri, "media", "codicons", "codicon.css"));
     return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="${codicons}" rel="stylesheet">
   <style>
     :root {
       color-scheme: light dark;
@@ -9625,6 +9924,7 @@ var QueryMapProvider = class {
       line-height: 1.35;
     }
     * { box-sizing: border-box; }
+    .codicon[class*='codicon-'] { font-size: var(--icon-size); line-height: 1; color: inherit; vertical-align: middle; }
     body {
       margin: 0;
       color: var(--text-main);
@@ -9639,6 +9939,10 @@ var QueryMapProvider = class {
       border: 1px solid transparent;
       border-radius: var(--radius-sm);
       cursor: pointer;
+      transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; animation-duration: 0.001ms !important; }
     }
     button:hover:not(:disabled) {
       background: var(--bg-hover);
@@ -10009,8 +10313,8 @@ var QueryMapProvider = class {
       toolbar.className = 'toolbar';
       toolbar.setAttribute('role', 'toolbar');
       toolbar.setAttribute('aria-label', 'Query session actions');
-      toolbar.appendChild(icon('+', 'New query console', () => vscode.postMessage({ type: 'newConsole' })));
-      toolbar.appendChild(icon('\u21BB', 'Refresh', () => vscode.postMessage({ type: 'refreshQuerySessions' })));
+      toolbar.appendChild(icon('add', 'New query console', () => vscode.postMessage({ type: 'newConsole' })));
+      toolbar.appendChild(icon('refresh', 'Refresh', () => vscode.postMessage({ type: 'refreshQuerySessions' })));
       toolbar.appendChild(toolbarIcon('expand-all', 'Expand all', () => setAllExpanded(true)));
       toolbar.appendChild(toolbarIcon('collapse-all', 'Collapse all', () => setAllExpanded(false)));
       header.appendChild(toolbar);
@@ -10109,7 +10413,7 @@ var QueryMapProvider = class {
         vscode.postMessage({ type: 'openConsole', consoleId: item.id, documentUri: item.documentUri });
       };
       row.oncontextmenu = (event) => openMenu(event, consoleActions(item));
-      row.appendChild(icon('\u22EF', 'Console actions', (event) => openMenu(event, consoleActions(item)), item.pinned ? 'row-action pin' : 'row-action'));
+      row.appendChild(icon('ellipsis', 'Console actions', (event) => openMenu(event, consoleActions(item)), item.pinned ? 'row-action pin' : 'row-action'));
       return row;
     }
 
@@ -10122,7 +10426,7 @@ var QueryMapProvider = class {
         vscode.postMessage({ type: 'openHistory', historyId: item.id });
       };
       row.oncontextmenu = (event) => openMenu(event, historyActions(item));
-      row.appendChild(icon('\u22EF', 'Console history actions', (event) => openMenu(event, historyActions(item)), item.favorite ? 'row-action pin' : 'row-action'));
+      row.appendChild(icon('ellipsis', 'Console history actions', (event) => openMenu(event, historyActions(item)), item.favorite ? 'row-action pin' : 'row-action'));
       return row;
     }
 
@@ -10200,7 +10504,7 @@ var QueryMapProvider = class {
       row.appendChild(status === 'running' ? loader() : statusDot(status || 'completed'));
       const iconNode = document.createElement('span');
       iconNode.className = 'session-icon';
-      iconNode.textContent = '\u25A3';
+      iconNode.innerHTML = '<i class="codicon codicon-output"></i>';
       row.appendChild(iconNode);
       const nameNode = document.createElement('span');
       nameNode.className = 'session-name';
@@ -10216,22 +10520,22 @@ var QueryMapProvider = class {
     function consoleActions(item) {
       if (item.projectFile) {
         return [
-          { icon: '\xD7', label: 'Remove from active session', run: () => vscode.postMessage({ type: 'untrackConsole', consoleId: item.id }) }
+          { icon: 'close', label: 'Remove from active session', run: () => vscode.postMessage({ type: 'untrackConsole', consoleId: item.id }) }
         ];
       }
       return [
-        { icon: '\u2316', label: item.pinned ? 'Unpin console' : 'Pin console', run: () => vscode.postMessage({ type: 'togglePin', consoleId: item.id, pinned: !item.pinned }) },
-        { icon: '\u2191', label: 'Move up', run: () => vscode.postMessage({ type: 'moveConsole', consoleId: item.id, direction: 'up' }) },
-        { icon: '\u2193', label: 'Move down', run: () => vscode.postMessage({ type: 'moveConsole', consoleId: item.id, direction: 'down' }) },
-        { icon: '\xD7', label: 'Untrack console', shortcut: 'Delete', run: () => vscode.postMessage({ type: 'untrackConsole', consoleId: item.id }) }
+        { icon: item.pinned ? 'pinned' : 'pin', label: item.pinned ? 'Unpin console' : 'Pin console', run: () => vscode.postMessage({ type: 'togglePin', consoleId: item.id, pinned: !item.pinned }) },
+        { icon: 'arrow-up', label: 'Move up', run: () => vscode.postMessage({ type: 'moveConsole', consoleId: item.id, direction: 'up' }) },
+        { icon: 'arrow-down', label: 'Move down', run: () => vscode.postMessage({ type: 'moveConsole', consoleId: item.id, direction: 'down' }) },
+        { icon: 'trash', label: 'Untrack console', shortcut: 'Delete', run: () => vscode.postMessage({ type: 'untrackConsole', consoleId: item.id }) }
       ];
     }
 
     function historyActions(item) {
       return [
-        { icon: '\u2316', label: item.favorite ? 'Remove favorite' : 'Favorite', run: () => vscode.postMessage({ type: 'toggleFavoriteHistory', historyId: item.id, favorite: !item.favorite }) },
-        { icon: '\u29C9', label: 'Copy SQL', shortcut: 'Ctrl+C', run: () => vscode.postMessage({ type: 'copyHistory', historyId: item.id }) },
-        { icon: '\xD7', label: 'Delete history item', shortcut: 'Delete', run: () => vscode.postMessage({ type: 'deleteHistory', historyId: item.id }) }
+        { icon: item.favorite ? 'star-full' : 'star-empty', label: item.favorite ? 'Remove favorite' : 'Favorite', run: () => vscode.postMessage({ type: 'toggleFavoriteHistory', historyId: item.id, favorite: !item.favorite }) },
+        { icon: 'copy', label: 'Copy SQL', shortcut: 'Ctrl+C', run: () => vscode.postMessage({ type: 'copyHistory', historyId: item.id }) },
+        { icon: 'trash', label: 'Delete history item', shortcut: 'Delete', run: () => vscode.postMessage({ type: 'deleteHistory', historyId: item.id }) }
       ];
     }
 
@@ -10244,7 +10548,7 @@ var QueryMapProvider = class {
       for (const action of actions) {
         const item = document.createElement('button');
         item.type = 'button';
-        item.innerHTML = '<span>' + escapeHtml(action.icon || '') + '</span><span>' + escapeHtml(action.label) + '</span><kbd>' + escapeHtml(action.shortcut || '') + '</kbd>';
+        item.innerHTML = '<i class="codicon codicon-' + (action.icon || 'blank') + '"></i><span>' + escapeHtml(action.label) + '</span><kbd>' + escapeHtml(action.shortcut || '') + '</kbd>';
         item.disabled = action.disabled === true;
         item.onclick = () => {
           if (action.disabled === true) return;
@@ -10270,13 +10574,13 @@ var QueryMapProvider = class {
       }
     }
 
-    function icon(text, title, onclick, extraClass) {
+    function icon(name, title, onclick, extraClass) {
       const button = document.createElement('button');
       button.className = 'icon' + (extraClass ? ' ' + extraClass : '');
       button.type = 'button';
       button.title = title;
       button.setAttribute('aria-label', title);
-      button.textContent = text;
+      if (name) button.innerHTML = '<i class="codicon codicon-' + name + '"></i>';
       button.onclick = (event) => {
         event.stopPropagation();
         onclick(event);
@@ -10475,7 +10779,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
     this.view = webviewView;
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [vscode23.Uri.joinPath(this.context.extensionUri, "media", "results")]
+      localResourceRoots: [vscode23.Uri.joinPath(this.context.extensionUri, "media")]
     };
     webviewView.webview.html = this.html(webviewView.webview);
     webviewView.webview.onDidReceiveMessage((message) => this.onMessage(message));
@@ -10714,13 +11018,15 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
   html(webview) {
     const script = webview.asWebviewUri(vscode23.Uri.joinPath(this.context.extensionUri, "media", "results", "results.js"));
     const style = webview.asWebviewUri(vscode23.Uri.joinPath(this.context.extensionUri, "media", "results", "results.css"));
+    const codicons = webview.asWebviewUri(vscode23.Uri.joinPath(this.context.extensionUri, "media", "codicons", "codicon.css"));
     const nonce = Date.now().toString();
     return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="${codicons}" rel="stylesheet">
   <link href="${style}" rel="stylesheet">
   <title>SQL Results</title>
 </head>
@@ -10748,7 +11054,7 @@ var TableDataPanel = class {
       }
     );
     panel.iconPath = vscode24.Uri.joinPath(context.extensionUri, "media", "database.svg");
-    panel.webview.html = this.html(panel.webview, node, [], [], 0, maxRows, false, true);
+    panel.webview.html = this.html(panel.webview, context.extensionUri, node, [], [], 0, maxRows, false, true);
     let initialFetchStarted = false;
     panel.webview.onDidReceiveMessage(async (message) => {
       if (message.type === "ready") {
@@ -10826,7 +11132,7 @@ var TableDataPanel = class {
       }
     );
     panel.iconPath = vscode24.Uri.joinPath(context.extensionUri, "media", "database.svg");
-    panel.webview.html = this.advisorHtml(node, report);
+    panel.webview.html = this.advisorHtml(panel.webview, context.extensionUri, node, report);
     panel.webview.onDidReceiveMessage(async (message) => {
       if (message.type === "copy" && typeof message.text === "string") {
         await vscode24.env.clipboard.writeText(message.text);
@@ -10848,7 +11154,7 @@ var TableDataPanel = class {
       }
     );
     panel.iconPath = vscode24.Uri.joinPath(context.extensionUri, "media", "database.svg");
-    panel.webview.html = this.profileHtml(node, report);
+    panel.webview.html = this.profileHtml(panel.webview, context.extensionUri, node, report);
     panel.webview.onDidReceiveMessage(async (message) => {
       if (message.type === "copy" && typeof message.text === "string") {
         await vscode24.env.clipboard.writeText(message.text);
@@ -10879,15 +11185,21 @@ var TableDataPanel = class {
       });
     }
   }
-  static html(webview, node, rows, columns, durationMs, maxRows, hasMore, initialLoading = false) {
+  /** Shared <head> tags: CSP (allowing the codicon font/stylesheet) and the codicon stylesheet link. */
+  static headTags(webview, extensionUri, nonce) {
+    const codicon = webview.asWebviewUri(vscode24.Uri.joinPath(extensionUri, "media", "codicons", "codicon.css"));
+    return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="${codicon}" rel="stylesheet">`;
+  }
+  static html(webview, extensionUri, node, rows, columns, durationMs, maxRows, hasMore, initialLoading = false) {
     const nonce = Date.now().toString();
     const safeTable = escapeHtml2(qualifiedName(node.table.schema, node.table.name));
     return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${this.headTags(webview, extensionUri, nonce)}
   <title>${safeTable}</title>
   <style>
     :root {
@@ -10916,6 +11228,12 @@ var TableDataPanel = class {
     }
     * {
       box-sizing: border-box;
+    }
+    .codicon[class*='codicon-'] {
+      font-size: var(--icon-size);
+      line-height: 1;
+      color: inherit;
+      vertical-align: middle;
     }
     body {
       margin: 0;
@@ -11055,6 +11373,10 @@ var TableDataPanel = class {
       border-radius: var(--radius-sm);
       font: inherit;
       padding: 0 var(--space-sm);
+      transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; animation-duration: 0.001ms !important; }
     }
     .icon-button {
       width: var(--toolbar-button-size);
@@ -11244,15 +11566,8 @@ var TableDataPanel = class {
       background: color-mix(in srgb, var(--bg-active) 32%, transparent);
       opacity: 1;
     }
-    .filter-icon {
-      width: calc(var(--icon-size) * 1.05);
-      height: calc(var(--icon-size) * 1.05);
-      display: block;
-      fill: none;
-      stroke: currentColor;
-      stroke-width: 1.9;
-      stroke-linecap: round;
-      stroke-linejoin: round;
+    .sort-neutral {
+      opacity: 0.4;
     }
     .resize-handle {
       position: absolute;
@@ -11535,23 +11850,23 @@ var TableDataPanel = class {
 <body>
   <div class="shell">
     <div class="toolbar">
-      <button class="icon-button" id="refresh" data-tone="blue" title="Refresh data">\u21BB</button>
-      <button class="icon-button" id="copyRows" data-tone="purple" title="Copy visible rows as TSV">\u29C9</button>
-      <button class="icon-button" id="focusWhere" data-tone="blue" title="Focus WHERE">\u2315</button>
+      <button class="icon-button" id="refresh" data-tone="blue" title="Refresh data" aria-label="Refresh data"><i class="codicon codicon-refresh"></i></button>
+      <button class="icon-button" id="copyRows" data-tone="purple" title="Copy visible rows as TSV" aria-label="Copy visible rows as TSV"><i class="codicon codicon-copy"></i></button>
+      <button class="icon-button" id="focusWhere" data-tone="blue" title="Focus WHERE" aria-label="Focus WHERE"><i class="codicon codicon-search"></i></button>
       <span class="toolbar-separator"></span>
-      <button class="icon-button" id="editCell" data-tone="purple" title="Edit selected cell">\u270E</button>
-      <button class="icon-button" id="insertRow" data-tone="green" title="Insert row">\uFF0B</button>
-      <button class="icon-button" id="deleteRow" data-tone="red" title="Delete selected row">\u232B</button>
+      <button class="icon-button" id="editCell" data-tone="purple" title="Edit selected cell" aria-label="Edit selected cell"><i class="codicon codicon-edit"></i></button>
+      <button class="icon-button" id="insertRow" data-tone="green" title="Insert row" aria-label="Insert row"><i class="codicon codicon-add"></i></button>
+      <button class="icon-button" id="deleteRow" data-tone="red" title="Delete selected row" aria-label="Delete selected row"><i class="codicon codicon-trash"></i></button>
       <span class="toolbar-separator"></span>
-      <button class="icon-button" id="generateSelect" data-tone="green" title="Generate SELECT">\uFF0B</button>
-      <button class="icon-button" id="copyTable" data-tone="purple" title="Copy table to another connection">\u21C4</button>
-      <button class="icon-button" id="importData" data-tone="blue" title="Import CSV or JSON">\u21EA</button>
-      <button class="icon-button" id="clearCriteria" data-tone="red" title="Clear WHERE, ORDER BY, and column filters">\u2212</button>
-      <button class="icon-button" id="resetRows" data-tone="orange" title="Reset to 500 rows">\u21B6</button>
+      <button class="icon-button" id="generateSelect" data-tone="green" title="Generate SELECT" aria-label="Generate SELECT"><i class="codicon codicon-file-code"></i></button>
+      <button class="icon-button" id="copyTable" data-tone="purple" title="Copy table to another connection" aria-label="Copy table to another connection"><i class="codicon codicon-arrow-swap"></i></button>
+      <button class="icon-button" id="importData" data-tone="blue" title="Import CSV or JSON" aria-label="Import CSV or JSON"><i class="codicon codicon-cloud-upload"></i></button>
+      <button class="icon-button" id="clearCriteria" data-tone="red" title="Clear WHERE, ORDER BY, and column filters" aria-label="Clear WHERE, ORDER BY, and column filters"><i class="codicon codicon-discard"></i></button>
+      <button class="icon-button" id="resetRows" data-tone="orange" title="Reset to 500 rows" aria-label="Reset to 500 rows"><i class="codicon codicon-history"></i></button>
       <button id="showDdl" title="Show DDL">DDL</button>
-      <button class="icon-button" id="applyWhere" data-tone="green" title="Apply WHERE">\u25B6</button>
-      <button class="icon-button" id="toggleFilters" data-tone="blue" title="Show or hide per-column filters"><svg class="filter-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.5 3.5h11l-4.4 5v3.6l-2.2 1.1V8.5l-4.4-5Z"></path></svg></button>
-      <button class="icon-button" id="clearFilters" data-tone="orange" title="Clear column filters">\u25C7</button>
+      <button class="icon-button" id="applyWhere" data-tone="green" title="Apply WHERE" aria-label="Apply WHERE"><i class="codicon codicon-play"></i></button>
+      <button class="icon-button" id="toggleFilters" data-tone="blue" title="Show or hide per-column filters" aria-label="Show or hide per-column filters"><i class="codicon codicon-list-filter"></i></button>
+      <button class="icon-button" id="clearFilters" data-tone="orange" title="Clear column filters" aria-label="Clear column filters"><i class="codicon codicon-clear-all"></i></button>
       <span class="toolbar-spacer"></span>
       <select id="exportFormat" class="tool-select" title="Export visible rows">
         <option value="csv">CSV</option>
@@ -11561,16 +11876,16 @@ var TableDataPanel = class {
         <option value="insert">INSERT</option>
         <option value="xlsx">XLSX</option>
       </select>
-      <button class="icon-button" id="export" data-tone="green" title="Export">\u21E9</button>
+      <button class="icon-button" id="export" data-tone="green" title="Export" aria-label="Export"><i class="codicon codicon-desktop-download"></i></button>
     </div>
     <div class="criteria-row">
       <div class="criteria">
-        <span class="criteria-icon"><svg class="filter-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.5 3.5h11l-4.4 5v3.6l-2.2 1.1V8.5l-4.4-5Z"></path></svg></span>
+        <span class="criteria-icon"><i class="codicon codicon-filter"></i></span>
         <strong>WHERE</strong>
         <input id="where" aria-label="Filter rows">
       </div>
       <div class="criteria">
-        <span class="criteria-icon">\u2261</span>
+        <span class="criteria-icon"><i class="codicon codicon-list-ordered"></i></span>
         <strong>ORDER BY</strong>
         <input id="orderBy" aria-label="Order rows">
       </div>
@@ -11998,7 +12313,7 @@ var TableDataPanel = class {
       filterPopover.hidden = false;
       filterPopover.innerHTML =
         '<div class="filter-title">Local Filter For \\'' + html(activeFilterColumn) + '\\'</div>' +
-        '<label class="filter-search"><span>\u2315</span><input id="filterSearchInput" value="' + html(filterSearch) + '"></label>' +
+        '<label class="filter-search"><i class="codicon codicon-search"></i><input id="filterSearchInput" value="' + html(filterSearch) + '"></label>' +
         '<label class="filter-option filter-option-heading"><input id="filterSelectVisible" type="checkbox" ' + (allVisibleSelected ? 'checked' : '') + '><span>Value</span><span class="filter-count">Count</span></label>' +
         '<div class="filter-option-list">' + visibleOptions.map((option) => {
           return '<label class="filter-option"><input type="checkbox" data-filter-value="' + html(option.key) + '" ' + (filterDraft.has(option.key) ? 'checked' : '') + '><span title="' + html(option.label) + '">' + html(option.label) + '</span><span class="filter-count">' + option.count.toLocaleString() + '</span></label>';
@@ -12058,11 +12373,11 @@ var TableDataPanel = class {
       loadingSpinner.hidden = !loading;
       loadingText.textContent = loading ? 'Loading table data...' : errorMessage;
     }
-    const filterIconMarkup = '<svg class="filter-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.5 3.5h11l-4.4 5v3.6l-2.2 1.1V8.5l-4.4-5Z"></path></svg>';
+    const filterIconMarkup = '<i class="codicon codicon-filter"></i>';
     function renderHeader() {
       colgroup.innerHTML = '<col class="rownum-col">' + columns.map((column) => '<col class="data-col" style="width: ' + (columnWidths[column] || DEFAULT_COLUMN_WIDTH) + 'px">').join('');
       thead.innerHTML = '<tr><th>#</th>' + columns.map((column) => {
-        const mark = sort?.column === column ? (sort.direction === 'asc' ? '\u25B2' : '\u25BC') : '\u2195';
+        const mark = sort?.column === column ? '<i class="codicon codicon-arrow-' + (sort.direction === 'asc' ? 'up' : 'down') + '"></i>' : '<i class="codicon codicon-fold sort-neutral"></i>';
         const filterButton = columnFiltersVisible ? '<button class="filter-button ' + (columnFilters.has(column) ? 'active' : '') + '" data-filter-button="' + html(column) + '" title="Filter ' + html(column) + '">' + filterIconMarkup + '</button>' : '';
         return '<th class="' + (selectedColumn === column ? 'selected-column' : '') + '"><div class="header-cell-actions"><button class="header-button" data-select-column="' + html(column) + '" title="Select column ' + html(column) + '"><span class="column-type-icon"></span><span>' + html(column) + '</span></button><button class="sort-button ' + (sort?.column === column ? 'active' : '') + '" data-sort="' + html(column) + '" title="Order by ' + html(column) + '">' + mark + '</button>' + filterButton + '</div><span class="resize-handle" data-resize-column="' + html(column) + '" title="Resize column"></span></th>';
       }).join('') + '</tr>';
@@ -12378,7 +12693,7 @@ var TableDataPanel = class {
 </body>
 </html>`;
   }
-  static advisorHtml(node, report) {
+  static advisorHtml(webview, extensionUri, node, report) {
     const nonce = Date.now().toString();
     const table = qualifiedName(node.table.schema, node.table.name);
     const recommendations = report.advice.recommendations;
@@ -12393,8 +12708,7 @@ var TableDataPanel = class {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${this.headTags(webview, extensionUri, nonce)}
   <title>Advisor ${escapeHtml2(table)}</title>
   <style>
     :root {
@@ -12619,7 +12933,7 @@ var TableDataPanel = class {
 </body>
 </html>`;
   }
-  static profileHtml(node, report) {
+  static profileHtml(webview, extensionUri, node, report) {
     const nonce = Date.now().toString();
     const table = qualifiedName(node.table.schema, node.table.name);
     const json = JSON.stringify(report, null, 2);
@@ -12628,8 +12942,7 @@ var TableDataPanel = class {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${this.headTags(webview, extensionUri, nonce)}
   <title>Profile ${escapeHtml2(table)}</title>
   <style>
     :root {
@@ -12914,6 +13227,7 @@ function activate(context) {
     async (tab, resultSetIndex) => compareResultTabs(tab, resultSetIndex)
   );
   queryMap = new QueryMapProvider(
+    context.extensionUri,
     sectionService,
     async (documentUri, section) => {
       await highlighter.reveal(documentUri, rangeToPlain(section.range), section.sql);

@@ -4,6 +4,7 @@ import { QueryField, QueryResultTab, ResultSet } from '../../../../types';
 import { formatValue } from '../format';
 import { vscode } from '../vscode';
 import { rowsToCsv, rowsToTsv } from '../format';
+import { Icon } from './Icon';
 
 const ROW_HEIGHT = 32;
 const BUFFER = 12;
@@ -331,11 +332,13 @@ export function ResultGrid({
                       setSelection({ type: 'column', column: field.name });
                     }}
                   >
-                    {sort?.column === field.name ? (sort.direction === 'asc' ? '▲' : '▼') : '↕'}
+                    {sort?.column === field.name
+                      ? <Icon name={sort.direction === 'asc' ? 'arrow-up' : 'arrow-down'} />
+                      : <Icon name="fold" className="sort-neutral" />}
                   </button>
                   {columnFiltersVisible && (
                     <button className={`filter-button ${activeFilter ? 'active' : ''}`} title="Filter column" aria-label={`Filter ${field.name}`} onClick={(event) => toggleColumnFilter(event, field.name)}>
-                      <FilterIcon />
+                      <Icon name="filter" />
                     </button>
                   )}
                   <span className="resize-handle" title="Resize column" onMouseDown={(event) => startColumnResize(event, field.name)} />
@@ -418,7 +421,7 @@ export function ResultGrid({
             vscode.postMessage({ type: 'copy', text });
             setContextMenu(undefined);
           }}>
-            <span>⧉</span><span>Copy</span><kbd>Ctrl+C</kbd>
+            <Icon name="copy" /><span>Copy</span><kbd>Ctrl+C</kbd>
           </button>
           <button role="menuitem" disabled={contextMenu.rowIndex === undefined || !contextMenu.row} onClick={() => {
             if (contextMenu.row) {
@@ -435,7 +438,7 @@ export function ResultGrid({
             }
             setContextMenu(undefined);
           }}>
-            <span>✎</span><span>Edit Cell</span>
+            <Icon name="edit" /><span>Edit Cell</span>
           </button>
           <button role="menuitem" onClick={() => {
             const rowText = window.prompt('Insert row as JSON object', '{}');
@@ -444,7 +447,7 @@ export function ResultGrid({
             }
             setContextMenu(undefined);
           }}>
-            <span>＋</span><span>Insert Row</span>
+            <Icon name="add" /><span>Insert Row</span>
           </button>
           <button role="menuitem" disabled={contextMenu.rowIndex === undefined || !contextMenu.row} onClick={() => {
             if (contextMenu.row) {
@@ -452,14 +455,14 @@ export function ResultGrid({
             }
             setContextMenu(undefined);
           }}>
-            <span>⌫</span><span>Delete Row</span>
+            <Icon name="trash" /><span>Delete Row</span>
           </button>
           <button role="menuitem" disabled={contextMenu.rowIndex === undefined} onClick={() => {
             const row = contextMenu.rowIndex !== undefined ? rowForIndex(contextMenu.rowIndex) : undefined;
             if (row) vscode.postMessage({ type: 'copy', text: rowsToTsv([row]) });
             setContextMenu(undefined);
           }}>
-            <span>▤</span><span>Copy Row</span>
+            <Icon name="list-flat" /><span>Copy Row</span>
           </button>
           <button role="menuitem" disabled={!contextMenu.column} onClick={() => {
             if (contextMenu.column) {
@@ -468,13 +471,13 @@ export function ResultGrid({
             }
             setContextMenu(undefined);
           }}>
-            <span>▥</span><span>Copy Column</span>
+            <Icon name="symbol-field" /><span>Copy Column</span>
           </button>
           <button role="menuitem" onClick={() => {
             vscode.postMessage({ type: 'copy', text: rowsToCsv(visibleRows) });
             setContextMenu(undefined);
           }}>
-            <span>⇩</span><span>Copy Visible as CSV</span>
+            <Icon name="desktop-download" /><span>Copy Visible as CSV</span>
           </button>
         </div>
       )}
@@ -508,8 +511,8 @@ export function ResultGrid({
       )}
       <div className="result-pager">
         <span className="pager-group">
-          <button className="pager-button" disabled={currentOffset === 0 || pageSize === 'all'} onClick={() => vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: 0 })}>|‹</button>
-          <button className="pager-button" disabled={currentOffset === 0 || pageSize === 'all'} onClick={() => vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: Math.max(0, currentOffset - Number(pageSize)) })}>‹</button>
+          <button className="pager-button" title="First page" aria-label="First page" disabled={currentOffset === 0 || pageSize === 'all'} onClick={() => vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: 0 })}><Icon name="debug-step-back" /></button>
+          <button className="pager-button" title="Previous page" aria-label="Previous page" disabled={currentOffset === 0 || pageSize === 'all'} onClick={() => vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: Math.max(0, currentOffset - Number(pageSize)) })}><Icon name="chevron-left" /></button>
           <select
             value={pageSize === 'all' ? 'all' : String(pageSize)}
             onChange={(event) => changePageSize(event.target.value)}
@@ -522,18 +525,10 @@ export function ResultGrid({
             <option value="all">All rows</option>
           </select>
           <span>of {hasMore ? `${(currentOffset + visibleRows.length + 1).toLocaleString()}+` : (currentOffset + visibleRows.length).toLocaleString()}</span>
-          <button className="pager-button" disabled={!hasMore || pageSize === 'all'} onClick={() => vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: currentOffset + Number(pageSize) })}>›</button>
+          <button className="pager-button" title="Next page" aria-label="Next page" disabled={!hasMore || pageSize === 'all'} onClick={() => vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: currentOffset + Number(pageSize) })}><Icon name="chevron-right" /></button>
         </span>
       </div>
     </section>
-  );
-}
-
-function FilterIcon() {
-  return (
-    <svg className="filter-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      <path d="M2.5 3.5h11l-4.4 5v3.6l-2.2 1.1V8.5l-4.4-5Z" />
-    </svg>
   );
 }
 
@@ -658,7 +653,7 @@ function ColumnFilterPopover({
     <div className="filter-popover value-filter-popover" style={style} onClick={(event) => event.stopPropagation()}>
       <div className="filter-title">Local Filter For '{column}'</div>
       <label className="filter-search">
-        <span>⌕</span>
+        <Icon name="search" />
         <input value={search} onChange={(event) => setSearch(event.target.value)} autoFocus />
       </label>
       <label className="filter-option filter-option-heading">

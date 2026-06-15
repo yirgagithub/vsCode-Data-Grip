@@ -3,6 +3,7 @@ import { QueryResultTab, ResultSet } from '../../../../types';
 import { vscode } from '../vscode';
 import { rowsToCsv, rowsToMarkdown, rowsToTsv } from '../format';
 import { ResultViewMode, useResultsStore } from '../store';
+import { Icon } from './Icon';
 
 export function ResultToolbar({
   tab,
@@ -49,9 +50,9 @@ export function ResultToolbar({
   return (
     <div className="toolbar result-toolbar" role="toolbar" aria-label="Result actions">
       <div className="toolbar-group">
-        <button className="tool icon-tool tone-green" title={isPlanTab ? 'Plan tabs are rerun from the editor' : 'Rerun query'} aria-label="Rerun query" onClick={rerun} disabled={isRunning || isPlanTab}>▶</button>
-        <button className={`tool icon-tool ${tab.pinned ? 'tone-orange active' : ''}`} title={tab.pinned ? 'Unpin tab' : 'Pin tab'} aria-label={tab.pinned ? 'Unpin tab' : 'Pin tab'} onClick={() => pinTab(tab.id, !tab.pinned)}>⌖</button>
-        <button className="tool icon-tool tone-purple" title="Compare result tabs" aria-label="Compare result tabs" onClick={compare} disabled={isRunning || isPlanTab || !resultSet}>≠</button>
+        <button className="tool icon-tool tone-green" title={isPlanTab ? 'Plan tabs are rerun from the editor' : 'Rerun query'} aria-label="Rerun query" onClick={rerun} disabled={isRunning || isPlanTab}><Icon name="play" /></button>
+        <button className={`tool icon-tool ${tab.pinned ? 'tone-orange active' : ''}`} title={tab.pinned ? 'Unpin tab' : 'Pin tab'} aria-label={tab.pinned ? 'Unpin tab' : 'Pin tab'} onClick={() => pinTab(tab.id, !tab.pinned)}><Icon name={tab.pinned ? 'pinned' : 'pin'} /></button>
+        <button className="tool icon-tool tone-purple" title="Compare result tabs" aria-label="Compare result tabs" onClick={compare} disabled={isRunning || isPlanTab || !resultSet}><Icon name="git-compare" /></button>
       </div>
       <span className="separator" />
       <div className="toolbar-group">
@@ -71,7 +72,7 @@ export function ResultToolbar({
           onClick={() => vscode.postMessage({ type: 'commitTransaction', tabId: tab.id })}
           disabled={isRunning || isPlanTab || !txOpen}
         >
-          ✓
+          <Icon name="check" />
         </button>
         <button
           className={`tool icon-tool tone-red ${txOpen ? 'active' : ''}`}
@@ -80,7 +81,7 @@ export function ResultToolbar({
           onClick={() => vscode.postMessage({ type: 'rollbackTransaction', tabId: tab.id })}
           disabled={isRunning || isPlanTab || !txOpen}
         >
-          ↶
+          <Icon name="discard" />
         </button>
       </div>
       <span className="separator" />
@@ -93,7 +94,7 @@ export function ResultToolbar({
           onClick={() => onSetViewMode('grid')}
           disabled={isRunning || isPlanTab}
         >
-          ▦
+          <Icon name="table" />
         </button>
         <button
           className={`tool icon-tool tone-purple ${viewMode === 'chart' ? 'active' : ''}`}
@@ -103,7 +104,7 @@ export function ResultToolbar({
           onClick={() => onSetViewMode('chart')}
           disabled={isRunning || !canChart || isPlanTab}
         >
-          ⌁
+          <Icon name="graph-line" />
         </button>
         <button
           className={`tool icon-tool ${columnFiltersVisible ? 'active' : ''}`}
@@ -113,16 +114,16 @@ export function ResultToolbar({
           onClick={onToggleColumnFilters}
           disabled={viewMode !== 'grid' || isPlanTab}
         >
-          <FilterIcon />
+          <Icon name="filter" />
         </button>
-        <button className="tool icon-tool tone-purple" title="Copy fetched rows as TSV" aria-label="Copy fetched rows as TSV" onClick={() => vscode.postMessage({ type: 'copy', text: rowsToTsv(rows) })} disabled={isRunning}>⧉</button>
+        <button className="tool icon-tool tone-purple" title="Copy fetched rows as TSV" aria-label="Copy fetched rows as TSV" onClick={() => vscode.postMessage({ type: 'copy', text: rowsToTsv(rows) })} disabled={isRunning}><Icon name="copy" /></button>
         <select className="toolbar-select" value={exportFormat} onChange={(event) => setExportFormat(event.target.value as 'csv' | 'json' | 'tsv' | 'markdown')} title="Export format" aria-label="Export format">
           <option value="csv">CSV</option>
           <option value="json">JSON</option>
           <option value="tsv">TSV</option>
           <option value="markdown">Markdown</option>
         </select>
-        <button className="tool icon-tool tone-green" title={`Copy fetched rows as ${exportFormat.toUpperCase()}`} aria-label={`Copy fetched rows as ${exportFormat.toUpperCase()}`} onClick={() => vscode.postMessage({ type: 'copy', text: exportText() })} disabled={isRunning}>⇩</button>
+        <button className="tool icon-tool tone-green" title={`Copy fetched rows as ${exportFormat.toUpperCase()}`} aria-label={`Copy fetched rows as ${exportFormat.toUpperCase()}`} onClick={() => vscode.postMessage({ type: 'copy', text: exportText() })} disabled={isRunning}><Icon name="desktop-download" /></button>
       </div>
       <span className="toolbar-spacer" />
       <span className="execution-pill" title={`${tab.executionStatus}${tab.executionTimeMs !== undefined ? ` - ${tab.executionTimeMs}ms` : ''}`}>
@@ -132,13 +133,5 @@ export function ResultToolbar({
       </span>
       <span className="muted command-label">{resultSet?.command ?? (isRunning ? 'Running query' : '')}</span>
     </div>
-  );
-}
-
-function FilterIcon() {
-  return (
-    <svg className="filter-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      <path d="M2.5 3.5h11l-4.4 5v3.6l-2.2 1.1V8.5l-4.4-5Z" />
-    </svg>
   );
 }

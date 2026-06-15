@@ -44,6 +44,9 @@ vi.mock('vscode', () => ({
     showInputBox: vi.fn(),
     createWebviewPanel: vi.fn()
   },
+  ViewColumn: {
+    Active: -1
+  },
   Diagnostic: class {
     constructor(public range: unknown, public message: string, public severity: number) {}
   },
@@ -1067,6 +1070,42 @@ where event_datetime::date between '{startDate}' and :endDate`;
     expect(validateQuery).not.toHaveBeenCalled();
     expect(diagnostics.map((diagnostic) => diagnostic.message)).not.toContain('Column "startDate" does not exist on public.event_fact.');
     expect(diagnostics.map((diagnostic) => diagnostic.message)).not.toContain('Column "endDate" does not exist on public.event_fact.');
+    expect(diagnostics.map((diagnostic) => diagnostic.message)).not.toContain('BETWEEN requires an AND upper bound.');
+  });
+
+  it('flags incomplete BETWEEN expressions before SQL parameters are resolved', async () => {
+    const local = connection({ id: 'local' });
+    const validateQuery = vi.fn();
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => true),
+        getDriver: vi.fn(() => ({ validateQuery }))
+      } as never,
+      {
+        getCachedForConnection: vi.fn(async () => schemaEntry({
+          connectionId: local.id,
+          tables: [{ schema: 'public', name: 'adjust_offer', type: 'table' }],
+          columns: {
+            'public.adjust_offer': [
+              { schema: 'public', table: 'adjust_offer', name: 'date', ordinal: 1, dataType: 'date', nullable: true }
+            ]
+          }
+        })),
+        getCachedColumns: vi.fn(async () => [
+          { schema: 'public', table: 'adjust_offer', name: 'date', ordinal: 1, dataType: 'date', nullable: true }
+        ]),
+        refreshDefaultSchemaInBackground: vi.fn(),
+        refreshSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+    const sql = 'select * from public.adjust_offer where date between :date';
+
+    const diagnostics = await service.getDiagnostics(sqlDocument(sql) as never, undefined, local);
+
+    expect(validateQuery).not.toHaveBeenCalled();
+    expect(diagnostics.map((diagnostic) => diagnostic.message)).toContain('BETWEEN requires an AND upper bound.');
   });
 
   it('does not flag tables created earlier in the same script as missing schema objects', async () => {
@@ -1163,7 +1202,7 @@ where event_datetime::date between '2026-05-01' and '2026-05-31'`;
 });
 
 describe('SQL parameters', () => {
-  it('collects values in current-editor popups without opening a webview editor tab', async () => {
+  it('collects values in a compact parameter webview', async () => {
     const windowMock = vscode.window as unknown as {
       showQuickPick: ReturnType<typeof vi.fn>;
       showInputBox: ReturnType<typeof vi.fn>;
@@ -1172,30 +1211,45 @@ describe('SQL parameters', () => {
     windowMock.showQuickPick.mockReset();
     windowMock.showInputBox.mockReset();
     windowMock.createWebviewPanel.mockReset();
-    windowMock.showQuickPick
-      .mockResolvedValueOnce({ action: 'parameter', name: 'startDate' })
-      .mockResolvedValueOnce({ action: 'run' });
-    windowMock.showInputBox.mockResolvedValueOnce('2026-06-01');
+    let messageHandler: ((message: unknown) => void) | undefined;
+    let disposeHandler: (() => void) | undefined;
+    const panel = {
+      webview: {
+        html: '',
+        onDidReceiveMessage: vi.fn((handler: (message: unknown) => void) => {
+          messageHandler = handler;
+          return { dispose: vi.fn() };
+        })
+      },
+      onDidDispose: vi.fn((handler: () => void) => {
+        disposeHandler = handler;
+        return { dispose: vi.fn() };
+      }),
+      dispose: vi.fn(() => disposeHandler?.())
+    };
+    windowMock.createWebviewPanel.mockReturnValueOnce(panel);
     const prompt = new SqlParameterPrompt();
     const sql = `select *
 from public.event_fact
 where event_datetime::date = '{startDate}'`;
 
-    const resolved = await prompt.resolve(sql);
+    const resolving = prompt.resolve(sql);
+    await Promise.resolve();
+    messageHandler?.({ type: 'execute', values: { startDate: '2026-06-01' } });
+    const resolved = await resolving;
 
-    expect(windowMock.createWebviewPanel).not.toHaveBeenCalled();
-    expect(windowMock.showQuickPick).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({
-      title: 'SQL Parameters',
-      placeHolder: expect.stringContaining('Current SQL query: select * from public.event_fact')
-    }));
-    expect(windowMock.showQuickPick.mock.calls[0][0][0]).toMatchObject({
-      label: '$(code) Current SQL query',
-      detail: expect.stringContaining('select * from public.event_fact')
-    });
-    expect(windowMock.showInputBox).toHaveBeenCalledWith(expect.objectContaining({
-      title: 'SQL Parameter: startDate',
-      prompt: expect.stringContaining('Current SQL query: select * from public.event_fact')
-    }));
+    expect(windowMock.showQuickPick).not.toHaveBeenCalled();
+    expect(windowMock.showInputBox).not.toHaveBeenCalled();
+    expect(windowMock.createWebviewPanel).toHaveBeenCalledWith(
+      'databaseSqlParameters',
+      'Parameters',
+      vscode.ViewColumn.Active,
+      expect.objectContaining({ enableScripts: true })
+    );
+    expect(panel.webview.html).toContain('Parameters');
+    expect(panel.webview.html).toContain('startDate');
+    expect(panel.webview.html).toContain('SQL context');
+    expect(panel.dispose).toHaveBeenCalled();
     expect(resolved).toContain("event_datetime::date = '2026-06-01'");
   });
 
