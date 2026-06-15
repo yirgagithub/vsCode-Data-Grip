@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { ConnectionManager } from '../../database/connectionManager';
 import { QueryExecutor } from '../../database/queryExecutor';
 import { ResultSessionStore } from '../../persistence/resultSessionStore';
 import { QueryResultTab } from '../../types';
@@ -18,11 +19,14 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
 
   constructor(
     private readonly context: vscode.ExtensionContext,
+    private readonly connectionManager: ConnectionManager,
     private readonly sessionStore: ResultSessionStore,
     private readonly executor: QueryExecutor,
     private readonly revealSource?: (tab: QueryResultTab) => Promise<void>,
     private readonly onTabsChanged?: (tabs: QueryResultTab[]) => void,
-    private readonly runActiveEditorSelection?: (maxRows?: number) => Promise<boolean>
+    private readonly runActiveEditorSelection?: (maxRows?: number) => Promise<boolean>,
+    private readonly onMutationRequest?: (tab: QueryResultTab, message: Extract<ResultsFromWebviewMessage, { type: 'mutation' }>) => Promise<void>,
+    private readonly onCompareRequest?: (tab: QueryResultTab, resultSetIndex: number) => Promise<void>
   ) {
     this.tabs = this.sessionStore.getTabs();
     this.activeTabId = this.tabs[0]?.id;
@@ -87,6 +91,10 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
     return this.tabs.find((tab) => tab.id === id);
   }
 
+  getActiveTab(): QueryResultTab | undefined {
+    return this.getTab(this.activeTabId ?? '');
+  }
+
   private async onMessage(message: ResultsFromWebviewMessage): Promise<void> {
     if (message.type === 'ready') {
       this.postHydrate();
@@ -126,6 +134,7 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
       const tab = this.getTab(message.tabId);
       if (tab) {
         const maxRows = typeof message.maxRows === 'number' ? message.maxRows : message.maxRows === null ? undefined : tab.maxRows;
+        const offset = typeof message.offset === 'number' ? message.offset : message.offset === null ? 0 : tab.rowOffset ?? 0;
         if (await this.runActiveEditorSelection?.(maxRows)) {
           return;
         }
@@ -138,6 +147,7 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
           executionTimeMs: undefined,
           rowCount: undefined,
           maxRows,
+          rowOffset: offset,
           error: undefined,
           resultSets: [],
           activeResultSetIndex: 0,
@@ -147,6 +157,7 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
           connectionId: tab.connectionId,
           sql: tab.queryText,
           maxRows,
+          offset,
           source: {
             origin: tab.sourceOrigin,
             fileName: tab.sourceFile,
@@ -159,8 +170,46 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
       }
       return;
     }
+    if (message.type === 'setTransactionMode') {
+      const tab = this.getTab(message.tabId);
+      if (tab) {
+        await this.applyTransactionMode(tab.connectionId, message.mode);
+      }
+      return;
+    }
+    if (message.type === 'commitTransaction') {
+      const tab = this.getTab(message.tabId);
+      if (tab) {
+        await this.connectionManager.commitTransaction(tab.connectionId);
+        await this.syncTransactionState(tab.connectionId);
+      }
+      return;
+    }
+    if (message.type === 'rollbackTransaction') {
+      const tab = this.getTab(message.tabId);
+      if (tab) {
+        await this.connectionManager.rollbackTransaction(tab.connectionId);
+        await this.syncTransactionState(tab.connectionId);
+      }
+      return;
+    }
     if (message.type === 'copy') {
       await vscode.env.clipboard.writeText(message.text);
+      return;
+    }
+    if (message.type === 'mutation') {
+      const tab = this.getTab(this.activeTabId ?? '');
+      if (tab) {
+        await this.onMutationRequest?.(tab, message);
+      }
+      return;
+    }
+    if (message.type === 'compareTabs') {
+      const tab = this.getTab(this.activeTabId ?? '');
+      if (tab) {
+        await this.onCompareRequest?.(tab, message.resultSetIndex);
+      }
+      return;
     }
   }
 
@@ -169,7 +218,7 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private postHydrate(): void {
-    const tabs = this.visibleTabs();
+    const tabs = this.visibleTabs().map((tab) => this.withTransactionState(tab));
     this.post({ type: 'hydrate', tabs, activeTabId: this.activeTabId && tabs.some((tab) => tab.id === this.activeTabId) ? this.activeTabId : tabs[0]?.id });
   }
 
@@ -186,6 +235,50 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
       return this.tabs;
     }
     return this.tabs.filter((tab) => tab.connectionId === this.activeConnectionId);
+  }
+
+  private withTransactionState(tab: QueryResultTab): QueryResultTab {
+    return {
+      ...tab,
+      transaction: {
+        mode: this.connectionManager.getTransactionMode(tab.connectionId),
+        open: this.connectionManager.isTransactionOpen(tab.connectionId)
+      }
+    };
+  }
+
+  private async applyTransactionMode(connectionId: string, mode: 'auto' | 'manual'): Promise<void> {
+    this.connectionManager.setTransactionMode(connectionId, mode);
+    if (mode === 'manual') {
+      if (!this.connectionManager.isTransactionOpen(connectionId)) {
+        await this.connectionManager.beginTransaction(connectionId);
+      }
+    } else if (this.connectionManager.isTransactionOpen(connectionId)) {
+      const answer = await vscode.window.showWarningMessage(
+        'Switching to auto-commit will close the current transaction.',
+        { modal: true },
+        'Commit',
+        'Rollback',
+        'Cancel'
+      );
+      if (answer === 'Cancel' || !answer) {
+        this.connectionManager.setTransactionMode(connectionId, 'manual');
+        return;
+      }
+      if (answer === 'Commit') {
+        await this.connectionManager.commitTransaction(connectionId);
+      } else {
+        await this.connectionManager.rollbackTransaction(connectionId);
+      }
+    }
+    await this.syncTransactionState(connectionId);
+  }
+
+  private async syncTransactionState(connectionId: string): Promise<void> {
+    this.tabs = this.tabs.map((tab) => tab.connectionId === connectionId ? this.withTransactionState(tab) : tab);
+    await this.sessionStore.saveTabs(this.tabs);
+    this.onTabsChanged?.(this.tabs);
+    this.postHydrate();
   }
 
   private reusableTabFor(tab: QueryResultTab): QueryResultTab | undefined {
@@ -210,7 +303,7 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link href="${style}" rel="stylesheet">
   <title>SQL Results</title>

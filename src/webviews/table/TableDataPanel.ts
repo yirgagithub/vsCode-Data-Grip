@@ -7,14 +7,30 @@ import { qualifiedName } from '../../utils/identifiers';
 
 type TableDataMessage =
   | { type?: 'ready' }
-  | { type?: 'export'; format?: 'csv' | 'json' | 'tsv'; text?: string }
+  | { type?: 'export'; format?: 'csv' | 'json' | 'tsv' | 'markdown' | 'insert' | 'xlsx'; text?: string; rows?: Record<string, unknown>[]; columns?: string[] }
   | { type?: 'copy'; text?: string }
   | { type?: 'openSql'; title?: string; sql?: string }
   | { type?: 'fetch'; limit?: number | null; offset?: number; where?: string; orderBySql?: string; orderBy?: Array<{ column: string; direction: 'asc' | 'desc' }> }
-  | { type?: 'command'; command?: 'ddl' | 'select' };
+  | { type?: 'command'; command?: 'ddl' | 'select' | 'import' | 'copyToConnection' }
+  | TableMutationMessage;
+
+interface TableMutationMessage {
+  type: 'mutation';
+  kind?: 'edit-cell' | 'insert-row' | 'delete-row';
+  row?: Record<string, unknown>;
+  updatedRow?: Record<string, unknown>;
+  column?: string;
+  valueText?: string;
+  rowText?: string;
+}
 
 export class TableDataPanel {
-  static async open(context: vscode.ExtensionContext, connectionManager: ConnectionManager, node: TableNode): Promise<void> {
+  static async open(
+    context: vscode.ExtensionContext,
+    connectionManager: ConnectionManager,
+    node: TableNode,
+    onMutationRequest?: (message: TableMutationMessage) => Promise<void>
+  ): Promise<void> {
     const configuredMaxRows = vscode.workspace.getConfiguration('database').get<number>('defaultMaxRows', 500);
     const maxRows = Number.isFinite(configuredMaxRows) && configuredMaxRows && configuredMaxRows > 0 ? Math.floor(configuredMaxRows) : 500;
     const panel = vscode.window.createWebviewPanel(
@@ -44,13 +60,25 @@ export class TableDataPanel {
         return;
       }
 
-      if (message.type === 'export' && typeof message.text === 'string' && message.format) {
+      if (message.type === 'export' && message.format) {
         const target = await vscode.window.showSaveDialog({
-          defaultUri: vscode.Uri.file(`${node.table.name}.${message.format}`),
-          filters: { 'Data files': [message.format] }
+          defaultUri: vscode.Uri.file(`${node.table.name}.${message.format === 'insert' ? 'sql' : message.format === 'markdown' ? 'md' : message.format}`),
+          filters: {
+            'Data files': [message.format === 'insert' ? 'sql' : message.format === 'markdown' ? 'md' : message.format]
+          }
         });
         if (target) {
-          await vscode.workspace.fs.writeFile(target, Buffer.from(message.text, 'utf8'));
+          if (message.format === 'xlsx') {
+            const XLSX = await loadXlsx();
+            const workbook = XLSX.utils.book_new();
+            const rows = message.rows ?? [];
+            const columns = message.columns ?? (rows[0] ? Object.keys(rows[0]) : []);
+            const sheet = XLSX.utils.json_to_sheet(rows, { header: columns });
+            XLSX.utils.book_append_sheet(workbook, sheet, sanitizeSheetName(node.table.name));
+            await vscode.workspace.fs.writeFile(target, Buffer.from(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })));
+          } else if (typeof message.text === 'string') {
+            await vscode.workspace.fs.writeFile(target, Buffer.from(message.text, 'utf8'));
+          }
         }
         return;
       }
@@ -61,6 +89,12 @@ export class TableDataPanel {
         }
         if (message.command === 'select') {
           await vscode.commands.executeCommand('database.generateSelect', node);
+        }
+        if (message.command === 'import') {
+          await vscode.commands.executeCommand('database.importTableData', node);
+        }
+        if (message.command === 'copyToConnection') {
+          await vscode.commands.executeCommand('database.copyTableToConnection', node);
         }
         return;
       }
@@ -74,6 +108,11 @@ export class TableDataPanel {
           orderBySql: message.orderBySql,
           orderBy: message.orderBy
         });
+        return;
+      }
+
+      if (message.type === 'mutation') {
+        await onMutationRequest?.(message);
       }
     });
   }
@@ -832,7 +871,13 @@ export class TableDataPanel {
       <button class="icon-button" id="copyRows" data-tone="purple" title="Copy visible rows as TSV">⧉</button>
       <button class="icon-button" id="focusWhere" data-tone="blue" title="Focus WHERE">⌕</button>
       <span class="toolbar-separator"></span>
+      <button class="icon-button" id="editCell" data-tone="purple" title="Edit selected cell">✎</button>
+      <button class="icon-button" id="insertRow" data-tone="green" title="Insert row">＋</button>
+      <button class="icon-button" id="deleteRow" data-tone="red" title="Delete selected row">⌫</button>
+      <span class="toolbar-separator"></span>
       <button class="icon-button" id="generateSelect" data-tone="green" title="Generate SELECT">＋</button>
+      <button class="icon-button" id="copyTable" data-tone="purple" title="Copy table to another connection">⇄</button>
+      <button class="icon-button" id="importData" data-tone="blue" title="Import CSV or JSON">⇪</button>
       <button class="icon-button" id="clearCriteria" data-tone="red" title="Clear WHERE, ORDER BY, and column filters">−</button>
       <button class="icon-button" id="resetRows" data-tone="orange" title="Reset to 500 rows">↶</button>
       <button id="showDdl" title="Show DDL">DDL</button>
@@ -844,6 +889,9 @@ export class TableDataPanel {
         <option value="csv">CSV</option>
         <option value="json">JSON</option>
         <option value="tsv">TSV</option>
+        <option value="markdown">Markdown</option>
+        <option value="insert">INSERT</option>
+        <option value="xlsx">XLSX</option>
       </select>
       <button class="icon-button" id="export" data-tone="green" title="Export">⇩</button>
     </div>
@@ -911,6 +959,7 @@ export class TableDataPanel {
     let errorMessage = '';
     let selectedCell = null;
     let selectedRow = null;
+    let currentRows = [];
     let selectedColumn = null;
     let columnFiltersVisible = true;
     const columnFilters = new Map();
@@ -979,6 +1028,17 @@ export class TableDataPanel {
     }
     function csvValue(value) {
       return '"' + cell(value).replaceAll('"', '""') + '"';
+    }
+    function markdownValue(value) {
+      return cell(value).replaceAll('|', '\\|').replaceAll('\\r', ' ').replaceAll('\\n', ' ');
+    }
+    function sqlLiteral(value) {
+      if (value === null || value === undefined) return 'null';
+      if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+      if (typeof value === 'boolean') return value ? 'true' : 'false';
+      if (value instanceof Date) return "'" + value.toISOString().replace(/'/g, "''") + "'";
+      if (typeof value === 'object') return "'" + JSON.stringify(value).replace(/'/g, "''") + "'";
+      return "'" + String(value).replace(/'/g, "''") + "'";
     }
     function filterKey(value) {
       if (value === null || value === undefined) return '<NULL>';
@@ -1124,6 +1184,24 @@ export class TableDataPanel {
       const visibleRows = filteredRows();
       if (format === 'json') {
         return JSON.stringify(visibleRows, null, 2);
+      }
+      if (format === 'markdown') {
+        if (!visibleRows.length) {
+          return '';
+        }
+        const header = '| ' + columns.map((column) => markdownValue(column)).join(' | ') + ' |';
+        const separator = '| ' + columns.map(() => '---').join(' | ') + ' |';
+        const body = visibleRows.map((row) => '| ' + columns.map((column) => markdownValue(row[column])).join(' | ') + ' |');
+        return [header, separator, ...body].join('\\n');
+      }
+      if (format === 'insert') {
+        if (!visibleRows.length) {
+          return '';
+        }
+        return 'insert into ${qualifiedName(node.table.schema, node.table.name)} (' + columns.map((column) => sqlIdentifier(column)).join(', ') + ')\\nvalues\\n' + visibleRows.map((row) => '  (' + columns.map((column) => sqlLiteral(row[column])).join(', ') + ')').join(',\\n') + ';';
+      }
+      if (format === 'xlsx') {
+        return '';
       }
       const separator = format === 'tsv' ? '\\t' : ',';
       const encode = format === 'tsv' ? cell : csvValue;
@@ -1375,6 +1453,7 @@ export class TableDataPanel {
     }
     function renderBody() {
       const nextRows = filteredRows();
+      currentRows = nextRows;
       tbody.innerHTML = nextRows.map((row, index) => '<tr class="' + (selectedRow === index ? 'selected-row' : '') + '"><th data-row="' + index + '">' + (currentOffset + index + 1) + '</th>' + columns.map((column) => {
         const value = row[column];
         const text = html(cell(value));
@@ -1450,7 +1529,14 @@ export class TableDataPanel {
     });
     document.getElementById('export').addEventListener('click', () => {
       const format = document.getElementById('exportFormat').value;
-      vscode.postMessage({ type: 'export', format, text: exportRows(format) });
+      const visibleRows = filteredRows();
+      vscode.postMessage({
+        type: 'export',
+        format,
+        text: format === 'xlsx' ? undefined : exportRows(format),
+        rows: format === 'xlsx' ? visibleRows : undefined,
+        columns: format === 'xlsx' ? columns : undefined
+      });
     });
     document.getElementById('copyRows').addEventListener('click', () => {
       vscode.postMessage({ type: 'copy', text: exportRows('tsv') });
@@ -1458,12 +1544,62 @@ export class TableDataPanel {
     document.getElementById('focusWhere').addEventListener('click', () => {
       where.focus();
     });
+    document.getElementById('editCell').addEventListener('click', () => {
+      if (!selectedCell) {
+        return;
+      }
+      const row = currentRows[selectedCell.row];
+      const current = row?.[selectedCell.column];
+      const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', cell(current));
+      if (valueText === null) {
+        return;
+      }
+      vscode.postMessage({
+        type: 'mutation',
+        kind: 'edit-cell',
+        row,
+        updatedRow: { ...row, [selectedCell.column]: valueText },
+        column: selectedCell.column,
+        valueText
+      });
+    });
+    document.getElementById('insertRow').addEventListener('click', () => {
+      const rowText = window.prompt('Insert row as JSON object', '{}');
+      if (rowText === null) {
+        return;
+      }
+      vscode.postMessage({
+        type: 'mutation',
+        kind: 'insert-row',
+        rowText
+      });
+    });
+    document.getElementById('deleteRow').addEventListener('click', () => {
+      if (selectedRow === null || selectedRow === undefined) {
+        return;
+      }
+      const row = currentRows[selectedRow];
+      if (!row || !window.confirm('Open DELETE preview for the selected row?')) {
+        return;
+      }
+      vscode.postMessage({
+        type: 'mutation',
+        kind: 'delete-row',
+        row
+      });
+    });
     document.getElementById('applyWhere').addEventListener('click', () => fetchRows(0));
     document.getElementById('showDdl').addEventListener('click', () => {
       vscode.postMessage({ type: 'command', command: 'ddl' });
     });
     document.getElementById('generateSelect').addEventListener('click', () => {
       vscode.postMessage({ type: 'command', command: 'select' });
+    });
+    document.getElementById('copyTable').addEventListener('click', () => {
+      vscode.postMessage({ type: 'command', command: 'copyToConnection' });
+    });
+    document.getElementById('importData').addEventListener('click', () => {
+      vscode.postMessage({ type: 'command', command: 'import' });
     });
     document.getElementById('clearCriteria').addEventListener('click', () => {
       where.value = '';
@@ -1513,6 +1649,33 @@ export class TableDataPanel {
         selectedColumn = null;
         render();
       }
+    });
+    tbody.addEventListener('dblclick', (event) => {
+      const target = event.target;
+      const cellElement = target.closest('td');
+      if (!cellElement) {
+        return;
+      }
+      const rowIndex = Number(cellElement.dataset.row);
+      const column = cellElement.dataset.column;
+      const row = currentRows[rowIndex];
+      const current = row?.[column];
+      const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', cell(current));
+      if (valueText === null) {
+        return;
+      }
+      selectedCell = { row: rowIndex, column };
+      selectedRow = null;
+      selectedColumn = null;
+      render();
+      vscode.postMessage({
+        type: 'mutation',
+        kind: 'edit-cell',
+        row,
+        updatedRow: { ...row, [column]: valueText },
+        column,
+        valueText
+      });
     });
     window.addEventListener('message', (event) => {
       if (event.data?.type === 'error') {
@@ -1983,6 +2146,30 @@ function escapeHtml(value: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function sanitizeSheetName(name: string): string {
+  const cleaned = name.replace(/[\\/?*[\]:]/g, ' ').trim();
+  return (cleaned || 'Sheet1').slice(0, 31);
+}
+
+type XlsxRuntime = {
+  utils: {
+    book_new(): unknown;
+    json_to_sheet(rows: Record<string, unknown>[], options: { header: string[] }): unknown;
+    book_append_sheet(workbook: unknown, sheet: unknown, name: string): void;
+  };
+  write(workbook: unknown, options: { type: 'buffer'; bookType: 'xlsx' }): Buffer | Uint8Array;
+};
+
+let xlsxRuntime: Promise<XlsxRuntime> | undefined;
+
+function loadXlsx(): Promise<XlsxRuntime> {
+  xlsxRuntime ??= import('xlsx').then((module) => {
+    const candidate = module as unknown as XlsxRuntime | { default?: XlsxRuntime };
+    return 'utils' in candidate ? candidate : candidate.default as XlsxRuntime;
+  });
+  return xlsxRuntime;
 }
 
 function formatOptionalNumber(value: number | undefined): string {

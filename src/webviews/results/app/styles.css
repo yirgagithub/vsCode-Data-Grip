@@ -414,6 +414,26 @@ input:disabled {
   flex: 0 0 auto;
 }
 
+.tx-pill {
+  padding: 0 var(--space-xs);
+  border-left: 1px solid var(--border);
+  text-transform: uppercase;
+  letter-spacing: 0;
+  font-size: 0.72em;
+}
+
+.tx-pill.manual.open {
+  color: var(--success);
+}
+
+.tx-pill.manual.closed {
+  color: var(--warning);
+}
+
+.tx-pill.auto {
+  color: var(--text-muted);
+}
+
 .command-label {
   max-width: min(18rem, 30vw);
   overflow: hidden;

@@ -43,12 +43,13 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
     const [openFilter, setOpenFilter] = (0, react_1.useState)();
     const [selection, setSelection] = (0, react_1.useState)();
     const [inspectorOpen, setInspectorOpen] = (0, react_1.useState)(false);
-    const [pageOffset, setPageOffset] = (0, react_1.useState)(0);
     const [pageSize, setPageSize] = (0, react_1.useState)(100);
     const [columnWidths, setColumnWidths] = (0, react_1.useState)({});
     const [contextMenu, setContextMenu] = (0, react_1.useState)();
     const rows = resultSet?.rows ?? [];
     const fields = resultSet?.fields ?? [];
+    const currentOffset = tab.rowOffset ?? 0;
+    const hasMore = !!resultSet?.hasMore;
     const gridColumnStyle = {
         gridTemplateColumns: `var(--row-number-width) ${fields.map((field) => `${columnWidths[field.name] ?? DEFAULT_COLUMN_WIDTH}px`).join(' ')}`
     };
@@ -65,7 +66,6 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
                 : bv.localeCompare(av, undefined, { numeric: true, sensitivity: 'base' });
         });
     }, [rows, filters, sort]);
-    const pageLimit = pageSize === 'all' ? Math.max(visibleRows.length, 1) : pageSize;
     const selectedColumnStats = (0, react_1.useMemo)(() => {
         if (selection?.type !== 'column') {
             return undefined;
@@ -73,22 +73,21 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
         const field = fields.find((item) => item.name === selection.column);
         return field ? calculateColumnStats(field, visibleRows) : undefined;
     }, [selection, fields, visibleRows]);
-    const pageStart = Math.min(pageOffset, Math.max(0, Math.floor((visibleRows.length - 1) / pageLimit) * pageLimit));
-    const pageRows = visibleRows.slice(pageStart, pageStart + pageLimit);
     const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER);
-    const end = Math.min(pageRows.length, start + 80);
-    const slice = pageRows.slice(start, end);
+    const end = Math.min(visibleRows.length, start + 80);
+    const slice = visibleRows.slice(start, end);
     const selectedCell = selection?.type === 'cell' ? selection : undefined;
     const selectedRow = selection?.type === 'row' ? selection.rowIndex : undefined;
     const selectedColumn = selection?.type === 'column' ? selection.column : selectedCell?.column;
-    const pageEnd = pageStart + pageRows.length;
-    const hasNextPage = pageEnd < visibleRows.length;
     const visibleColumnNames = fields.map((field) => field.name);
     (0, react_1.useEffect)(() => {
         if (!columnFiltersVisible) {
             setOpenFilter(undefined);
         }
     }, [columnFiltersVisible]);
+    (0, react_1.useEffect)(() => {
+        setPageSize(tab.maxRows ?? 'all');
+    }, [tab.id, tab.maxRows]);
     if (!resultSet) {
         return (0, jsx_runtime_1.jsx)("section", { className: "grid-empty", children: "No result set." });
     }
@@ -118,7 +117,7 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
             ? selection.rowIndex
             : selection?.type === 'row'
                 ? selection.rowIndex
-                : pageStart;
+                : 0;
         const columnIndex = selection?.type === 'cell'
             ? Math.max(0, visibleColumnNames.indexOf(selection.column))
             : selection?.type === 'column'
@@ -163,6 +162,9 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
     const openContextMenu = (event, menu) => {
         event.preventDefault();
         setContextMenu({ ...menu, x: event.clientX, y: event.clientY });
+    };
+    const requestMutation = (message) => {
+        vscode_1.vscode.postMessage({ type: 'mutation', ...message });
     };
     const startColumnResize = (event, column) => {
         event.preventDefault();
@@ -210,14 +212,12 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
     const changePageSize = (value) => {
         if (value === 'all') {
             setPageSize('all');
-            setPageOffset(0);
-            if ((tab.maxRows ?? resultSet?.maxRows ?? 0) > 0) {
-                vscode_1.vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: null });
-            }
+            vscode_1.vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: null, offset: 0 });
             return;
         }
-        setPageSize(Number(value));
-        setPageOffset(0);
+        const nextSize = Number(value);
+        setPageSize(nextSize);
+        vscode_1.vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: nextSize, offset: 0 });
     };
     return ((0, jsx_runtime_1.jsxs)("section", { className: "grid-shell", onKeyDown: onGridKeyDown, children: [(0, jsx_runtime_1.jsxs)("div", { className: `grid-layout ${inspectorOpen ? 'with-inspector' : ''}`, children: [(0, jsx_runtime_1.jsxs)("div", { className: "grid result-grid", onScroll: (event) => setScrollTop(event.currentTarget.scrollTop), onClick: () => setContextMenu(undefined), role: "grid", "aria-rowcount": visibleRows.length, "aria-colcount": fields.length, tabIndex: 0, children: [(0, jsx_runtime_1.jsxs)("div", { className: "grid-header", style: gridColumnStyle, children: [(0, jsx_runtime_1.jsx)("div", { className: "cell rownum", role: "columnheader", children: "#" }), fields.map((field) => {
                                         const activeFilter = filters.find((filter) => filter.column === field.name);
@@ -228,24 +228,59 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
                                                         const nextSort = sort?.column === field.name && sort.direction === 'asc' ? { column: field.name, direction: 'desc' } : { column: field.name, direction: 'asc' };
                                                         setSort(nextSort);
                                                         setSelection({ type: 'column', column: field.name });
-                                                        setPageOffset(0);
                                                     }, children: sort?.column === field.name ? (sort.direction === 'asc' ? '▲' : '▼') : '↕' }), columnFiltersVisible && ((0, jsx_runtime_1.jsx)("button", { className: `filter-button ${activeFilter ? 'active' : ''}`, title: "Filter column", "aria-label": `Filter ${field.name}`, onClick: (event) => toggleColumnFilter(event, field.name), children: (0, jsx_runtime_1.jsx)(FilterIcon, {}) })), (0, jsx_runtime_1.jsx)("span", { className: "resize-handle", title: "Resize column", onMouseDown: (event) => startColumnResize(event, field.name) })] }, field.name));
-                                    })] }), (0, jsx_runtime_1.jsx)("div", { className: "grid-body", style: { height: pageRows.length * ROW_HEIGHT }, children: (0, jsx_runtime_1.jsx)("div", { style: { transform: `translateY(${start * ROW_HEIGHT}px)` }, children: slice.map((row, index) => ((0, jsx_runtime_1.jsxs)("div", { className: `grid-row ${selectedRow === pageStart + start + index ? 'selected-row' : ''}`, style: gridColumnStyle, role: "row", children: [(0, jsx_runtime_1.jsx)("div", { className: "cell rownum", role: "rowheader", onClick: () => setSelection({ type: 'row', rowIndex: pageStart + start + index }), onContextMenu: (event) => openContextMenu(event, { rowIndex: pageStart + start + index }), children: pageStart + start + index + 1 }), fields.map((field) => {
-                                                const rowIndex = pageStart + start + index;
+                                    })] }), (0, jsx_runtime_1.jsx)("div", { className: "grid-body", style: { height: visibleRows.length * ROW_HEIGHT }, children: (0, jsx_runtime_1.jsx)("div", { style: { transform: `translateY(${start * ROW_HEIGHT}px)` }, children: slice.map((row, index) => ((0, jsx_runtime_1.jsxs)("div", { className: `grid-row ${selectedRow === start + index ? 'selected-row' : ''}`, style: gridColumnStyle, role: "row", children: [(0, jsx_runtime_1.jsx)("div", { className: "cell rownum", role: "rowheader", onClick: () => setSelection({ type: 'row', rowIndex: start + index }), onContextMenu: (event) => openContextMenu(event, { rowIndex: start + index, row }), children: currentOffset + start + index + 1 }), fields.map((field) => {
+                                                const rowIndex = start + index;
                                                 const value = row[field.name];
                                                 const isSelected = selectedCell?.rowIndex === rowIndex && selectedCell.column === field.name;
                                                 return ((0, jsx_runtime_1.jsx)("div", { className: `cell data-cell ${value === null ? 'null' : ''} ${selectedColumn === field.name ? 'selected-column' : ''} ${isSelected ? 'selected' : ''}`, title: (0, format_1.formatValue)(value) || 'NULL', onClick: () => setSelection({ type: 'cell', rowIndex, column: field.name, value }), onContextMenu: (event) => {
                                                         setSelection({ type: 'cell', rowIndex, column: field.name, value });
-                                                        openContextMenu(event, { rowIndex, column: field.name, value });
+                                                        openContextMenu(event, { rowIndex, column: field.name, value, row });
                                                     }, onDoubleClick: () => {
                                                         setSelection({ type: 'cell', rowIndex, column: field.name, value });
-                                                        setInspectorOpen(true);
+                                                        const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', (0, format_1.formatValue)(value));
+                                                        if (valueText === null) {
+                                                            setInspectorOpen(true);
+                                                            return;
+                                                        }
+                                                        requestMutation({
+                                                            kind: 'edit-cell',
+                                                            row,
+                                                            updatedRow: { ...row, [field.name]: valueText },
+                                                            column: field.name,
+                                                            valueText
+                                                        });
                                                     }, role: "gridcell", "aria-selected": isSelected, children: value === null ? 'NULL' : (0, format_1.formatValue)(value) }, field.name));
                                             })] }, start + index))) }) })] }), inspectorOpen && ((0, jsx_runtime_1.jsxs)("aside", { className: "cell-inspector", children: [(0, jsx_runtime_1.jsxs)("div", { className: "inspector-title", children: [(0, jsx_runtime_1.jsx)("strong", { children: selectedCell?.column ?? 'Cell' }), (0, jsx_runtime_1.jsx)("button", { className: "tool", "aria-label": "Close cell inspector", onClick: () => setInspectorOpen(false), children: "Close" })] }), (0, jsx_runtime_1.jsx)("pre", { children: selectedCell ? prettyValue(selectedCell.value) : 'No cell selected' })] }))] }), contextMenu && ((0, jsx_runtime_1.jsxs)("div", { className: "context-menu grid-context-menu", style: { left: contextMenu.x, top: contextMenu.y }, role: "menu", onClick: (event) => event.stopPropagation(), children: [(0, jsx_runtime_1.jsxs)("button", { role: "menuitem", onClick: () => {
                             const text = contextMenu.value !== undefined ? (0, format_1.formatValue)(contextMenu.value) : selectedText();
                             vscode_1.vscode.postMessage({ type: 'copy', text });
                             setContextMenu(undefined);
-                        }, children: [(0, jsx_runtime_1.jsx)("span", { children: "\u29C9" }), (0, jsx_runtime_1.jsx)("span", { children: "Copy" }), (0, jsx_runtime_1.jsx)("kbd", { children: "Ctrl+C" })] }), (0, jsx_runtime_1.jsxs)("button", { role: "menuitem", disabled: contextMenu.rowIndex === undefined, onClick: () => {
+                        }, children: [(0, jsx_runtime_1.jsx)("span", { children: "\u29C9" }), (0, jsx_runtime_1.jsx)("span", { children: "Copy" }), (0, jsx_runtime_1.jsx)("kbd", { children: "Ctrl+C" })] }), (0, jsx_runtime_1.jsxs)("button", { role: "menuitem", disabled: contextMenu.rowIndex === undefined || !contextMenu.row, onClick: () => {
+                            if (contextMenu.row) {
+                                const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', (0, format_1.formatValue)(contextMenu.value));
+                                if (valueText !== null && contextMenu.column) {
+                                    requestMutation({
+                                        kind: 'edit-cell',
+                                        row: contextMenu.row,
+                                        updatedRow: { ...contextMenu.row, [contextMenu.column]: valueText },
+                                        column: contextMenu.column,
+                                        valueText
+                                    });
+                                }
+                            }
+                            setContextMenu(undefined);
+                        }, children: [(0, jsx_runtime_1.jsx)("span", { children: "\u270E" }), (0, jsx_runtime_1.jsx)("span", { children: "Edit Cell" })] }), (0, jsx_runtime_1.jsxs)("button", { role: "menuitem", onClick: () => {
+                            const rowText = window.prompt('Insert row as JSON object', '{}');
+                            if (rowText !== null) {
+                                requestMutation({ kind: 'insert-row', rowText });
+                            }
+                            setContextMenu(undefined);
+                        }, children: [(0, jsx_runtime_1.jsx)("span", { children: "\uFF0B" }), (0, jsx_runtime_1.jsx)("span", { children: "Insert Row" })] }), (0, jsx_runtime_1.jsxs)("button", { role: "menuitem", disabled: contextMenu.rowIndex === undefined || !contextMenu.row, onClick: () => {
+                            if (contextMenu.row) {
+                                requestMutation({ kind: 'delete-row', row: contextMenu.row });
+                            }
+                            setContextMenu(undefined);
+                        }, children: [(0, jsx_runtime_1.jsx)("span", { children: "\u232B" }), (0, jsx_runtime_1.jsx)("span", { children: "Delete Row" })] }), (0, jsx_runtime_1.jsxs)("button", { role: "menuitem", disabled: contextMenu.rowIndex === undefined, onClick: () => {
                             const row = contextMenu.rowIndex !== undefined ? rowForIndex(contextMenu.rowIndex) : undefined;
                             if (row)
                                 vscode_1.vscode.postMessage({ type: 'copy', text: (0, format_2.rowsToTsv)([row]) });
@@ -261,11 +296,9 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
                             setContextMenu(undefined);
                         }, children: [(0, jsx_runtime_1.jsx)("span", { children: "\u21E9" }), (0, jsx_runtime_1.jsx)("span", { children: "Copy Visible as CSV" })] })] })), columnFiltersVisible && openFilter && ((0, jsx_runtime_1.jsx)(ColumnFilterPopover, { column: openFilter.column, rows: rows, filter: filters.find((filter) => filter.column === openFilter.column), style: openFilter.style, onApply: (filter) => {
                     setFilters((current) => [...current.filter((item) => item.column !== openFilter.column), filter]);
-                    setPageOffset(0);
                 }, onClear: () => {
                     setFilters((current) => current.filter((item) => item.column !== openFilter.column));
-                    setPageOffset(0);
-                } })), selection?.type === 'column' && ((0, jsx_runtime_1.jsxs)("div", { className: "selection-summary", title: selectedColumnStats ? `${selection.column}: sum ${formatNumber(selectedColumnStats.sum)}, average ${formatNumber(selectedColumnStats.average)}` : `${selection.column}: ${visibleRows.length.toLocaleString()} rows selected`, children: [(0, jsx_runtime_1.jsx)("span", { className: "summary-column", children: selection.column }), selectedColumnStats ? ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [(0, jsx_runtime_1.jsxs)("span", { children: [selectedColumnStats.numericCount.toLocaleString(), " values"] }), (0, jsx_runtime_1.jsxs)("span", { children: ["Sum ", formatNumber(selectedColumnStats.sum)] }), (0, jsx_runtime_1.jsxs)("span", { children: ["Avg ", formatNumber(selectedColumnStats.average)] })] })) : ((0, jsx_runtime_1.jsxs)("span", { children: [visibleRows.length.toLocaleString(), " rows selected"] }))] })), (0, jsx_runtime_1.jsx)("div", { className: "result-pager", children: (0, jsx_runtime_1.jsxs)("span", { className: "pager-group", children: [(0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: pageStart === 0, onClick: () => setPageOffset(0), children: "|\u2039" }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: pageStart === 0, onClick: () => setPageOffset(Math.max(0, pageStart - pageLimit)), children: "\u2039" }), (0, jsx_runtime_1.jsxs)("select", { value: pageSize === 'all' ? 'all' : String(pageSize), onChange: (event) => changePageSize(event.target.value), "aria-label": "Rows per page", title: "Rows per page", children: [[20, 50, 100, 250, 500].map((count) => ((0, jsx_runtime_1.jsx)("option", { value: String(count), children: `${count} rows` }, count))), (0, jsx_runtime_1.jsx)("option", { value: "all", children: "All rows" })] }), (0, jsx_runtime_1.jsxs)("span", { children: ["of ", hasNextPage ? `${(pageEnd + 1).toLocaleString()}+` : pageEnd.toLocaleString()] }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: !hasNextPage, onClick: () => setPageOffset(pageStart + pageLimit), children: "\u203A" })] }) })] }));
+                } })), selection?.type === 'column' && ((0, jsx_runtime_1.jsxs)("div", { className: "selection-summary", title: selectedColumnStats ? `${selection.column}: sum ${formatNumber(selectedColumnStats.sum)}, average ${formatNumber(selectedColumnStats.average)}` : `${selection.column}: ${visibleRows.length.toLocaleString()} rows selected`, children: [(0, jsx_runtime_1.jsx)("span", { className: "summary-column", children: selection.column }), selectedColumnStats ? ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [(0, jsx_runtime_1.jsxs)("span", { children: [selectedColumnStats.numericCount.toLocaleString(), " values"] }), (0, jsx_runtime_1.jsxs)("span", { children: ["Sum ", formatNumber(selectedColumnStats.sum)] }), (0, jsx_runtime_1.jsxs)("span", { children: ["Avg ", formatNumber(selectedColumnStats.average)] })] })) : ((0, jsx_runtime_1.jsxs)("span", { children: [visibleRows.length.toLocaleString(), " rows selected"] }))] })), (0, jsx_runtime_1.jsx)("div", { className: "result-pager", children: (0, jsx_runtime_1.jsxs)("span", { className: "pager-group", children: [(0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: currentOffset === 0 || pageSize === 'all', onClick: () => vscode_1.vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: 0 }), children: "|\u2039" }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: currentOffset === 0 || pageSize === 'all', onClick: () => vscode_1.vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: Math.max(0, currentOffset - Number(pageSize)) }), children: "\u2039" }), (0, jsx_runtime_1.jsxs)("select", { value: pageSize === 'all' ? 'all' : String(pageSize), onChange: (event) => changePageSize(event.target.value), "aria-label": "Rows per page", title: "Rows per page", children: [[20, 50, 100, 250, 500].map((count) => ((0, jsx_runtime_1.jsx)("option", { value: String(count), children: `${count} rows` }, count))), (0, jsx_runtime_1.jsx)("option", { value: "all", children: "All rows" })] }), (0, jsx_runtime_1.jsxs)("span", { children: ["of ", hasMore ? `${(currentOffset + visibleRows.length + 1).toLocaleString()}+` : (currentOffset + visibleRows.length).toLocaleString()] }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", disabled: !hasMore || pageSize === 'all', onClick: () => vscode_1.vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: currentOffset + Number(pageSize) }), children: "\u203A" })] }) })] }));
 }
 function FilterIcon() {
     return ((0, jsx_runtime_1.jsx)("svg", { className: "filter-icon", viewBox: "0 0 16 16", "aria-hidden": "true", focusable: "false", children: (0, jsx_runtime_1.jsx)("path", { d: "M2.5 3.5h11l-4.4 5v3.6l-2.2 1.1V8.5l-4.4-5Z" }) }));

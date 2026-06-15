@@ -15,16 +15,23 @@ import {
   TableStatsInfo,
   TableInfo,
   TestConnectionResult,
+  RoutineInfo,
+  TriggerInfo,
+  ActiveSessionInfo,
   ViewInfo
 } from '../../types';
 
 export interface DatabaseDriver {
-  id: 'postgres' | 'redshift';
+  id: 'postgres' | 'redshift' | 'mysql';
   displayName: string;
 
   testConnection(config: ConnectionConfigWithPassword): Promise<TestConnectionResult>;
   connect(config: ConnectionConfigWithPassword): Promise<DbConnection>;
   disconnect(connectionId: string): Promise<void>;
+  beginTransaction(connectionId: string): Promise<void>;
+  commitTransaction(connectionId: string): Promise<void>;
+  rollbackTransaction(connectionId: string): Promise<void>;
+  isTransactionOpen(connectionId: string): boolean;
   executeQuery(params: ExecuteQueryParams): Promise<QueryExecutionResult>;
   executeStatements(params: ExecuteQueryParams, statements: string[]): Promise<QueryExecutionResult[]>;
   validateQuery(params: ExecuteQueryParams): Promise<QueryValidationResult>;
@@ -34,6 +41,12 @@ export interface DatabaseDriver {
   getSchemas(connectionId: string): Promise<SchemaInfo[]>;
   getTables(connectionId: string, schema: string): Promise<TableInfo[]>;
   getViews(connectionId: string, schema: string): Promise<ViewInfo[]>;
+  getFunctions(connectionId: string, schema: string): Promise<RoutineInfo[]>;
+  getProcedures(connectionId: string, schema: string): Promise<RoutineInfo[]>;
+  getTriggers(connectionId: string, schema: string): Promise<TriggerInfo[]>;
+  getActiveSessions(connectionId: string): Promise<ActiveSessionInfo[]>;
+  cancelSession(connectionId: string, pid: number): Promise<void>;
+  terminateSession(connectionId: string, pid: number): Promise<void>;
   getColumns(connectionId: string, schema: string, table: string): Promise<ColumnInfo[]>;
   getIndexes(connectionId: string, schema: string, table: string): Promise<IndexInfo[]>;
   getPrimaryKeys(connectionId: string, schema: string, table: string): Promise<KeyInfo[]>;

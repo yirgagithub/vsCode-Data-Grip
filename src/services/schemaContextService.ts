@@ -1,5 +1,5 @@
 import { CancellationTokenSource } from 'vscode';
-import { ColumnInfo, ConnectionConfig, SchemaCacheEntry, TableInfo, ViewInfo } from '../types';
+import { ColumnInfo, ConnectionConfig, KeyInfo, SchemaCacheEntry, TableInfo, ViewInfo } from '../types';
 import { ConnectionManager } from '../database/connectionManager';
 import { connectionMetadataFingerprint, SCHEMA_METADATA_CACHE_VERSION, SchemaMetadataCacheStore } from './schemaMetadataCacheStore';
 
@@ -92,6 +92,21 @@ export class SchemaContextService {
     entry.source = 'live';
     await this.persistentCache?.persist(connection, entry);
     return columns;
+  }
+
+  async getPrimaryKeys(connection: ConnectionConfig, schemaName: string, tableName: string): Promise<KeyInfo[]> {
+    const entry = await this.loadSchema(connection, schemaName);
+    const tableKey = this.tableKey(schemaName, tableName);
+    if (entry.keys[tableKey]) {
+      return entry.keys[tableKey];
+    }
+    const keys = await this.connectionManager.getDriver(connection.type).getPrimaryKeys(connection.id, schemaName, tableName);
+    entry.keys[tableKey] = keys;
+    entry.loadedAt = Date.now();
+    entry.status = 'ready';
+    entry.source = 'live';
+    await this.persistentCache?.persist(connection, entry);
+    return keys;
   }
 
   async getCachedColumns(connection: ConnectionConfig, schemaName: string, tableName: string): Promise<ColumnInfo[] | undefined> {

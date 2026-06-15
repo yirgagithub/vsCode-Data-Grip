@@ -3,7 +3,7 @@ import { ConnectionManager } from './database/connectionManager';
 import { QueryExecutor } from './database/queryExecutor';
 import { splitSqlStatements } from './database/sqlSplitter';
 import { DatabaseTreeProvider } from './explorer/DatabaseTreeProvider';
-import { CatalogNode, ColumnNode, ConnectionNode, FolderNode, SchemaNode, SchemasNode, TableNode, ViewNode } from './explorer/nodes';
+import { CatalogNode, ColumnNode, ConnectionNode, FolderNode, RoutineNode, SchemaNode, SchemasNode, TableNode, TriggerNode, ViewNode } from './explorer/nodes';
 import { ConnectionStore } from './persistence/connectionStore';
 import { QueryConsoleStore } from './persistence/queryConsoleStore';
 import { SqlDocumentConnectionStore } from './persistence/sqlDocumentConnectionStore';
@@ -24,19 +24,30 @@ import { rangeFromPlain as rangeFromSource, SqlSectionHighlighter } from './serv
 import { SqlSectionService } from './services/sqlSectionService';
 import { shouldRunSelectionForStatement } from './services/sqlSelectionExecution';
 import { buildTablePerformancePrepassFlags, TablePerformanceAdvisorService } from './services/tablePerformanceAdvisorService';
+import { TableMutationRequest, TableRowMutationService } from './services/tableRowMutationService';
 import { VsCodeLanguageModelSqlAdapter } from './ai/vsCodeLanguageModelSqlAdapter';
 import { QueryMemoryController } from './controllers/queryMemoryController';
 import { DocumentConnectionBinding, DocumentConnectionResolution, resolveDocumentConnection } from './services/documentConnectionResolver';
 import { QueryOutputService } from './services/queryOutputService';
+import { ErDiagramService } from './services/erDiagramService';
 import { QueryPlanAnalyzerService } from './services/queryPlanAnalyzerService';
+import { compareResultSets, formatResultSetDiffMarkdown } from './services/resultSetDiffService';
+import { compareSchemas, formatSchemaDiffMarkdown } from './services/schemaDiffService';
+import { querySnippets } from './services/querySnippetService';
+import { formatSqlText, sqlFormatterDialect } from './services/sqlFormattingService';
+import { buildTableCopyPreview } from './services/tableCopyService';
+import { buildTableImportPreview } from './services/tableImportService';
+import { SessionMonitorPanel } from './webviews/session/SessionMonitorPanel';
+import { ErDiagramPanel } from './webviews/erDiagram/ErDiagramPanel';
 import { ConnectionEditorPanel } from './webviews/connection/ConnectionEditorPanel';
 import { QueryMapProvider } from './webviews/queryMap/QueryMapProvider';
 import { ResultsPanelProvider } from './webviews/results/ResultsPanelProvider';
+import type { ResultsFromWebviewMessage } from './webviews/results/messages';
 import { TableDataPanel } from './webviews/table/TableDataPanel';
 import { Logger } from './utils/logger';
 import { qualifiedName, quoteIdentifier } from './utils/identifiers';
 import { createId } from './utils/id';
-import { ConnectionConfig, QueryConsoleRecord, QueryExecutionProgress, QueryPlanResult, QueryResultTab, TableStatsInfo, TableWorkloadSummary } from './types';
+import { ConnectionConfig, QueryConsoleRecord, QueryExecutionProgress, QueryPlanResult, QueryResultTab, SchemaCacheEntry, TableStatsInfo, TableWorkloadSummary } from './types';
 
 const PROJECT_SQL_SESSION_PREFIX = 'project-sql:';
 
@@ -65,6 +76,8 @@ export function activate(context: vscode.ExtensionContext): void {
   const memoryStore = new QueryMemoryStore(context);
   const memoryService = new QueryMemoryService(historyStore, memoryStore, consoleStore, connectionManager, aiAdapter);
   const tablePerformanceAdvisor = new TablePerformanceAdvisorService(connectionManager, memoryService, aiAdapter);
+  const erDiagramService = new ErDiagramService(connectionManager, schemaContext);
+  const tableRowMutator = new TableRowMutationService(schemaContext);
   const queryPlanAnalyzer = new QueryPlanAnalyzerService(connectionManager, aiAdapter);
   const dataProfiler = new DataProfileService(connectionManager, aiAdapter);
   const executor = new QueryExecutor(connectionManager, historyStore, memoryService);
@@ -93,11 +106,14 @@ export function activate(context: vscode.ExtensionContext): void {
   let queryMap: QueryMapProvider;
   const results = new ResultsPanelProvider(
     context,
+    connectionManager,
     resultStore,
     executor,
     async (tab) => revealSourceForTab(tab),
     (tabs) => queryMap?.updateResults(tabs),
-    async (maxRows) => executeActiveMultiStatementSelection(maxRows)
+    async (maxRows) => executeActiveMultiStatementSelection(maxRows),
+    async (tab, message) => handleTableMutationFromResultTab(tab, message),
+    async (tab, resultSetIndex) => compareResultTabs(tab, resultSetIndex)
   );
   queryMap = new QueryMapProvider(
     sectionService,
@@ -226,6 +242,18 @@ export function activate(context: vscode.ExtensionContext): void {
       refreshAiAvailability();
     }
   }));
+  const sqlFormatter: vscode.DocumentFormattingEditProvider & vscode.DocumentRangeFormattingEditProvider = {
+    async provideDocumentFormattingEdits(document: vscode.TextDocument) {
+      return formatSqlDocument(document);
+    },
+    async provideDocumentRangeFormattingEdits(document: vscode.TextDocument, range: vscode.Range) {
+      return formatSqlDocument(document, range);
+    }
+  };
+  context.subscriptions.push(
+    vscode.languages.registerDocumentFormattingEditProvider('sql', sqlFormatter),
+    vscode.languages.registerDocumentRangeFormattingEditProvider('sql', sqlFormatter)
+  );
   refreshQueryMap();
   void schemaContext.warmFromDisk(connectionManager.getConnections());
   queryMap.updateFromEditor(vscode.window.activeTextEditor);
@@ -258,6 +286,62 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     void pruneMissingConsoleRecords();
     void pruneUnknownConnectionRecords();
+  }
+
+  interface DatabaseObjectPick extends vscode.QuickPickItem {
+    objectKind: 'table' | 'view' | 'column';
+    node: TableNode | ViewNode | ColumnNode;
+  }
+
+  async function collectDatabaseObjects(): Promise<DatabaseObjectPick[]> {
+    const picks: DatabaseObjectPick[] = [];
+    for (const connection of connectionManager.getConnections()) {
+      let entries = schemaContext.getAnyCached(connection.id);
+      if (!entries.length && connectionManager.isConnected(connection.id)) {
+        entries = [await schemaContext.loadDefaultSchema(connection)];
+      }
+      for (const entry of entries) {
+        const schemaLabel = `${connection.name} • ${entry.schemaName}`;
+        for (const table of entry.tables) {
+          const node = new TableNode(connection, table);
+          picks.push({
+            objectKind: 'table',
+            node,
+            label: table.name,
+            description: `table • ${schemaLabel}`,
+            detail: `${table.schema}.${table.name}`
+          });
+        }
+        for (const view of entry.views) {
+          const node = new ViewNode(connection, view);
+          picks.push({
+            objectKind: 'view',
+            node,
+            label: view.name,
+            description: `view • ${schemaLabel}`,
+            detail: `${view.schema}.${view.name}`
+          });
+        }
+        for (const [tableKey, columns] of Object.entries(entry.columns)) {
+          const [schemaName, tableName] = tableKey.split('.');
+          for (const column of columns) {
+            const node = new ColumnNode(connection, column);
+            picks.push({
+              objectKind: 'column',
+              node,
+              label: `${tableName}.${column.name}`,
+              description: `column • ${schemaLabel}`,
+              detail: `${schemaName}.${tableName}.${column.name}`
+            });
+          }
+        }
+      }
+    }
+    return picks.sort((left, right) => {
+      const leftKey = `${left.description ?? ''} ${left.detail ?? ''} ${left.label}`;
+      const rightKey = `${right.description ?? ''} ${right.detail ?? ''} ${right.label}`;
+      return leftKey.localeCompare(rightKey, undefined, { numeric: true, sensitivity: 'base' });
+    });
   }
 
   function autoSaveQueryConsoleDocument(document: vscode.TextDocument): void {
@@ -485,6 +569,19 @@ export function activate(context: vscode.ExtensionContext): void {
     return resolveConnectionForDocument(document).connection;
   }
 
+  async function formatSqlDocument(document: vscode.TextDocument, range?: vscode.Range): Promise<vscode.TextEdit[]> {
+    if (document.lineCount === 0) {
+      return [];
+    }
+    const targetRange = range ?? new vscode.Range(0, 0, document.lineCount - 1, document.lineAt(document.lineCount - 1).range.end.character);
+    const source = document.getText(targetRange);
+    const formatted = await formatSqlText(source, sqlFormatterDialect(connectionForDocument(document)));
+    if (formatted === source) {
+      return [];
+    }
+    return [vscode.TextEdit.replace(targetRange, formatted)];
+  }
+
   function connectionFromArg(node: unknown): ConnectionConfig | undefined {
     const id = connectionIdFromArg(node);
     return id ? connectionManager.getConnection(id) : undefined;
@@ -650,6 +747,33 @@ export function activate(context: vscode.ExtensionContext): void {
   register('database.showResults', () => results.show(activeConnectionId()));
   register('database.focusResults', () => results.show(activeConnectionId()));
   register('database.focusExplorer', () => vscode.commands.executeCommand('databaseExplorer.focus'));
+  register('database.goToDatabaseObject', async () => {
+    const objects = await collectDatabaseObjects();
+    if (!objects.length) {
+      void vscode.window.showInformationMessage('No cached database objects found yet.');
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(objects, {
+      placeHolder: 'Go to database object',
+      matchOnDetail: true,
+      matchOnDescription: true
+    });
+    if (!picked) {
+      return;
+    }
+    await treeView.reveal(picked.node, { expand: true, focus: true, select: true });
+    if (picked.objectKind === 'table') {
+      await vscode.commands.executeCommand('database.openTableData', picked.node);
+    }
+  });
+  register('database.sessionMonitor', async (node?: unknown) => {
+    const connection = connectionFromArg(node) ?? connectionManager.getPreferredConnection();
+    if (!connection) {
+      void vscode.window.showInformationMessage('Pick a database connection first.');
+      return;
+    }
+    await SessionMonitorPanel.open(context, connectionManager, connection);
+  });
   register('database.showSqlMetadataStatus', () => showSqlMetadataStatus());
   register('database.setSqlFileConnection', (resource?: unknown) => setSqlFileConnection(resource));
   register('database.pickConnection', async () => {
@@ -716,7 +840,21 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!(node instanceof TableNode)) {
       return;
     }
-    await TableDataPanel.open(context, connectionManager, node);
+    await TableDataPanel.open(context, connectionManager, node, async (message) => {
+      await handleTableMutation({
+        kind: message.kind!,
+        target: {
+          connection: node.connection,
+          schema: node.table.schema,
+          table: node.table.name
+        },
+        originalRow: message.row,
+        updatedRow: message.updatedRow,
+        column: message.column,
+        valueText: message.valueText,
+        rowText: message.rowText
+      });
+    });
   });
 
   register('database.analyzeTablePerformance', async (node?: unknown) => {
@@ -764,6 +902,85 @@ export function activate(context: vscode.ExtensionContext): void {
     await openSqlScript(`Maintenance ${target.name}`, `${sql}\n`, target.connection);
   });
 
+  register('database.compareSchemas', async (node?: unknown) => {
+    const source = schemaLikeTarget(node);
+    if (!source) {
+      return;
+    }
+    const targetConnection = await pickDestinationConnection(connectionManager, source.connection.id);
+    if (!targetConnection) {
+      return;
+    }
+    if (!connectionManager.isConnected(source.connection.id)) {
+      await connectionManager.connect(source.connection.id);
+    }
+    if (!connectionManager.isConnected(targetConnection.id)) {
+      await connectionManager.connect(targetConnection.id);
+    }
+    const sourceSchema = await schemaContext.loadSchema(source.connection, source.schema);
+    if (sourceSchema.status !== 'ready') {
+      void vscode.window.showWarningMessage(`Could not load source schema ${source.schema}: ${sourceSchema.errorMessage ?? 'metadata unavailable'}`);
+      return;
+    }
+    const targetSchemaName = await vscode.window.showInputBox({
+      title: 'Target schema',
+      prompt: 'Schema to compare against',
+      value: source.schema,
+      ignoreFocusOut: true
+    });
+    if (!targetSchemaName) {
+      return;
+    }
+    const targetSchema = await schemaContext.loadSchema(targetConnection, targetSchemaName.trim());
+    if (targetSchema.status !== 'ready') {
+      void vscode.window.showWarningMessage(`Could not load target schema ${targetSchemaName.trim()}: ${targetSchema.errorMessage ?? 'metadata unavailable'}`);
+      return;
+    }
+    const report = compareSchemas({
+      sourceConnectionName: source.connection.name,
+      targetConnectionName: targetConnection.name,
+      sourceSchema: snapshotFromSchemaEntry(sourceSchema),
+      targetSchema: snapshotFromSchemaEntry(targetSchema)
+    });
+    const doc = await vscode.workspace.openTextDocument({
+      language: 'markdown',
+      content: formatSchemaDiffMarkdown(report)
+    });
+    await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
+  });
+
+  register('database.showErDiagram', async (node?: unknown) => {
+    const target = schemaLikeTarget(node);
+    if (!target) {
+      return;
+    }
+    const report = await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `Building ER diagram for ${target.schema}`,
+      cancellable: false
+    }, () => erDiagramService.build({ connection: target.connection, schemaName: target.schema }));
+    await ErDiagramPanel.open(context, report);
+  });
+
+  register('database.insertQuerySnippet', async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== 'sql') {
+      void vscode.window.showInformationMessage('Open a SQL editor before inserting a query snippet.');
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(querySnippets().map((snippet) => ({
+      label: snippet.label,
+      description: snippet.description,
+      snippet
+    })), {
+      placeHolder: 'Insert query snippet'
+    });
+    if (!picked) {
+      return;
+    }
+    await editor.insertSnippet(new vscode.SnippetString(picked.snippet.snippet));
+  });
+
   register('database.copyName', async (node?: unknown) => {
     const name = objectName(node);
     if (name) {
@@ -778,6 +995,99 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  register('database.importTableData', async (node?: unknown) => {
+    if (!(node instanceof TableNode)) {
+      return;
+    }
+    const files = await vscode.window.showOpenDialog({
+      canSelectMany: false,
+      openLabel: 'Import data',
+      filters: {
+        'Data files': ['csv', 'json']
+      }
+    });
+    const file = files?.[0];
+    if (!file) {
+      return;
+    }
+    const fileBytes = await vscode.workspace.fs.readFile(file);
+    const fileText = Buffer.from(fileBytes).toString('utf8');
+    const columns = await schemaContext.getColumns(node.connection, node.table.schema, node.table.name);
+    const preview = buildTableImportPreview(node.table.schema, node.table.name, columns, file.path, fileText);
+    const summary = [
+      `-- Import source: ${file.fsPath}`,
+      `-- Source columns: ${preview.columns.join(', ')}`,
+      `-- Row count: ${preview.rowCount}`,
+      ...preview.mapping.map((item) => `-- ${item.source} -> ${item.target}`),
+      ...preview.warnings.map((warning) => `-- ${warning}`),
+      ''
+    ].join('\n');
+    await openSqlScript(`Import ${node.table.name}`, `${summary}${preview.sql}\n`, node.connection);
+  });
+
+  register('database.copyTableToConnection', async (node?: unknown) => {
+    if (!(node instanceof TableNode)) {
+      return;
+    }
+    const sourceConnection = node.connection;
+    const destination = await pickDestinationConnection(connectionManager, sourceConnection.id);
+    if (!destination) {
+      return;
+    }
+    const targetSchema = await vscode.window.showInputBox({
+      title: 'Target schema',
+      prompt: 'Schema to create the copied table in',
+      value: destination.defaultSchema ?? sourceConnection.defaultSchema ?? node.table.schema,
+      ignoreFocusOut: true
+    });
+    if (!targetSchema) {
+      return;
+    }
+    const targetTable = await vscode.window.showInputBox({
+      title: 'Target table',
+      prompt: 'Name of the copied table',
+      value: `${node.table.name}_copy`,
+      ignoreFocusOut: true
+    });
+    if (!targetTable) {
+      return;
+    }
+    if (!connectionManager.isConnected(sourceConnection.id)) {
+      await connectionManager.connect(sourceConnection.id);
+    }
+    const [columns, sourceRows, sourceDdl] = await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `Copying ${qualifiedName(node.table.schema, node.table.name)}`,
+      cancellable: false
+    }, async () => Promise.all([
+      schemaContext.getColumns(sourceConnection, node.table.schema, node.table.name),
+      connectionManager.getDriver(sourceConnection.type).executeQuery({
+        connectionId: sourceConnection.id,
+        sql: `select * from ${qualifiedName(node.table.schema, node.table.name)}`
+      }),
+      connectionManager.getDriver(sourceConnection.type).getTableDDL(sourceConnection.id, node.table.schema, node.table.name)
+    ]));
+    const preview = buildTableCopyPreview(
+      node.table.schema,
+      node.table.name,
+      targetSchema.trim(),
+      targetTable.trim(),
+      columns,
+      sourceRows.rows,
+      sourceConnection.name,
+      destination.name
+    );
+    const header = [
+      `-- Source connection: ${sourceConnection.name}`,
+      `-- Destination connection: ${destination.name}`,
+      `-- Source table: ${qualifiedName(node.table.schema, node.table.name)}`,
+      `-- Source DDL:`,
+      ...sourceDdl.trim().split('\n').map((line) => `-- ${line}`),
+      ''
+    ].join('\n');
+    await openSqlScript(`Copy ${node.table.name} to ${destination.name}`, `${header}${preview.sql}\n`, destination);
+  });
+
   async function openSqlScript(title: string, content: string, connection?: ConnectionConfig): Promise<void> {
     const doc = await openSqlEditor(connectionManager, title, content, connection);
     if (!connection) {
@@ -789,6 +1099,41 @@ export function activate(context: vscode.ExtensionContext): void {
     updateSqlConnectionStatus(vscode.window.activeTextEditor);
     refreshQueryMap();
     sqlCodeLensRefresh.fire();
+  }
+
+  async function handleTableMutation(request: TableMutationRequest): Promise<void> {
+    const preview = await tableRowMutator.preview(request);
+    await openSqlScript(preview.title, `${preview.sql}\n`, request.target.connection);
+  }
+
+  async function handleTableMutationFromResultTab(
+    tab: QueryResultTab,
+    message: Extract<ResultsFromWebviewMessage, { type: 'mutation' }>
+  ): Promise<void> {
+    const resultSet = tab.resultSets[tab.activeResultSetIndex] ?? tab.resultSets[0];
+    const connection = connectionManager.getConnection(tab.connectionId);
+    if (!connection) {
+      void vscode.window.showInformationMessage('This result tab is no longer connected to a database.');
+      return;
+    }
+    const target = await tableRowMutator.inferTargetFromQuery(connection, tab.queryText);
+    if (!target) {
+      void vscode.window.showInformationMessage('This result set does not map cleanly to a single editable table.');
+      return;
+    }
+    await handleTableMutation({
+      kind: message.kind,
+      target: {
+        ...target,
+        columns: resultSet?.fields.map((field) => field.name),
+        queryText: tab.queryText
+      },
+      originalRow: message.row,
+      updatedRow: message.updatedRow,
+      column: message.column,
+      valueText: message.valueText,
+      rowText: message.rowText
+    });
   }
 
   register('database.showObjectDdl', async (node?: unknown) => {
@@ -959,6 +1304,50 @@ export function activate(context: vscode.ExtensionContext): void {
     for (const detected of detections) {
       await executeDetected(editor, detected, { forceNewResultTab, maxRows: options.maxRows });
     }
+  }
+
+  async function compareResultTabs(sourceTab: QueryResultTab, resultSetIndex: number): Promise<void> {
+    const sourceResultSet = sourceTab.resultSets[resultSetIndex] ?? sourceTab.resultSets[0];
+    if (!sourceResultSet) {
+      void vscode.window.showInformationMessage('This result tab does not contain rows to compare.');
+      return;
+    }
+
+    const candidates = results.getTabs().filter((tab) => tab.id !== sourceTab.id && tab.resultSets.length > 0);
+    if (!candidates.length) {
+      void vscode.window.showInformationMessage('Open another result tab on the same connection to compare against.');
+      return;
+    }
+
+    const picked = await vscode.window.showQuickPick(candidates.map((tab) => ({
+      label: tab.customTitle ?? tab.title,
+      description: `${tab.executionStatus}${tab.executionTimeMs !== undefined ? ` - ${tab.executionTimeMs}ms` : ''}`,
+      detail: `${tab.databaseName ?? 'database'} • ${tab.resultSets[0]?.rowCount ?? 0} rows`,
+      tab
+    })), {
+      placeHolder: `Compare ${sourceTab.customTitle ?? sourceTab.title} against`
+    });
+    if (!picked) {
+      return;
+    }
+
+    const targetResultSet = picked.tab.resultSets[resultSetIndex] ?? picked.tab.resultSets[0];
+    if (!targetResultSet) {
+      void vscode.window.showInformationMessage('The selected comparison tab does not contain a matching result set.');
+      return;
+    }
+
+    const report = compareResultSets(
+      sourceResultSet,
+      targetResultSet,
+      sourceTab.customTitle ?? sourceTab.title,
+      picked.tab.customTitle ?? picked.tab.title
+    );
+    const doc = await vscode.workspace.openTextDocument({
+      language: 'markdown',
+      content: formatResultSetDiffMarkdown(report)
+    });
+    await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
   }
 
   async function runVisualExplain(analyze: boolean): Promise<void> {
@@ -1818,6 +2207,12 @@ function objectName(node: unknown): string | undefined {
   if (node instanceof ViewNode) {
     return node.view.name;
   }
+  if (node instanceof RoutineNode) {
+    return node.routine.name;
+  }
+  if (node instanceof TriggerNode) {
+    return node.trigger.name;
+  }
   if (node instanceof ColumnNode) {
     return node.column.name;
   }
@@ -1836,6 +2231,12 @@ function qualifiedObjectName(node: unknown): string | undefined {
   }
   if (node instanceof ViewNode) {
     return qualifiedName(node.view.schema, node.view.name);
+  }
+  if (node instanceof RoutineNode) {
+    return qualifiedName(node.routine.schema, node.routine.name);
+  }
+  if (node instanceof TriggerNode) {
+    return qualifiedName(node.trigger.schema, node.trigger.table) + '.' + quoteIdentifier(node.trigger.name);
   }
   if (node instanceof ColumnNode) {
     return `${qualifiedName(node.column.schema, node.column.table)}.${quoteIdentifier(node.column.name)}`;
@@ -1860,6 +2261,21 @@ function tableLikeTarget(node: unknown): { connection: import('./types').Connect
     return { connection: node.connection, schema: node.column.schema, name: node.column.table, kind: 'table' };
   }
   return undefined;
+}
+
+async function pickDestinationConnection(connectionManager: ConnectionManager, sourceConnectionId: string): Promise<ConnectionConfig | undefined> {
+  const connections = connectionManager.getConnections().filter((connection) => connection.id !== sourceConnectionId);
+  if (!connections.length) {
+    void vscode.window.showInformationMessage('Add another database connection before copying a table.');
+    return undefined;
+  }
+  const picked = await vscode.window.showQuickPick(connections.map((connection) => ({
+    label: connection.name,
+    description: `${connection.type}${connection.production ? ' - prod' : ''}`,
+    detail: `${connection.username}@${connection.host}:${connection.port}/${connection.database}`,
+    connection
+  })), { placeHolder: 'Copy table to which connection?' });
+  return picked?.connection;
 }
 
 function maintenanceScriptFromStats(stats: TableStatsInfo): string | undefined {
@@ -1922,8 +2338,51 @@ function schemaFromNode(node: unknown): { schema: string; connection?: import('.
   if (node instanceof ColumnNode) {
     return { schema: node.column.schema, connection: node.connection };
   }
+  if (node instanceof RoutineNode) {
+    return { schema: node.routine.schema, connection: node.connection };
+  }
+  if (node instanceof TriggerNode) {
+    return { schema: node.trigger.schema, connection: node.connection };
+  }
   const connection = node instanceof ConnectionNode || node instanceof CatalogNode ? node.connection : undefined;
   return { schema: connection?.defaultSchema ?? 'public', connection };
+}
+
+function schemaLikeTarget(node: unknown): { connection: ConnectionConfig; schema: string } | undefined {
+  if (node instanceof SchemaNode) {
+    return { connection: node.connection, schema: node.schema.name };
+  }
+  if (node instanceof FolderNode) {
+    return { connection: node.connection, schema: node.schema };
+  }
+  if (node instanceof TableNode) {
+    return { connection: node.connection, schema: node.table.schema };
+  }
+  if (node instanceof ViewNode) {
+    return { connection: node.connection, schema: node.view.schema };
+  }
+  if (node instanceof ColumnNode) {
+    return { connection: node.connection, schema: node.column.schema };
+  }
+  if (node instanceof RoutineNode) {
+    return { connection: node.connection, schema: node.routine.schema };
+  }
+  if (node instanceof TriggerNode) {
+    return { connection: node.connection, schema: node.trigger.schema };
+  }
+  if (node instanceof ConnectionNode || node instanceof CatalogNode) {
+    return { connection: node.connection, schema: node.connection.defaultSchema ?? 'public' };
+  }
+  return undefined;
+}
+
+function snapshotFromSchemaEntry(entry: SchemaCacheEntry) {
+  return {
+    schemaName: entry.schemaName,
+    tables: entry.tables,
+    views: entry.views,
+    columns: entry.columns
+  };
 }
 
 function newObjectTemplate(node: unknown, type: string): string {
@@ -2009,6 +2468,24 @@ async function quickDocumentation(connectionManager: ConnectionManager, node: un
   }
   if (node instanceof ColumnNode) {
     return `${qualifiedName(node.column.schema, node.column.table)}.${quoteIdentifier(node.column.name)}\n${node.column.dataType}${node.column.nullable ? '' : ' not null'}`;
+  }
+  if (node instanceof RoutineNode) {
+    return [
+      `${qualifiedName(node.routine.schema, node.routine.name)}`,
+      node.routine.kind === 'procedure' ? 'Procedure' : 'Function',
+      node.routine.returnType ? `Returns: ${node.routine.returnType}` : undefined,
+      node.routine.language ? `Language: ${node.routine.language}` : undefined,
+      node.routine.comment
+    ].filter(Boolean).join('\n');
+  }
+  if (node instanceof TriggerNode) {
+    return [
+      `${qualifiedName(node.trigger.schema, node.trigger.table)}.${quoteIdentifier(node.trigger.name)}`,
+      node.trigger.timing ? `Timing: ${node.trigger.timing}` : undefined,
+      node.trigger.orientation ? `Orientation: ${node.trigger.orientation}` : undefined,
+      node.trigger.events?.length ? `Events: ${node.trigger.events.join(', ')}` : undefined,
+      node.trigger.enabled ? `Enabled: ${node.trigger.enabled}` : undefined
+    ].filter(Boolean).join('\n');
   }
   return qualifiedObjectName(node);
 }

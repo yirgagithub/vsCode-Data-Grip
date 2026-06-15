@@ -22,6 +22,13 @@ export const DEFAULTS_BY_DATABASE_TYPE: Record<DatabaseType, ConnectionTypeDefau
     database: 'dev',
     sslMode: 'require',
     color: 'purple'
+  },
+  mysql: {
+    name: 'MySQL',
+    port: '3306',
+    database: 'mysql',
+    sslMode: 'disable',
+    color: 'blue'
   }
 };
 

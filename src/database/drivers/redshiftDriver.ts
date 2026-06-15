@@ -1,5 +1,5 @@
 import { PostgresDriver } from './postgresDriver';
-import { ColumnInfo, ConnectionConfigWithPassword, ExecuteQueryParams, ExplainQueryOptions, QueryPlanResult, SchemaInfo, TableInfo, TableStatsInfo, ViewInfo } from '../../types';
+import { ActiveSessionInfo, ColumnInfo, ConnectionConfigWithPassword, ExecuteQueryParams, ExplainQueryOptions, QueryPlanResult, SchemaInfo, TableInfo, TableStatsInfo, ViewInfo } from '../../types';
 import { textExplainPlan } from '../../services/queryPlanService';
 
 export class RedshiftDriver extends PostgresDriver {
@@ -69,6 +69,57 @@ export class RedshiftDriver extends PostgresDriver {
       [schema]
     );
     return result.rows;
+  }
+
+  override async getActiveSessions(connectionId: string): Promise<ActiveSessionInfo[]> {
+    const pool = this.requirePool(connectionId);
+    try {
+      const result = await pool.query(
+        `select pid,
+                user_name as user,
+                db_name as database,
+                '' as application,
+                remotehost as client,
+                status as state,
+                query as query,
+                starttime as "startedAt",
+                null as "transactionStartedAt",
+                null as "stateChangedAt",
+                null as "waitEventType",
+                null as "waitEvent",
+                pid = pg_backend_pid() as "isCurrent",
+                status = 'idle in transaction' as "isIdleInTransaction"
+         from stv_recents
+         where db_name = current_database()
+         order by starttime desc nulls last, pid desc`
+      );
+      return result.rows.map((row: Record<string, unknown>) => ({
+        pid: Number(row.pid),
+        user: optionalString(row.user),
+        database: optionalString(row.database),
+        application: optionalString(row.application),
+        client: optionalString(row.client),
+        state: optionalString(row.state),
+        query: optionalString(row.query),
+        startedAt: optionalString(row.startedAt),
+        transactionStartedAt: optionalString(row.transactionStartedAt),
+        stateChangedAt: optionalString(row.stateChangedAt),
+        waitEventType: optionalString(row.waitEventType),
+        waitEvent: optionalString(row.waitEvent),
+        isCurrent: Boolean(row.isCurrent),
+        isIdleInTransaction: Boolean(row.isIdleInTransaction)
+      }));
+    } catch {
+      return super.getActiveSessions(connectionId);
+    }
+  }
+
+  override async cancelSession(connectionId: string, pid: number): Promise<void> {
+    await this.requirePool(connectionId).query('select pg_cancel_backend($1)', [pid]);
+  }
+
+  override async terminateSession(connectionId: string, pid: number): Promise<void> {
+    await this.cancelSession(connectionId, pid);
   }
 
   override async getColumns(connectionId: string, schema: string, table: string): Promise<ColumnInfo[]> {

@@ -160,6 +160,8 @@ describe('QueryExecutor batch execution', () => {
       getConnection: vi.fn(() => local),
       isConnected: vi.fn(() => true),
       connect: vi.fn(),
+      getTransactionMode: vi.fn(() => 'auto'),
+      isTransactionOpen: vi.fn(() => false),
       getDriver: vi.fn(() => ({ executeStatements }))
     };
     const executor = new QueryExecutor(
@@ -181,6 +183,63 @@ describe('QueryExecutor batch execution', () => {
     ]);
     expect(tab.executionStatus).toBe('completed');
     expect(tab.resultSets).toHaveLength(4);
+  });
+
+  it('starts a manual transaction before executing the first statement', async () => {
+    const local = connection({ id: 'local' });
+    const executeStatements = vi.fn(async (_params, statements: string[]) => statements.map((sql, index) => ({
+      executionId: `execution-${index}`,
+      fields: [],
+      rows: [],
+      rowCount: 0,
+      command: sql.split(/\s+/)[0]?.toUpperCase(),
+      durationMs: 1
+    })));
+    const beginTransaction = vi.fn(async () => undefined);
+    const manager = {
+      getConnection: vi.fn(() => local),
+      isConnected: vi.fn(() => true),
+      connect: vi.fn(),
+      getTransactionMode: vi.fn(() => 'manual'),
+      isTransactionOpen: vi.fn(() => false),
+      beginTransaction,
+      getDriver: vi.fn(() => ({ executeStatements }))
+    };
+    const executor = new QueryExecutor(
+      manager as never,
+      { add: vi.fn() } as never,
+      undefined,
+      safeClassifier() as never
+    );
+
+    await executor.execute({ connectionId: local.id, sql: 'select 1' });
+
+    expect(beginTransaction).toHaveBeenCalledTimes(1);
+    expect(executeStatements).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses writes on read-only connections before hitting the driver', async () => {
+    const local = connection({ id: 'local', readOnlyDefault: true });
+    const manager = {
+      getConnection: vi.fn(() => local),
+      isConnected: vi.fn(() => true),
+      connect: vi.fn(),
+      getTransactionMode: vi.fn(() => 'auto'),
+      isTransactionOpen: vi.fn(() => false),
+      getDriver: vi.fn(() => ({ executeStatements: vi.fn() }))
+    };
+    const executor = new QueryExecutor(
+      manager as never,
+      { add: vi.fn() } as never,
+      undefined,
+      safeClassifier() as never
+    );
+
+    const tab = await executor.execute({ connectionId: local.id, sql: 'update users set active = false' });
+
+    expect(tab.executionStatus).toBe('failed');
+    expect(tab.error?.message).toContain('read-only by default');
+    expect(manager.getDriver).not.toHaveBeenCalled();
   });
 });
 
@@ -235,6 +294,7 @@ describe('ResultsPanelProvider', () => {
     const savedTabs: QueryResultTab[][] = [];
     const provider = new ResultsPanelProvider(
       { extensionUri: {} } as never,
+      connectionManagerStub(),
       {
         getTabs: () => [],
         saveTabs: async (tabs: QueryResultTab[]) => {
@@ -267,6 +327,7 @@ describe('ResultsPanelProvider', () => {
     const runActiveSelection = vi.fn(async () => true);
     const provider = new ResultsPanelProvider(
       { extensionUri: {} } as never,
+      connectionManagerStub(),
       {
         getTabs: () => [resultTab({ id: 'tab-adjust', queryText: 'select * from public.adjust_offer' })],
         saveTabs: vi.fn()
@@ -297,6 +358,7 @@ describe('ResultsPanelProvider', () => {
     };
     const provider = new ResultsPanelProvider(
       { extensionUri: {} } as never,
+      connectionManagerStub(),
       {
         getTabs: () => [resultTab({ id: 'tab-adjust', queryText: 'select * from public.adjust_offer', rowCount: 7 })],
         saveTabs: async (tabs: QueryResultTab[]) => {
@@ -344,6 +406,7 @@ describe('ResultsPanelProvider', () => {
     };
     const provider = new ResultsPanelProvider(
       { extensionUri: {} } as never,
+      connectionManagerStub(),
       {
         getTabs: () => [resultTab({ id: 'tab-adjust', connectionId: local.id, queryText: 'select * from public.adjust_offer', maxRows: 500 })],
         saveTabs: vi.fn()
@@ -647,6 +710,14 @@ describe('connection defaults', () => {
     expect(connectionDefaultsForType('postgres')).toMatchObject({
       port: '5432',
       database: 'postgres',
+      sslMode: 'disable'
+    });
+  });
+
+  it('provides MySQL defaults', () => {
+    expect(connectionDefaultsForType('mysql')).toMatchObject({
+      port: '3306',
+      database: 'mysql',
       sslMode: 'disable'
     });
   });
@@ -1369,7 +1440,8 @@ function connection(overrides: Partial<ConnectionConfig>): ConnectionConfig {
     sslMode: overrides.sslMode ?? 'prefer',
     color: overrides.color ?? 'green',
     defaultSchema: overrides.defaultSchema ?? 'public',
-    production: overrides.production
+    production: overrides.production,
+    readOnlyDefault: overrides.readOnlyDefault
   };
 }
 
@@ -1462,6 +1534,7 @@ function resultTab(overrides: Partial<QueryResultTab>): QueryResultTab {
     maxRows: overrides.maxRows,
     error: overrides.error,
     resultSets: overrides.resultSets ?? [],
+    transaction: overrides.transaction,
     activeResultSetIndex: overrides.activeResultSetIndex ?? 0,
     filters: overrides.filters ?? [],
     sort: overrides.sort ?? [],
@@ -1470,6 +1543,16 @@ function resultTab(overrides: Partial<QueryResultTab>): QueryResultTab {
     createdAt: overrides.createdAt ?? 1,
     updatedAt: overrides.updatedAt ?? 2
   };
+}
+
+function connectionManagerStub() {
+  return {
+    getTransactionMode: vi.fn(() => 'auto'),
+    isTransactionOpen: vi.fn(() => false),
+    beginTransaction: vi.fn(async () => undefined),
+    commitTransaction: vi.fn(async () => undefined),
+    rollbackTransaction: vi.fn(async () => undefined)
+  } as never;
 }
 
 function safeClassifier() {

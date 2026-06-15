@@ -85,6 +85,20 @@ class SchemaContextService {
         await this.persistentCache?.persist(connection, entry);
         return columns;
     }
+    async getPrimaryKeys(connection, schemaName, tableName) {
+        const entry = await this.loadSchema(connection, schemaName);
+        const tableKey = this.tableKey(schemaName, tableName);
+        if (entry.keys[tableKey]) {
+            return entry.keys[tableKey];
+        }
+        const keys = await this.connectionManager.getDriver(connection.type).getPrimaryKeys(connection.id, schemaName, tableName);
+        entry.keys[tableKey] = keys;
+        entry.loadedAt = Date.now();
+        entry.status = 'ready';
+        entry.source = 'live';
+        await this.persistentCache?.persist(connection, entry);
+        return keys;
+    }
     async getCachedColumns(connection, schemaName, tableName) {
         const entry = await this.getCachedForConnection(connection, schemaName);
         return entry?.columns[this.tableKey(schemaName, tableName)];

@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { useResultsStore } from './store';
 import { vscode } from './vscode';
 import { ResultsTabs } from './components/ResultsTabs';
 import { ResultToolbar } from './components/ResultToolbar';
 import { ResultGrid } from './components/ResultGrid';
-import { ChartView } from './components/ChartView';
 import { PlanView } from './components/PlanView';
 import { MessagesPanel } from './components/MessagesPanel';
 import { StatusBar } from './components/StatusBar';
 import { QueryResultTab } from '../../../types';
+
+const ChartView = lazy(() => import('./components/ChartView').then((module) => ({ default: module.ChartView })));
 
 export function App() {
   const { tabs, activeTabId, viewModes, setTabs, upsertTab, setViewMode } = useResultsStore();
@@ -54,6 +55,7 @@ export function App() {
       <ResultToolbar
         tab={active}
         resultSet={resultSet}
+        resultSetIndex={activeResultSetIndex}
         viewMode={viewMode}
         canChart={canChart}
         isPlanTab={isPlanTab}
@@ -84,10 +86,23 @@ export function App() {
           : active.plan
             ? <PlanView plan={active.plan} />
           : viewMode === 'chart'
-            ? <ChartView resultSet={resultSet} />
+            ? (
+                <Suspense fallback={<ChartLoadingPanel />}>
+                  <ChartView resultSet={resultSet} />
+                </Suspense>
+              )
             : <ResultGrid tab={active} resultSet={resultSet} columnFiltersVisible={columnFiltersVisible} />}
       <StatusBar tab={active} resultSet={resultSet} />
     </main>
+  );
+}
+
+function ChartLoadingPanel() {
+  return (
+    <section className="grid-empty result-loading" aria-live="polite">
+      <span className="loading-spinner" aria-hidden="true" />
+      <span>Loading chart...</span>
+    </section>
   );
 }
 

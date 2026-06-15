@@ -16,6 +16,13 @@ exports.DEFAULTS_BY_DATABASE_TYPE = {
         database: 'dev',
         sslMode: 'require',
         color: 'purple'
+    },
+    mysql: {
+        name: 'MySQL',
+        port: '3306',
+        database: 'mysql',
+        sslMode: 'disable',
+        color: 'blue'
     }
 };
 function connectionDefaultsForType(type) {
