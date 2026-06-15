@@ -26,6 +26,7 @@ import {
 } from '../../types';
 import { qualifiedName, quoteIdentifier } from '../../utils/identifiers';
 import { textExplainPlan } from '../../services/queryPlanService';
+import { loadBundledRuntime } from '../../runtime/runtimeLoader';
 
 interface ActiveExecution {
   connectionId: string;
@@ -598,11 +599,19 @@ type MySqlRuntime = {
 let mysqlRuntime: Promise<MySqlRuntime> | undefined;
 
 function loadMysql(): Promise<MySqlRuntime> {
-  mysqlRuntime ??= import('mysql2/promise').then((module) => {
+  mysqlRuntime ??= loadMysqlRuntime();
+  return mysqlRuntime;
+}
+
+async function loadMysqlRuntime(): Promise<MySqlRuntime> {
+  const bundled = loadBundledRuntime<MySqlRuntime>('mysqlRuntime');
+  if (bundled) {
+    return bundled;
+  }
+  return import('mysql2/promise').then((module) => {
     const candidate = module as unknown as MySqlRuntime | { default?: MySqlRuntime };
     return 'createPool' in candidate ? candidate : candidate.default as MySqlRuntime;
   });
-  return mysqlRuntime;
 }
 
 function groupKeyRows(rows: Array<Record<string, unknown>>): KeyInfo[] {

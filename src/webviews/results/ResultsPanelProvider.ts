@@ -25,7 +25,6 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
     private readonly revealSource?: (tab: QueryResultTab) => Promise<void>,
     private readonly onTabsChanged?: (tabs: QueryResultTab[]) => void,
     private readonly runActiveEditorSelection?: (maxRows?: number) => Promise<boolean>,
-    private readonly onMutationRequest?: (tab: QueryResultTab, message: Extract<ResultsFromWebviewMessage, { type: 'mutation' }>) => Promise<void>,
     private readonly onCompareRequest?: (tab: QueryResultTab, resultSetIndex: number) => Promise<void>
   ) {
     this.tabs = this.sessionStore.getTabs();
@@ -195,13 +194,6 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
     }
     if (message.type === 'copy') {
       await vscode.env.clipboard.writeText(message.text);
-      return;
-    }
-    if (message.type === 'mutation') {
-      const tab = this.getTab(this.activeTabId ?? '');
-      if (tab) {
-        await this.onMutationRequest?.(tab, message);
-      }
       return;
     }
     if (message.type === 'compareTabs') {

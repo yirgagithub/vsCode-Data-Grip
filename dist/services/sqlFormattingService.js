@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.sqlFormatterDialect = sqlFormatterDialect;
 exports.formatSqlText = formatSqlText;
+const runtimeLoader_1 = require("../runtime/runtimeLoader");
 function sqlFormatterDialect(connection) {
     if (connection?.type === 'redshift') {
         return 'redshift';
@@ -56,10 +57,17 @@ async function formatSqlText(sql, dialect) {
 }
 let sqlFormatterRuntime;
 function loadSqlFormatter() {
-    sqlFormatterRuntime ??= Promise.resolve().then(() => __importStar(require('sql-formatter'))).then((module) => {
+    sqlFormatterRuntime ??= loadSqlFormatterRuntime();
+    return sqlFormatterRuntime;
+}
+async function loadSqlFormatterRuntime() {
+    const bundled = (0, runtimeLoader_1.loadBundledRuntime)('sqlFormatterRuntime');
+    if (bundled) {
+        return bundled;
+    }
+    return Promise.resolve().then(() => __importStar(require('sql-formatter'))).then((module) => {
         const candidate = module;
         return 'format' in candidate ? candidate : candidate.default;
     });
-    return sqlFormatterRuntime;
 }
 //# sourceMappingURL=sqlFormattingService.js.map

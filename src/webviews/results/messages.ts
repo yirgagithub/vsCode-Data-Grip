@@ -16,13 +16,4 @@ export type ResultsFromWebviewMessage =
   | { type: 'commitTransaction'; tabId: string }
   | { type: 'rollbackTransaction'; tabId: string }
   | { type: 'compareTabs'; resultSetIndex: number }
-  | {
-      type: 'mutation';
-      kind: 'edit-cell' | 'insert-row' | 'delete-row';
-      row?: Record<string, unknown>;
-      updatedRow?: Record<string, unknown>;
-      column?: string;
-      valueText?: string;
-      rowText?: string;
-    }
   | { type: 'copy'; text: string };

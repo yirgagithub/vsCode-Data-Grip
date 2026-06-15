@@ -37,6 +37,7 @@ exports.MySQLDriver = void 0;
 const crypto_1 = require("crypto");
 const identifiers_1 = require("../../utils/identifiers");
 const queryPlanService_1 = require("../../services/queryPlanService");
+const runtimeLoader_1 = require("../../runtime/runtimeLoader");
 class MySQLDriver {
     id = 'mysql';
     displayName = 'MySQL';
@@ -542,11 +543,18 @@ class MySQLDriver {
 exports.MySQLDriver = MySQLDriver;
 let mysqlRuntime;
 function loadMysql() {
-    mysqlRuntime ??= Promise.resolve().then(() => __importStar(require('mysql2/promise'))).then((module) => {
+    mysqlRuntime ??= loadMysqlRuntime();
+    return mysqlRuntime;
+}
+async function loadMysqlRuntime() {
+    const bundled = (0, runtimeLoader_1.loadBundledRuntime)('mysqlRuntime');
+    if (bundled) {
+        return bundled;
+    }
+    return Promise.resolve().then(() => __importStar(require('mysql2/promise'))).then((module) => {
         const candidate = module;
         return 'createPool' in candidate ? candidate : candidate.default;
     });
-    return mysqlRuntime;
 }
 function groupKeyRows(rows) {
     const grouped = new Map();

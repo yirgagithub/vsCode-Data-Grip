@@ -164,9 +164,6 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
         event.preventDefault();
         setContextMenu({ ...menu, x: event.clientX, y: event.clientY });
     };
-    const requestMutation = (message) => {
-        vscode_1.vscode.postMessage({ type: 'mutation', ...message });
-    };
     const startColumnResize = (event, column) => {
         event.preventDefault();
         event.stopPropagation();
@@ -239,51 +236,12 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
                                                 return ((0, jsx_runtime_1.jsx)("div", { className: `cell data-cell ${value === null ? 'null' : ''} ${selectedColumn === field.name ? 'selected-column' : ''} ${isSelected ? 'selected' : ''}`, title: (0, format_1.formatValue)(value) || 'NULL', onClick: () => setSelection({ type: 'cell', rowIndex, column: field.name, value }), onContextMenu: (event) => {
                                                         setSelection({ type: 'cell', rowIndex, column: field.name, value });
                                                         openContextMenu(event, { rowIndex, column: field.name, value, row });
-                                                    }, onDoubleClick: () => {
-                                                        setSelection({ type: 'cell', rowIndex, column: field.name, value });
-                                                        const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', (0, format_1.formatValue)(value));
-                                                        if (valueText === null) {
-                                                            setInspectorOpen(true);
-                                                            return;
-                                                        }
-                                                        requestMutation({
-                                                            kind: 'edit-cell',
-                                                            row,
-                                                            updatedRow: { ...row, [field.name]: valueText },
-                                                            column: field.name,
-                                                            valueText
-                                                        });
                                                     }, role: "gridcell", "aria-selected": isSelected, children: value === null ? 'NULL' : (0, format_1.formatValue)(value) }, field.name));
                                             })] }, start + index))) }) })] }), inspectorOpen && ((0, jsx_runtime_1.jsxs)("aside", { className: "cell-inspector", children: [(0, jsx_runtime_1.jsxs)("div", { className: "inspector-title", children: [(0, jsx_runtime_1.jsx)("strong", { children: selectedCell?.column ?? 'Cell' }), (0, jsx_runtime_1.jsx)("button", { className: "tool", "aria-label": "Close cell inspector", onClick: () => setInspectorOpen(false), children: "Close" })] }), (0, jsx_runtime_1.jsx)("pre", { children: selectedCell ? prettyValue(selectedCell.value) : 'No cell selected' })] }))] }), contextMenu && ((0, jsx_runtime_1.jsxs)("div", { className: "context-menu grid-context-menu", style: { left: contextMenu.x, top: contextMenu.y }, role: "menu", onClick: (event) => event.stopPropagation(), children: [(0, jsx_runtime_1.jsxs)("button", { role: "menuitem", onClick: () => {
                             const text = contextMenu.value !== undefined ? (0, format_1.formatValue)(contextMenu.value) : selectedText();
                             vscode_1.vscode.postMessage({ type: 'copy', text });
                             setContextMenu(undefined);
-                        }, children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "copy" }), (0, jsx_runtime_1.jsx)("span", { children: "Copy" }), (0, jsx_runtime_1.jsx)("kbd", { children: "Ctrl+C" })] }), (0, jsx_runtime_1.jsxs)("button", { role: "menuitem", disabled: contextMenu.rowIndex === undefined || !contextMenu.row, onClick: () => {
-                            if (contextMenu.row) {
-                                const valueText = window.prompt('Edit cell as JSON, text, number, true/false, or null', (0, format_1.formatValue)(contextMenu.value));
-                                if (valueText !== null && contextMenu.column) {
-                                    requestMutation({
-                                        kind: 'edit-cell',
-                                        row: contextMenu.row,
-                                        updatedRow: { ...contextMenu.row, [contextMenu.column]: valueText },
-                                        column: contextMenu.column,
-                                        valueText
-                                    });
-                                }
-                            }
-                            setContextMenu(undefined);
-                        }, children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "edit" }), (0, jsx_runtime_1.jsx)("span", { children: "Edit Cell" })] }), (0, jsx_runtime_1.jsxs)("button", { role: "menuitem", onClick: () => {
-                            const rowText = window.prompt('Insert row as JSON object', '{}');
-                            if (rowText !== null) {
-                                requestMutation({ kind: 'insert-row', rowText });
-                            }
-                            setContextMenu(undefined);
-                        }, children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "add" }), (0, jsx_runtime_1.jsx)("span", { children: "Insert Row" })] }), (0, jsx_runtime_1.jsxs)("button", { role: "menuitem", disabled: contextMenu.rowIndex === undefined || !contextMenu.row, onClick: () => {
-                            if (contextMenu.row) {
-                                requestMutation({ kind: 'delete-row', row: contextMenu.row });
-                            }
-                            setContextMenu(undefined);
-                        }, children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "trash" }), (0, jsx_runtime_1.jsx)("span", { children: "Delete Row" })] }), (0, jsx_runtime_1.jsxs)("button", { role: "menuitem", disabled: contextMenu.rowIndex === undefined, onClick: () => {
+                        }, children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "copy" }), (0, jsx_runtime_1.jsx)("span", { children: "Copy" }), (0, jsx_runtime_1.jsx)("kbd", { children: "Ctrl+C" })] }), (0, jsx_runtime_1.jsxs)("button", { role: "menuitem", disabled: contextMenu.rowIndex === undefined, onClick: () => {
                             const row = contextMenu.rowIndex !== undefined ? rowForIndex(contextMenu.rowIndex) : undefined;
                             if (row)
                                 vscode_1.vscode.postMessage({ type: 'copy', text: (0, format_2.rowsToTsv)([row]) });

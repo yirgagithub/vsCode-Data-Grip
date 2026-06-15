@@ -105,7 +105,7 @@ export class QueryMemoryController {
 
   private async backfillSummaries(): Promise<void> {
     if (!await this.ai.isAvailable()) {
-      void vscode.window.showInformationMessage('Query memory summaries require an available VS Code language model.');
+      void vscode.window.showInformationMessage('Query memory summaries need a VS Code language model provider or configured database.ai.openAiCompatible settings.');
       return;
     }
     await vscode.window.withProgress({

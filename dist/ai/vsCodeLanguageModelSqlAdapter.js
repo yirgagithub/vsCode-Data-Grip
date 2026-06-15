@@ -47,7 +47,7 @@ class VsCodeLanguageModelSqlAdapter {
             return false;
         }
         try {
-            const models = await lm.selectChatModels({ vendor: 'copilot' });
+            const models = await this.selectVsCodeLanguageModels(settings);
             return models.length > 0;
         }
         catch {
@@ -99,15 +99,14 @@ class VsCodeLanguageModelSqlAdapter {
         if (settings.provider === 'openAiCompatible') {
             return this.sendOpenAiCompatible(prompt, settings);
         }
-        return this.sendCopilot(prompt, settings);
+        return this.sendVsCodeLanguageModel(prompt, settings);
     }
-    async sendCopilot(prompt, settings = this.settings()) {
+    async sendVsCodeLanguageModel(prompt, settings = this.settings()) {
         const lm = this.languageModelNamespace();
         if (!lm?.selectChatModels) {
             throw new Error('VS Code Language Model API is not available.');
         }
-        const models = await lm.selectChatModels({ vendor: settings.copilotVendor });
-        const model = models[0];
+        const model = (await this.selectVsCodeLanguageModels(settings))[0];
         if (!model) {
             throw new Error('No VS Code language model is available.');
         }
@@ -120,6 +119,20 @@ class VsCodeLanguageModelSqlAdapter {
             text += chunk;
         }
         return text;
+    }
+    async selectVsCodeLanguageModels(settings = this.settings()) {
+        const lm = this.languageModelNamespace();
+        if (!lm?.selectChatModels) {
+            return [];
+        }
+        const preferredVendor = settings.vscodeLanguageModelVendor.trim();
+        if (preferredVendor) {
+            const preferred = await lm.selectChatModels({ vendor: preferredVendor });
+            if (preferred.length) {
+                return preferred;
+            }
+        }
+        return lm.selectChatModels();
     }
     async sendOpenAiCompatible(prompt, settings = this.settings()) {
         const apiKey = this.openAiCompatibleApiKey(settings);
@@ -283,10 +296,11 @@ class VsCodeLanguageModelSqlAdapter {
     }
     settings() {
         const config = vscode.workspace.getConfiguration('database');
-        const provider = config.get('ai.provider', 'copilot') === 'openAiCompatible' ? 'openAiCompatible' : 'copilot';
+        const provider = config.get('ai.provider', 'vscodeLanguageModel') === 'openAiCompatible' ? 'openAiCompatible' : 'vscodeLanguageModel';
+        const legacyVendor = config.get('ai.copilot.vendor', 'copilot');
         return {
             provider,
-            copilotVendor: config.get('ai.copilot.vendor', 'copilot') || 'copilot',
+            vscodeLanguageModelVendor: config.get('ai.vscodeLanguageModel.vendor', legacyVendor).trim(),
             openAiCompatibleBaseUrl: config.get('ai.openAiCompatible.baseUrl', '').trim(),
             openAiCompatibleModel: config.get('ai.openAiCompatible.model', '').trim(),
             openAiCompatibleApiKey: config.get('ai.openAiCompatible.apiKey', '').trim(),
