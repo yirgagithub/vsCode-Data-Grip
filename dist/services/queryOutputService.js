@@ -34,6 +34,10 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.QueryOutputService = void 0;
+exports.formatQueryExecutionStartedOutput = formatQueryExecutionStartedOutput;
+exports.formatQueryProgressOutput = formatQueryProgressOutput;
+exports.formatQueryResultOutput = formatQueryResultOutput;
+exports.formatDuration = formatDuration;
 const vscode = __importStar(require("vscode"));
 const MAX_OUTPUT_LINES_PER_CONNECTION = 600;
 class QueryOutputService {
@@ -41,39 +45,19 @@ class QueryOutputService {
     lineCounts = new Map();
     record(connection, tab) {
         this.channelFor(connection);
-        this.ensureCapacity(connection.id, 3 + (tab.error ? 2 : 0));
-        this.append(connection.id, `[${new Date(tab.executionStartedAt).toLocaleTimeString()}] ${tab.executionStatus.toUpperCase()} ${tab.executionTimeMs ?? 0}ms ${tab.rowCount ?? 0} rows - ${tab.title}`);
-        if (tab.error) {
-            this.append(connection.id, `ERROR ${tab.error.code ? `${tab.error.code}: ` : ''}${tab.error.message}`);
-        }
-        this.append(connection.id, '');
+        this.appendBlock(connection.id, formatQueryResultOutput(tab));
     }
-    recordExecutionStarted(connection, fileName, statementCount) {
+    recordExecutionStarted(connection, fileName, statementCount, startedAt = Date.now()) {
         this.channelFor(connection);
-        this.ensureCapacity(connection.id, 4);
-        this.append(connection.id, `[${new Date().toLocaleTimeString()}] RUNNING ${statementCount} statement${statementCount === 1 ? '' : 's'}${fileName ? ` - ${fileName}` : ''}`);
+        this.appendBlock(connection.id, formatQueryExecutionStartedOutput(fileName, statementCount, startedAt));
+    }
+    recordExecutionElapsed(connection, startedAt, now = Date.now()) {
+        this.channelFor(connection);
+        this.appendBlock(connection.id, [`${timestamp(now)} ${statusText('running')} for ${formatDuration(now - startedAt)}`]);
     }
     recordProgress(connection, progress) {
         this.channelFor(connection);
-        if (progress.status === 'started') {
-            this.ensureCapacity(connection.id, this.lineCount(progress.sql) + 4);
-            this.append(connection.id, `[${new Date().toLocaleTimeString()}] statement ${progress.statementIndex + 1}/${progress.statementCount} running`);
-            this.appendMultiline(connection.id, progress.sql);
-            return;
-        }
-        this.ensureCapacity(connection.id, 3 + (progress.errorMessage ? 1 : 0));
-        const duration = progress.durationMs !== undefined ? `${progress.durationMs}ms` : 'unknown duration';
-        if (progress.status === 'completed') {
-            const rows = progress.rowCount !== undefined ? ` - ${progress.rowCount} rows` : '';
-            const command = progress.command ? ` - ${progress.command}` : '';
-            this.append(connection.id, `[${new Date().toLocaleTimeString()}] statement ${progress.statementIndex + 1}/${progress.statementCount} completed in ${duration}${rows}${command}`);
-        }
-        else {
-            this.append(connection.id, `[${new Date().toLocaleTimeString()}] statement ${progress.statementIndex + 1}/${progress.statementCount} failed in ${duration}`);
-            if (progress.errorMessage) {
-                this.append(connection.id, `ERROR ${progress.errorMessage}`);
-            }
-        }
+        this.appendBlock(connection.id, formatQueryProgressOutput(progress));
     }
     show(connection, preserveFocus = true) {
         this.channelFor(connection).show(preserveFocus);
@@ -100,6 +84,12 @@ class QueryOutputService {
         this.lineCounts.set(connection.id, 0);
         return channel;
     }
+    appendBlock(connectionId, lines) {
+        this.ensureCapacity(connectionId, lines.length);
+        for (const line of lines) {
+            this.append(connectionId, line);
+        }
+    }
     append(connectionId, line) {
         const channel = this.channels.get(connectionId);
         if (!channel) {
@@ -107,11 +97,6 @@ class QueryOutputService {
         }
         channel.appendLine(line);
         this.lineCounts.set(connectionId, (this.lineCounts.get(connectionId) ?? 0) + 1);
-    }
-    appendMultiline(connectionId, text) {
-        for (const line of text.split(/\r?\n/)) {
-            this.append(connectionId, `  ${line}`);
-        }
     }
     ensureCapacity(connectionId, incomingLines) {
         const channel = this.channels.get(connectionId);
@@ -124,12 +109,84 @@ class QueryOutputService {
         }
         channel.clear();
         this.lineCounts.set(connectionId, 0);
-        this.append(connectionId, `[${new Date().toLocaleTimeString()}] Output truncated to keep memory bounded.`);
+        this.append(connectionId, `${timestamp(Date.now())} OUTPUT truncated to keep memory bounded`);
         this.append(connectionId, '');
-    }
-    lineCount(text) {
-        return text.split(/\r?\n/).length;
     }
 }
 exports.QueryOutputService = QueryOutputService;
+function formatQueryExecutionStartedOutput(fileName, statementCount, startedAt = Date.now()) {
+    const lines = [
+        '',
+        `${timestamp(startedAt)} ${statusText('running')} ${statementCount} statement${statementCount === 1 ? '' : 's'}`
+    ];
+    if (fileName) {
+        lines.push(`  file: ${fileName}`);
+    }
+    return lines;
+}
+function formatQueryProgressOutput(progress, now = Date.now()) {
+    const statement = `statement ${progress.statementIndex + 1}/${progress.statementCount}`;
+    if (progress.status === 'started') {
+        return [
+            `${timestamp(now)} ${statusText('running')} ${statement} started`,
+            '  sql:',
+            ...progress.sql.trimEnd().split(/\r?\n/).map((line) => `    ${line}`)
+        ];
+    }
+    const duration = progress.durationMs !== undefined ? formatDuration(progress.durationMs) : 'unknown duration';
+    if (progress.status === 'completed') {
+        const details = [
+            `completed in ${duration}`,
+            progress.rowCount !== undefined ? `${progress.rowCount} rows` : undefined,
+            progress.command
+        ].filter(Boolean).join(' | ');
+        return [`${timestamp(now)} ${statusText('completed')} ${statement} ${details}`];
+    }
+    const lines = [`${timestamp(now)} ${statusText('failed')} ${statement} failed after ${duration}`];
+    if (progress.errorMessage) {
+        lines.push(`  error: ${progress.errorMessage}`);
+    }
+    return lines;
+}
+function formatQueryResultOutput(tab) {
+    const duration = formatDuration(tab.executionTimeMs ?? 0);
+    const status = statusText(tab.executionStatus);
+    const lines = [
+        `${timestamp(tab.executionFinishedAt ?? Date.now())} ${status} total ${duration} | ${tab.rowCount ?? 0} rows | ${tab.title}`
+    ];
+    if (tab.error) {
+        lines.push(`  error: ${tab.error.code ? `${tab.error.code}: ` : ''}${tab.error.message}`);
+    }
+    lines.push('');
+    return lines;
+}
+function formatDuration(durationMs) {
+    if (!Number.isFinite(durationMs) || durationMs <= 0) {
+        return '0s';
+    }
+    const totalSeconds = Math.max(1, Math.round(durationMs / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes > 0) {
+        return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
+}
+function timestamp(value) {
+    return `[${new Date(value).toLocaleTimeString()}]`;
+}
+function statusText(status) {
+    switch (status.toLowerCase()) {
+        case 'completed':
+            return 'COMPLETED';
+        case 'failed':
+            return 'FAILED';
+        case 'cancelled':
+            return 'CANCELLED';
+        case 'running':
+            return 'RUNNING';
+        default:
+            return status.toUpperCase();
+    }
+}
 //# sourceMappingURL=queryOutputService.js.map

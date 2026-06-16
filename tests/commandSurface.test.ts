@@ -109,7 +109,6 @@ describe('command surface', () => {
     ].join('\n');
 
     [
-      'database.cancelCurrentQuery',
       'database.editTableData',
       'database.testQueryMemorySummary',
       'database.previewTableMetadata',

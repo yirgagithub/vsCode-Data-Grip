@@ -31,6 +31,7 @@ export function ResultToolbar({
   const isRunning = tab.executionStatus === 'queued' || tab.executionStatus === 'running';
   const [exportFormat, setExportFormat] = useState<'csv' | 'json' | 'tsv' | 'markdown'>('csv');
   const rerun = () => vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: tab.maxRows ?? null, offset: tab.rowOffset ?? 0 });
+  const cancel = () => vscode.postMessage({ type: 'cancelTab', tabId: tab.id });
   const compare = () => vscode.postMessage({ type: 'compareTabs', resultSetIndex });
   const txMode = tab.transaction?.mode ?? 'auto';
   const txOpen = tab.transaction?.open ?? false;
@@ -51,6 +52,7 @@ export function ResultToolbar({
     <div className="toolbar result-toolbar" role="toolbar" aria-label="Result actions">
       <div className="toolbar-group">
         <button className="tool icon-tool tone-green" title={isPlanTab ? 'Plan tabs are rerun from the editor' : 'Rerun query'} aria-label="Rerun query" onClick={rerun} disabled={isRunning || isPlanTab}><Icon name="play" /></button>
+        <button className="tool icon-tool tone-red" title="Cancel query" aria-label="Cancel query" onClick={cancel} disabled={!isRunning || isPlanTab}><Icon name="debug-stop" /></button>
         <button className={`tool icon-tool ${tab.pinned ? 'tone-orange active' : ''}`} title={tab.pinned ? 'Unpin tab' : 'Pin tab'} aria-label={tab.pinned ? 'Unpin tab' : 'Pin tab'} onClick={() => pinTab(tab.id, !tab.pinned)}><Icon name={tab.pinned ? 'pinned' : 'pin'} /></button>
         <button className="tool icon-tool tone-purple" title="Compare result tabs" aria-label="Compare result tabs" onClick={compare} disabled={isRunning || isPlanTab || !resultSet}><Icon name="git-compare" /></button>
       </div>

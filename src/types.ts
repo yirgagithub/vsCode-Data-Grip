@@ -59,6 +59,7 @@ export interface ExecuteQueryParams {
   sql: string;
   transactionMode?: 'auto' | 'manual';
   offset?: number;
+  isCancellationRequested?: () => boolean;
   onProgress?: (progress: QueryExecutionProgress) => void;
   source?: {
     origin?: QueryExecutionOrigin;

@@ -82,6 +82,8 @@ export function App() {
       )}
       {isRunning
         ? <RunningPanel />
+        : active.executionStatus === 'cancelled'
+          ? <CancelledPanel />
         : active.executionStatus === 'failed'
           ? <MessagesPanel tab={active} />
           : active.plan
@@ -112,6 +114,15 @@ function RunningPanel() {
     <section className="grid-empty result-loading" aria-live="polite">
       <span className="loading-spinner" aria-hidden="true" />
       <span>Running query...</span>
+    </section>
+  );
+}
+
+function CancelledPanel() {
+  return (
+    <section className="grid-empty result-loading" aria-live="polite">
+      <Icon name="debug-stop" className="empty-icon" />
+      <span>Query cancelled.</span>
     </section>
   );
 }

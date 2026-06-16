@@ -12,6 +12,7 @@ export type ResultsFromWebviewMessage =
   | { type: 'activateTab'; tabId: string }
   | { type: 'renameTab'; tabId: string; title: string }
   | { type: 'rerunTab'; tabId: string; maxRows?: number | null; offset?: number | null }
+  | { type: 'cancelTab'; tabId: string }
   | { type: 'setTransactionMode'; tabId: string; mode: 'auto' | 'manual' }
   | { type: 'commitTransaction'; tabId: string }
   | { type: 'rollbackTransaction'; tabId: string }

@@ -1,5 +1,3 @@
-import { splitSqlStatements } from '../database/sqlSplitter';
-
 export interface TextPositionLike {
   line: number;
   character: number;
@@ -16,7 +14,13 @@ export interface SelectedSqlLike {
 }
 
 export function shouldRunSelectionForStatement(selected: SelectedSqlLike[], statementRange: TextRangeLike): boolean {
-  return selected.some((selection) => rangesOverlap(selection.range, statementRange) && splitSqlStatements(selection.sql).length > 1);
+  return selected.some((selection) => rangesOverlap(selection.range, statementRange) && looksExecutableSelection(selection.sql));
+}
+
+function looksExecutableSelection(sql: string): boolean {
+  const text = sql.trim();
+  return /^(select|with|begin|commit|rollback|lock|create|alter|drop|insert|update|delete|merge|analyze|explain|grant|revoke|truncate|call)\b/i.test(text) ||
+    /;\s*\S/.test(text);
 }
 
 function rangesOverlap(a: TextRangeLike, b: TextRangeLike): boolean {

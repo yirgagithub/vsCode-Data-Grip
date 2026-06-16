@@ -84,6 +84,17 @@ export function activate(context: vscode.ExtensionContext): void {
   const consoleAutoSaves = new Map<string, Promise<void>>();
   const consoleAutoSaveQueued = new Set<string>();
   const runningDocuments = new Map<string, number>();
+  interface RunningQueryExecution {
+    tabId: string;
+    connectionId: string;
+    documentUri: string;
+    title: string;
+    startedAt: number;
+    executionIds: Set<string>;
+    cancelRequested: boolean;
+  }
+  const runningQueries = new Map<string, RunningQueryExecution>();
+  void vscode.commands.executeCommand('setContext', 'database.queryRunning', false);
   const statementRunningDecoration = vscode.window.createTextEditorDecorationType({
     before: {
       contentIconPath: vscode.Uri.joinPath(context.extensionUri, 'media', 'sql-running.svg'),
@@ -109,6 +120,7 @@ export function activate(context: vscode.ExtensionContext): void {
     async (tab) => revealSourceForTab(tab),
     (tabs) => queryMap?.updateResults(tabs),
     async (maxRows) => executeActiveMultiStatementSelection(maxRows),
+    async (tabId) => cancelRunningQuery(tabId),
     async (tab, resultSetIndex) => compareResultTabs(tab, resultSetIndex)
   );
   queryMap = new QueryMapProvider(
@@ -444,6 +456,94 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       queryMap.updateRunningDocuments([...runningDocuments.keys()]);
     };
+  }
+
+  function beginRunningQuery(tab: QueryResultTab, documentUri: string): RunningQueryExecution {
+    const running: RunningQueryExecution = {
+      tabId: tab.id,
+      connectionId: tab.connectionId,
+      documentUri,
+      title: tab.customTitle ?? tab.title,
+      startedAt: tab.executionStartedAt,
+      executionIds: new Set(),
+      cancelRequested: false
+    };
+    runningQueries.set(tab.id, running);
+    updateQueryRunningContext();
+    return running;
+  }
+
+  function finishRunningQuery(tabId: string): void {
+    runningQueries.delete(tabId);
+    updateQueryRunningContext();
+  }
+
+  function updateQueryRunningContext(): void {
+    void vscode.commands.executeCommand('setContext', 'database.queryRunning', runningQueries.size > 0);
+  }
+
+  function trackRunningProgress(running: RunningQueryExecution, progress: QueryExecutionProgress): void {
+    if (!progress.executionId) {
+      return;
+    }
+    if (progress.status === 'started') {
+      running.executionIds.add(progress.executionId);
+      if (running.cancelRequested) {
+        void cancelExecution(running, progress.executionId).catch((error) => logger.error('database.cancelCurrentQuery', error));
+      }
+      return;
+    }
+    running.executionIds.delete(progress.executionId);
+  }
+
+  async function cancelExecution(running: RunningQueryExecution, executionId: string): Promise<void> {
+    await executor.cancel(running.connectionId, executionId);
+  }
+
+  function runningQueryForCancellation(tabId?: string): RunningQueryExecution | undefined {
+    if (tabId) {
+      return runningQueries.get(tabId);
+    }
+    const activeTab = results.getActiveTab();
+    if (activeTab) {
+      const runningTab = runningQueries.get(activeTab.id);
+      if (runningTab) {
+        return runningTab;
+      }
+    }
+    const activeDocumentUri = vscode.window.activeTextEditor?.document.uri.toString();
+    if (activeDocumentUri) {
+      const runningForDocument = [...runningQueries.values()]
+        .filter((running) => running.documentUri === activeDocumentUri)
+        .sort((a, b) => b.startedAt - a.startedAt)[0];
+      if (runningForDocument) {
+        return runningForDocument;
+      }
+    }
+    return [...runningQueries.values()].sort((a, b) => b.startedAt - a.startedAt)[0];
+  }
+
+  async function cancelRunningQuery(tabId?: string): Promise<void> {
+    const running = runningQueryForCancellation(tabId);
+    if (!running) {
+      void vscode.window.showInformationMessage('No query is currently running.');
+      return;
+    }
+    running.cancelRequested = true;
+    if (!running.executionIds.size) {
+      void vscode.window.showInformationMessage(`Cancel requested for ${running.title}.`);
+      return;
+    }
+    const executionIds = [...running.executionIds];
+    const settled = await Promise.allSettled(executionIds.map((executionId) => cancelExecution(running, executionId)));
+    const failures = settled.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failures.length === settled.length) {
+      throw new Error(`Could not cancel ${running.title}: ${failures[0]?.reason instanceof Error ? failures[0].reason.message : String(failures[0]?.reason)}`);
+    }
+    if (failures.length) {
+      logger.error('database.cancelCurrentQuery', failures.map((failure) => failure.reason).join('\n'));
+    }
+    void vscode.window.showInformationMessage(`Cancel requested for ${running.title}.`);
   }
 
   function createStatementStatusUpdater(editor: vscode.TextEditor, range: vscode.Range, sql: string): (progress: QueryExecutionProgress) => void {
@@ -808,6 +908,7 @@ export function activate(context: vscode.ExtensionContext): void {
   register('database.executeCurrentQuery', () => executeFromEditor('run'));
   register('database.executeSelection', () => executeFromEditor('selection'));
   register('database.executeFile', () => executeFromEditor('run'));
+  register('database.cancelCurrentQuery', () => cancelRunningQuery());
   register('database.executeStatementRange', async (uriText?: unknown, startLine?: unknown, startCharacter?: unknown, endLine?: unknown, endCharacter?: unknown) => {
     const editor = vscode.window.activeTextEditor;
     if (!editor || typeof uriText !== 'string' || editor.document.uri.toString() !== uriText) {
@@ -1574,6 +1675,8 @@ export function activate(context: vscode.ExtensionContext): void {
     const decoration = vscode.window.createTextEditorDecorationType({ backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground') });
     editor.setDecorations(decoration, [detected.range]);
     let endDocumentExecution: (() => void) | undefined;
+    let runningTabId: string | undefined;
+    let elapsedTimer: NodeJS.Timeout | undefined;
     try {
       const maxRows = options.maxRows ?? configuredDefaultMaxRows();
       const documentUri = editor.document.uri.toString();
@@ -1589,7 +1692,11 @@ export function activate(context: vscode.ExtensionContext): void {
       endDocumentExecution = beginDocumentExecution(documentUri);
       const statementCount = splitSqlStatements(executableSql).length || 1;
       const updateStatementStatus = createStatementStatusUpdater(editor, detected.range, sourceSql);
-      queryOutput.recordExecutionStarted(connection, editor.document.fileName, statementCount);
+      const outputStartedAt = Date.now();
+      queryOutput.recordExecutionStarted(connection, editor.document.fileName, statementCount, outputStartedAt);
+      elapsedTimer = setInterval(() => {
+        queryOutput.recordExecutionElapsed(connection, outputStartedAt);
+      }, 5000);
       const runningTab = await results.addTab(createRunningResultTab(connection, executableSql, maxRows, {
         origin: sourceOrigin,
         fileName: editor.document.fileName,
@@ -1598,11 +1705,15 @@ export function activate(context: vscode.ExtensionContext): void {
         sectionIndex: detected.index,
         range: executedRange
       }), { forceNew: options.forceNewResultTab });
+      runningTabId = runningTab.id;
+      const runningQuery = beginRunningQuery(runningTab, documentUri);
       queryMap.updateResults(results.getTabs());
       const tab = await executor.execute({
         connectionId: connection.id,
         sql: executableSql,
+        isCancellationRequested: () => runningQuery.cancelRequested,
         onProgress: (progress) => {
+          trackRunningProgress(runningQuery, progress);
           updateStatementStatus(progress);
           queryOutput.recordProgress(connection, progress);
         },
@@ -1629,6 +1740,12 @@ export function activate(context: vscode.ExtensionContext): void {
       refreshQueryMap();
       status.text = `$(database) ${connection.name} ${tab.executionTimeMs ?? 0}ms`;
     } finally {
+      if (runningTabId) {
+        finishRunningQuery(runningTabId);
+      }
+      if (elapsedTimer) {
+        clearInterval(elapsedTimer);
+      }
       endDocumentExecution?.();
       decoration.dispose();
     }

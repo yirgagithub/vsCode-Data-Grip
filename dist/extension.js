@@ -2257,6 +2257,7 @@ var QueryExecutor = class {
       };
     } catch (error) {
       const queryError = this.toQueryError(error);
+      const cancelled = params.isCancellationRequested?.() === true || isCancellationError(error);
       const historyItem = {
         id: createId("history"),
         connectionId: config.id,
@@ -2270,8 +2271,8 @@ var QueryExecutor = class {
         favorite: false,
         executedAt: started,
         durationMs: Date.now() - started,
-        status: "failed",
-        errorMessage: queryError.message,
+        status: cancelled ? "cancelled" : "failed",
+        errorMessage: cancelled ? void 0 : queryError.message,
         tables: extractQueryTables(params.sql),
         columns: extractQualifiedColumns(params.sql)
       };
@@ -2291,13 +2292,13 @@ var QueryExecutor = class {
         sourceQueryId: params.source?.queryId,
         sourceSectionIndex: params.source?.sectionIndex,
         sourceRange: params.source?.range,
-        executionStatus: "failed",
+        executionStatus: cancelled ? "cancelled" : "failed",
         executionStartedAt: started,
         executionFinishedAt: Date.now(),
         executionTimeMs: Date.now() - started,
         maxRows: params.maxRows,
         rowOffset: params.offset && params.offset > 0 ? Math.floor(params.offset) : 0,
-        error: queryError,
+        error: cancelled ? void 0 : queryError,
         resultSets: [],
         transaction: {
           mode: effectiveTransactionMode,
@@ -2368,6 +2369,16 @@ function isReadOnlySql(sql) {
   const statements = splitSqlStatements(sql).map((statement) => statement.sql.trim()).filter(Boolean);
   const parts = statements.length ? statements : [sql.trim()].filter(Boolean);
   return parts.every((statement) => /^(select|with|values|show|describe|explain)\b/i.test(statement));
+}
+function isCancellationError(error) {
+  const record = error;
+  const code = typeof record?.code === "string" ? record.code : void 0;
+  const errno = typeof record?.errno === "number" ? record.errno : void 0;
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : String(record?.message ?? "");
+  if (/statement timeout/i.test(message)) {
+    return false;
+  }
+  return code === "57014" && /\b(user request|canceling statement)\b/i.test(message) || code === "ER_QUERY_INTERRUPTED" || errno === 1317 || /\b(cancelled|canceled|canceling statement|cancelled by safety confirmation|query execution was interrupted|query interrupted)\b/i.test(message);
 }
 
 // src/explorer/DatabaseTreeProvider.ts
@@ -3049,8 +3060,7 @@ var QueryConsoleStore = class {
     return record.sortOrder ?? -(record.lastTouchedAt ?? record.updatedAt);
   }
   async createConsoleUri(connection) {
-    const folder = vscode5.workspace.workspaceFolders?.[0]?.uri;
-    const base = folder ? vscode5.Uri.joinPath(folder, ".vscode-data-grip") : vscode5.Uri.joinPath(this.context.globalStorageUri, "query-consoles");
+    const base = vscode5.Uri.joinPath(this.context.globalStorageUri, "query-consoles");
     await vscode5.workspace.fs.createDirectory(base);
     const name = this.safeName(connection ? `${connection.name}-${connection.database}` : "sql-console");
     const existing = new Set(this.getAll().map((record) => record.documentUri));
@@ -3072,9 +3082,6 @@ var QueryConsoleStore = class {
       await vscode5.workspace.fs.stat(uri);
     } catch {
       await vscode5.workspace.fs.writeFile(uri, Buffer.from(content, "utf8"));
-      if (!vscode5.workspace.workspaceFolders?.length) {
-        void vscode5.window.showInformationMessage("No workspace is open. Query console files are stored in extension storage; SQL autocomplete still works after metadata warms.");
-      }
     }
   }
   defaultContent() {
@@ -6348,7 +6355,11 @@ var SqlSectionService = class {
 
 // src/services/sqlSelectionExecution.ts
 function shouldRunSelectionForStatement(selected, statementRange) {
-  return selected.some((selection) => rangesOverlap(selection.range, statementRange) && splitSqlStatements(selection.sql).length > 1);
+  return selected.some((selection) => rangesOverlap(selection.range, statementRange) && looksExecutableSelection(selection.sql));
+}
+function looksExecutableSelection(sql) {
+  const text = sql.trim();
+  return /^(select|with|begin|commit|rollback|lock|create|alter|drop|insert|update|delete|merge|analyze|explain|grant|revoke|truncate|call)\b/i.test(text) || /;\s*\S/.test(text);
 }
 function rangesOverlap(a, b) {
   return comparePositions(a.start, b.end) <= 0 && comparePositions(a.end, b.start) >= 0;
@@ -6842,38 +6853,19 @@ var QueryOutputService = class {
   lineCounts = /* @__PURE__ */ new Map();
   record(connection, tab) {
     this.channelFor(connection);
-    this.ensureCapacity(connection.id, 3 + (tab.error ? 2 : 0));
-    this.append(connection.id, `[${new Date(tab.executionStartedAt).toLocaleTimeString()}] ${tab.executionStatus.toUpperCase()} ${tab.executionTimeMs ?? 0}ms ${tab.rowCount ?? 0} rows - ${tab.title}`);
-    if (tab.error) {
-      this.append(connection.id, `ERROR ${tab.error.code ? `${tab.error.code}: ` : ""}${tab.error.message}`);
-    }
-    this.append(connection.id, "");
+    this.appendBlock(connection.id, formatQueryResultOutput(tab));
   }
-  recordExecutionStarted(connection, fileName, statementCount) {
+  recordExecutionStarted(connection, fileName, statementCount, startedAt = Date.now()) {
     this.channelFor(connection);
-    this.ensureCapacity(connection.id, 4);
-    this.append(connection.id, `[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] RUNNING ${statementCount} statement${statementCount === 1 ? "" : "s"}${fileName ? ` - ${fileName}` : ""}`);
+    this.appendBlock(connection.id, formatQueryExecutionStartedOutput(fileName, statementCount, startedAt));
+  }
+  recordExecutionElapsed(connection, startedAt, now = Date.now()) {
+    this.channelFor(connection);
+    this.appendBlock(connection.id, [`${timestamp(now)} ${statusText("running")} for ${formatDuration(now - startedAt)}`]);
   }
   recordProgress(connection, progress) {
     this.channelFor(connection);
-    if (progress.status === "started") {
-      this.ensureCapacity(connection.id, this.lineCount(progress.sql) + 4);
-      this.append(connection.id, `[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] statement ${progress.statementIndex + 1}/${progress.statementCount} running`);
-      this.appendMultiline(connection.id, progress.sql);
-      return;
-    }
-    this.ensureCapacity(connection.id, 3 + (progress.errorMessage ? 1 : 0));
-    const duration = progress.durationMs !== void 0 ? `${progress.durationMs}ms` : "unknown duration";
-    if (progress.status === "completed") {
-      const rows = progress.rowCount !== void 0 ? ` - ${progress.rowCount} rows` : "";
-      const command = progress.command ? ` - ${progress.command}` : "";
-      this.append(connection.id, `[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] statement ${progress.statementIndex + 1}/${progress.statementCount} completed in ${duration}${rows}${command}`);
-    } else {
-      this.append(connection.id, `[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] statement ${progress.statementIndex + 1}/${progress.statementCount} failed in ${duration}`);
-      if (progress.errorMessage) {
-        this.append(connection.id, `ERROR ${progress.errorMessage}`);
-      }
-    }
+    this.appendBlock(connection.id, formatQueryProgressOutput(progress));
   }
   show(connection, preserveFocus = true) {
     this.channelFor(connection).show(preserveFocus);
@@ -6900,6 +6892,12 @@ var QueryOutputService = class {
     this.lineCounts.set(connection.id, 0);
     return channel;
   }
+  appendBlock(connectionId, lines) {
+    this.ensureCapacity(connectionId, lines.length);
+    for (const line of lines) {
+      this.append(connectionId, line);
+    }
+  }
   append(connectionId, line) {
     const channel = this.channels.get(connectionId);
     if (!channel) {
@@ -6907,11 +6905,6 @@ var QueryOutputService = class {
     }
     channel.appendLine(line);
     this.lineCounts.set(connectionId, (this.lineCounts.get(connectionId) ?? 0) + 1);
-  }
-  appendMultiline(connectionId, text) {
-    for (const line of text.split(/\r?\n/)) {
-      this.append(connectionId, `  ${line}`);
-    }
   }
   ensureCapacity(connectionId, incomingLines) {
     const channel = this.channels.get(connectionId);
@@ -6924,13 +6917,85 @@ var QueryOutputService = class {
     }
     channel.clear();
     this.lineCounts.set(connectionId, 0);
-    this.append(connectionId, `[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] Output truncated to keep memory bounded.`);
+    this.append(connectionId, `${timestamp(Date.now())} OUTPUT truncated to keep memory bounded`);
     this.append(connectionId, "");
   }
-  lineCount(text) {
-    return text.split(/\r?\n/).length;
-  }
 };
+function formatQueryExecutionStartedOutput(fileName, statementCount, startedAt = Date.now()) {
+  const lines = [
+    "",
+    `${timestamp(startedAt)} ${statusText("running")} ${statementCount} statement${statementCount === 1 ? "" : "s"}`
+  ];
+  if (fileName) {
+    lines.push(`  file: ${fileName}`);
+  }
+  return lines;
+}
+function formatQueryProgressOutput(progress, now = Date.now()) {
+  const statement = `statement ${progress.statementIndex + 1}/${progress.statementCount}`;
+  if (progress.status === "started") {
+    return [
+      `${timestamp(now)} ${statusText("running")} ${statement} started`,
+      "  sql:",
+      ...progress.sql.trimEnd().split(/\r?\n/).map((line) => `    ${line}`)
+    ];
+  }
+  const duration = progress.durationMs !== void 0 ? formatDuration(progress.durationMs) : "unknown duration";
+  if (progress.status === "completed") {
+    const details = [
+      `completed in ${duration}`,
+      progress.rowCount !== void 0 ? `${progress.rowCount} rows` : void 0,
+      progress.command
+    ].filter(Boolean).join(" | ");
+    return [`${timestamp(now)} ${statusText("completed")} ${statement} ${details}`];
+  }
+  const lines = [`${timestamp(now)} ${statusText("failed")} ${statement} failed after ${duration}`];
+  if (progress.errorMessage) {
+    lines.push(`  error: ${progress.errorMessage}`);
+  }
+  return lines;
+}
+function formatQueryResultOutput(tab) {
+  const duration = formatDuration(tab.executionTimeMs ?? 0);
+  const status = statusText(tab.executionStatus);
+  const lines = [
+    `${timestamp(tab.executionFinishedAt ?? Date.now())} ${status} total ${duration} | ${tab.rowCount ?? 0} rows | ${tab.title}`
+  ];
+  if (tab.error) {
+    lines.push(`  error: ${tab.error.code ? `${tab.error.code}: ` : ""}${tab.error.message}`);
+  }
+  lines.push("");
+  return lines;
+}
+function formatDuration(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return "0s";
+  }
+  const totalSeconds = Math.max(1, Math.round(durationMs / 1e3));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+function timestamp(value) {
+  return `[${new Date(value).toLocaleTimeString()}]`;
+}
+function statusText(status) {
+  switch (status.toLowerCase()) {
+    case "completed":
+      return "COMPLETED";
+    case "failed":
+      return "FAILED";
+    case "cancelled":
+      return "CANCELLED";
+    case "running":
+      return "RUNNING";
+    default:
+      return status.toUpperCase();
+  }
+}
 
 // src/services/erDiagramService.ts
 var ErDiagramService = class {
@@ -10649,7 +10714,7 @@ var QueryMapProvider = class {
 // src/webviews/results/ResultsPanelProvider.ts
 var vscode23 = __toESM(require("vscode"));
 var ResultsPanelProvider = class _ResultsPanelProvider {
-  constructor(context, connectionManager, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection, onCompareRequest) {
+  constructor(context, connectionManager, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection, onCancelRequest, onCompareRequest) {
     this.context = context;
     this.connectionManager = connectionManager;
     this.sessionStore = sessionStore;
@@ -10657,6 +10722,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
     this.revealSource = revealSource;
     this.onTabsChanged = onTabsChanged;
     this.runActiveEditorSelection = runActiveEditorSelection;
+    this.onCancelRequest = onCancelRequest;
     this.onCompareRequest = onCompareRequest;
     this.tabs = this.sessionStore.getTabs();
     this.activeTabId = this.tabs[0]?.id;
@@ -10793,6 +10859,10 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
         });
         await this.addTab({ ...next, id: tab.id, pinned: tab.pinned, customTitle: tab.customTitle }, { replaceTabId: tab.id });
       }
+      return;
+    }
+    if (message.type === "cancelTab") {
+      await this.onCancelRequest?.(message.tabId);
       return;
     }
     if (message.type === "setTransactionMode") {
@@ -13029,6 +13099,8 @@ function activate(context) {
   const consoleAutoSaves = /* @__PURE__ */ new Map();
   const consoleAutoSaveQueued = /* @__PURE__ */ new Set();
   const runningDocuments = /* @__PURE__ */ new Map();
+  const runningQueries = /* @__PURE__ */ new Map();
+  void vscode26.commands.executeCommand("setContext", "database.queryRunning", false);
   const statementRunningDecoration = vscode26.window.createTextEditorDecorationType({
     before: {
       contentIconPath: vscode26.Uri.joinPath(context.extensionUri, "media", "sql-running.svg"),
@@ -13054,6 +13126,7 @@ function activate(context) {
     async (tab) => revealSourceForTab(tab),
     (tabs) => queryMap?.updateResults(tabs),
     async (maxRows) => executeActiveMultiStatementSelection(maxRows),
+    async (tabId) => cancelRunningQuery(tabId),
     async (tab, resultSetIndex) => compareResultTabs(tab, resultSetIndex)
   );
   queryMap = new QueryMapProvider(
@@ -13368,6 +13441,85 @@ function activate(context) {
       }
       queryMap.updateRunningDocuments([...runningDocuments.keys()]);
     };
+  }
+  function beginRunningQuery(tab, documentUri) {
+    const running = {
+      tabId: tab.id,
+      connectionId: tab.connectionId,
+      documentUri,
+      title: tab.customTitle ?? tab.title,
+      startedAt: tab.executionStartedAt,
+      executionIds: /* @__PURE__ */ new Set(),
+      cancelRequested: false
+    };
+    runningQueries.set(tab.id, running);
+    updateQueryRunningContext();
+    return running;
+  }
+  function finishRunningQuery(tabId) {
+    runningQueries.delete(tabId);
+    updateQueryRunningContext();
+  }
+  function updateQueryRunningContext() {
+    void vscode26.commands.executeCommand("setContext", "database.queryRunning", runningQueries.size > 0);
+  }
+  function trackRunningProgress(running, progress) {
+    if (!progress.executionId) {
+      return;
+    }
+    if (progress.status === "started") {
+      running.executionIds.add(progress.executionId);
+      if (running.cancelRequested) {
+        void cancelExecution(running, progress.executionId).catch((error) => logger.error("database.cancelCurrentQuery", error));
+      }
+      return;
+    }
+    running.executionIds.delete(progress.executionId);
+  }
+  async function cancelExecution(running, executionId) {
+    await executor.cancel(running.connectionId, executionId);
+  }
+  function runningQueryForCancellation(tabId) {
+    if (tabId) {
+      return runningQueries.get(tabId);
+    }
+    const activeTab = results.getActiveTab();
+    if (activeTab) {
+      const runningTab = runningQueries.get(activeTab.id);
+      if (runningTab) {
+        return runningTab;
+      }
+    }
+    const activeDocumentUri = vscode26.window.activeTextEditor?.document.uri.toString();
+    if (activeDocumentUri) {
+      const runningForDocument = [...runningQueries.values()].filter((running) => running.documentUri === activeDocumentUri).sort((a, b) => b.startedAt - a.startedAt)[0];
+      if (runningForDocument) {
+        return runningForDocument;
+      }
+    }
+    return [...runningQueries.values()].sort((a, b) => b.startedAt - a.startedAt)[0];
+  }
+  async function cancelRunningQuery(tabId) {
+    const running = runningQueryForCancellation(tabId);
+    if (!running) {
+      void vscode26.window.showInformationMessage("No query is currently running.");
+      return;
+    }
+    running.cancelRequested = true;
+    if (!running.executionIds.size) {
+      void vscode26.window.showInformationMessage(`Cancel requested for ${running.title}.`);
+      return;
+    }
+    const executionIds = [...running.executionIds];
+    const settled = await Promise.allSettled(executionIds.map((executionId) => cancelExecution(running, executionId)));
+    const failures = settled.filter((result) => result.status === "rejected");
+    if (failures.length === settled.length) {
+      throw new Error(`Could not cancel ${running.title}: ${failures[0]?.reason instanceof Error ? failures[0].reason.message : String(failures[0]?.reason)}`);
+    }
+    if (failures.length) {
+      logger.error("database.cancelCurrentQuery", failures.map((failure) => failure.reason).join("\n"));
+    }
+    void vscode26.window.showInformationMessage(`Cancel requested for ${running.title}.`);
   }
   function createStatementStatusUpdater(editor, range, sql) {
     const statements = splitSqlStatements(sql);
@@ -13696,6 +13848,7 @@ function activate(context) {
   register("database.executeCurrentQuery", () => executeFromEditor("run"));
   register("database.executeSelection", () => executeFromEditor("selection"));
   register("database.executeFile", () => executeFromEditor("run"));
+  register("database.cancelCurrentQuery", () => cancelRunningQuery());
   register("database.executeStatementRange", async (uriText, startLine, startCharacter, endLine, endCharacter) => {
     const editor = vscode26.window.activeTextEditor;
     if (!editor || typeof uriText !== "string" || editor.document.uri.toString() !== uriText) {
@@ -14409,6 +14562,8 @@ where ${quoteIdentifier("id")} = '<id>';
     const decoration = vscode26.window.createTextEditorDecorationType({ backgroundColor: new vscode26.ThemeColor("editor.findMatchHighlightBackground") });
     editor.setDecorations(decoration, [detected.range]);
     let endDocumentExecution;
+    let runningTabId;
+    let elapsedTimer;
     try {
       const maxRows = options.maxRows ?? configuredDefaultMaxRows();
       const documentUri = editor.document.uri.toString();
@@ -14424,7 +14579,11 @@ where ${quoteIdentifier("id")} = '<id>';
       endDocumentExecution = beginDocumentExecution(documentUri);
       const statementCount = splitSqlStatements(executableSql).length || 1;
       const updateStatementStatus = createStatementStatusUpdater(editor, detected.range, sourceSql);
-      queryOutput.recordExecutionStarted(connection, editor.document.fileName, statementCount);
+      const outputStartedAt = Date.now();
+      queryOutput.recordExecutionStarted(connection, editor.document.fileName, statementCount, outputStartedAt);
+      elapsedTimer = setInterval(() => {
+        queryOutput.recordExecutionElapsed(connection, outputStartedAt);
+      }, 5e3);
       const runningTab = await results.addTab(createRunningResultTab(connection, executableSql, maxRows, {
         origin: sourceOrigin,
         fileName: editor.document.fileName,
@@ -14433,11 +14592,15 @@ where ${quoteIdentifier("id")} = '<id>';
         sectionIndex: detected.index,
         range: executedRange
       }), { forceNew: options.forceNewResultTab });
+      runningTabId = runningTab.id;
+      const runningQuery = beginRunningQuery(runningTab, documentUri);
       queryMap.updateResults(results.getTabs());
       const tab = await executor.execute({
         connectionId: connection.id,
         sql: executableSql,
+        isCancellationRequested: () => runningQuery.cancelRequested,
         onProgress: (progress) => {
+          trackRunningProgress(runningQuery, progress);
           updateStatementStatus(progress);
           queryOutput.recordProgress(connection, progress);
         },
@@ -14464,6 +14627,12 @@ where ${quoteIdentifier("id")} = '<id>';
       refreshQueryMap();
       status.text = `$(database) ${connection.name} ${tab.executionTimeMs ?? 0}ms`;
     } finally {
+      if (runningTabId) {
+        finishRunningQuery(runningTabId);
+      }
+      if (elapsedTimer) {
+        clearInterval(elapsedTimer);
+      }
       endDocumentExecution?.();
       decoration.dispose();
     }

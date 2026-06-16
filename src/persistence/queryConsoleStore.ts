@@ -149,10 +149,7 @@ export class QueryConsoleStore {
   }
 
   private async createConsoleUri(connection: ConnectionConfig | undefined): Promise<vscode.Uri> {
-    const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
-    const base = folder
-      ? vscode.Uri.joinPath(folder, '.vscode-data-grip')
-      : vscode.Uri.joinPath(this.context.globalStorageUri, 'query-consoles');
+    const base = vscode.Uri.joinPath(this.context.globalStorageUri, 'query-consoles');
     await vscode.workspace.fs.createDirectory(base);
     const name = this.safeName(connection ? `${connection.name}-${connection.database}` : 'sql-console');
     const existing = new Set(this.getAll().map((record) => record.documentUri));
@@ -175,9 +172,6 @@ export class QueryConsoleStore {
       await vscode.workspace.fs.stat(uri);
     } catch {
       await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
-      if (!vscode.workspace.workspaceFolders?.length) {
-        void vscode.window.showInformationMessage('No workspace is open. Query console files are stored in extension storage; SQL autocomplete still works after metadata warms.');
-      }
     }
   }
 
