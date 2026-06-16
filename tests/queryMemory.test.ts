@@ -13,6 +13,7 @@ import { extractQualifiedColumns, extractQueryTables, outputColumnNames } from '
 import { QueryMemorySearch } from '../src/services/queryMemorySearch';
 import { QueryMemoryService } from '../src/services/queryMemoryService';
 import { normalizeExplainJsonPlan } from '../src/services/queryPlanService';
+import { QueryConsoleStore } from '../src/persistence/queryConsoleStore';
 import { SchemaContextService } from '../src/services/schemaContextService';
 import { connectionMetadataFingerprint, parseStoredSchemaCacheEntry, SCHEMA_METADATA_CACHE_VERSION, serializeSchemaCacheEntry } from '../src/services/schemaMetadataCacheStore';
 import { SqlDiagnosticsService } from '../src/services/sqlDiagnosticsService';
@@ -44,6 +45,13 @@ vi.mock('vscode', () => ({
     token = {};
   },
   workspace: {
+    workspaceFolders: [],
+    fs: {
+      createDirectory: vi.fn(async () => undefined),
+      stat: vi.fn(async () => undefined),
+      writeFile: vi.fn(async () => undefined)
+    },
+    openTextDocument: vi.fn(async (uri: unknown) => ({ uri })),
     getConfiguration: vi.fn(() => ({
       get: vi.fn((_key: string, fallback: unknown) => fallback)
     }))
@@ -94,7 +102,20 @@ vi.mock('vscode', () => ({
     }
   },
   Uri: {
-    joinPath: vi.fn((...parts: unknown[]) => ({ parts }))
+    parse: vi.fn((value: string) => ({
+      path: value.replace(/^file:\/\//, ''),
+      fsPath: value.replace(/^file:\/\//, ''),
+      toString: () => value
+    })),
+    joinPath: vi.fn((base: { toString?: () => string; path?: string }, ...segments: string[]) => {
+      const baseText = base?.toString?.() ?? base?.path ?? '';
+      const value = [baseText.replace(/\/+$/, ''), ...segments.map((segment) => segment.replace(/^\/+|\/+$/g, ''))].filter(Boolean).join('/');
+      return {
+        path: value.replace(/^file:\/\//, ''),
+        fsPath: value.replace(/^file:\/\//, ''),
+        toString: () => value
+      };
+    })
   }
 }));
 
@@ -133,7 +154,16 @@ select * from public.appsflyer_offer;`);
     ]);
   });
 
-  it('runs a multi-statement selection when the code lens range only overlaps it', () => {
+  it('runs a selection when the code lens range only overlaps it', () => {
+    expect(shouldRunSelectionForStatement([
+      {
+        sql: 'select * from public.event_fact',
+        range: textRange(0, 0, 0, 31)
+      }
+    ], textRange(0, 0, 0, 42))).toBe(true);
+  });
+
+  it('runs a large multi-statement selection when the code lens range only overlaps part of it', () => {
     const selectedSql = `select network_offer_id
 from adjust_offer;
 
@@ -252,6 +282,133 @@ describe('QueryExecutor batch execution', () => {
     expect(tab.executionStatus).toBe('failed');
     expect(tab.error?.message).toContain('read-only by default');
     expect(manager.getDriver).not.toHaveBeenCalled();
+  });
+
+  it('marks user-cancelled executions as cancelled in result tabs and history', async () => {
+    const local = connection({ id: 'local' });
+    const executeStatements = vi.fn(async () => {
+      const error = new Error('canceling statement due to user request') as Error & { code: string };
+      error.code = '57014';
+      throw error;
+    });
+    const historyStore = { add: vi.fn() };
+    const manager = {
+      getConnection: vi.fn(() => local),
+      isConnected: vi.fn(() => true),
+      connect: vi.fn(),
+      getTransactionMode: vi.fn(() => 'auto'),
+      isTransactionOpen: vi.fn(() => false),
+      getDriver: vi.fn(() => ({ executeStatements }))
+    };
+    const executor = new QueryExecutor(
+      manager as never,
+      historyStore as never,
+      undefined,
+      safeClassifier() as never
+    );
+
+    const tab = await executor.execute({
+      connectionId: local.id,
+      sql: 'select pg_sleep(60)',
+      isCancellationRequested: () => true,
+      source: { origin: 'queryConsole', documentUri: 'file:///global/query-consoles/local.sql' }
+    });
+
+    expect(tab.executionStatus).toBe('cancelled');
+    expect(tab.error).toBeUndefined();
+    expect(historyStore.add.mock.calls[0][0]).toMatchObject({
+      status: 'cancelled',
+      errorMessage: undefined
+    });
+  });
+
+  it('keeps statement timeouts as failures instead of user cancellations', async () => {
+    const local = connection({ id: 'local' });
+    const executeStatements = vi.fn(async () => {
+      const error = new Error('canceling statement due to statement timeout') as Error & { code: string };
+      error.code = '57014';
+      throw error;
+    });
+    const manager = {
+      getConnection: vi.fn(() => local),
+      isConnected: vi.fn(() => true),
+      connect: vi.fn(),
+      getTransactionMode: vi.fn(() => 'auto'),
+      isTransactionOpen: vi.fn(() => false),
+      getDriver: vi.fn(() => ({ executeStatements }))
+    };
+    const executor = new QueryExecutor(
+      manager as never,
+      { add: vi.fn() } as never,
+      undefined,
+      safeClassifier() as never
+    );
+
+    const tab = await executor.execute({
+      connectionId: local.id,
+      sql: 'select pg_sleep(60)',
+      isCancellationRequested: () => false,
+      source: { origin: 'queryConsole', documentUri: 'file:///global/query-consoles/local.sql' }
+    });
+
+    expect(tab.executionStatus).toBe('failed');
+    expect(tab.error?.message).toContain('statement timeout');
+  });
+
+  it('delegates explicit cancellation to the active connection driver', async () => {
+    const cancelQuery = vi.fn(async () => undefined);
+    const executor = new QueryExecutor(
+      { getDriverByConnectionId: vi.fn(() => ({ cancelQuery })) } as never,
+      { add: vi.fn() } as never,
+      undefined,
+      safeClassifier() as never
+    );
+
+    await executor.cancel('local', 'execution-1');
+
+    expect(cancelQuery).toHaveBeenCalledWith('execution-1');
+  });
+});
+
+describe('QueryConsoleStore storage', () => {
+  it('creates new query console files in extension global storage even when a workspace is open', async () => {
+    const workspaceMock = vscode.workspace as unknown as {
+      workspaceFolders: Array<{ uri: unknown }>;
+      fs: {
+        createDirectory: ReturnType<typeof vi.fn>;
+        stat: ReturnType<typeof vi.fn>;
+        writeFile: ReturnType<typeof vi.fn>;
+      };
+      openTextDocument: ReturnType<typeof vi.fn>;
+    };
+    const globalStorageUri = vscode.Uri.parse('file:///global-storage/data-grip');
+    const workspaceUri = vscode.Uri.parse('file:///workspace/project');
+    const records: QueryConsoleRecord[] = [];
+    workspaceMock.workspaceFolders = [{ uri: workspaceUri }];
+    workspaceMock.fs.createDirectory.mockClear();
+    workspaceMock.fs.writeFile.mockClear();
+    workspaceMock.fs.stat.mockRejectedValue(Object.assign(new Error('FileNotFound'), { code: 'FileNotFound' }));
+    workspaceMock.openTextDocument.mockClear();
+
+    const store = new QueryConsoleStore({
+      globalStorageUri,
+      workspaceState: {
+        get: vi.fn((_key: string, fallback: QueryConsoleRecord[]) => records.length ? records : fallback),
+        update: vi.fn(async (_key: string, value: QueryConsoleRecord[]) => {
+          records.splice(0, records.length, ...value);
+        })
+      }
+    } as never);
+
+    await store.openOrCreate(connection({ id: 'local', name: 'Local', database: 'app' }));
+
+    expect(workspaceMock.fs.createDirectory.mock.calls[0][0].toString()).toBe('file:///global-storage/data-grip/query-consoles');
+    expect(records[0].documentUri).toContain('file:///global-storage/data-grip/query-consoles/');
+    expect(records[0].documentUri).not.toContain('/workspace/project');
+    expect(workspaceMock.fs.writeFile.mock.calls[0][0].toString()).toBe(records[0].documentUri);
+
+    workspaceMock.workspaceFolders = [];
+    workspaceMock.fs.stat.mockResolvedValue(undefined);
   });
 });
 
@@ -435,6 +592,30 @@ describe('ResultsPanelProvider', () => {
     expect(executor.execute).toHaveBeenCalledWith(expect.objectContaining({ maxRows: undefined }));
     expect(provider.getTab('tab-adjust')?.maxRows).toBeUndefined();
     expect(provider.getTab('tab-adjust')?.rowCount).toBe(750);
+  });
+
+  it('routes result toolbar cancel messages to the cancel callback', async () => {
+    const cancel = vi.fn(async () => undefined);
+    const provider = new ResultsPanelProvider(
+      { extensionUri: {} } as never,
+      connectionManagerStub(),
+      {
+        getTabs: () => [resultTab({ id: 'tab-adjust', queryText: 'select * from public.adjust_offer' })],
+        saveTabs: vi.fn()
+      } as never,
+      {} as never,
+      undefined,
+      undefined,
+      undefined,
+      cancel
+    );
+
+    await (provider as never as { onMessage(message: unknown): Promise<void> }).onMessage({
+      type: 'cancelTab',
+      tabId: 'tab-adjust'
+    });
+
+    expect(cancel).toHaveBeenCalledWith('tab-adjust');
   });
 });
 

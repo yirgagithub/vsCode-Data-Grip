@@ -123,6 +123,7 @@ export class QueryExecutor {
       };
     } catch (error) {
       const queryError = this.toQueryError(error);
+      const cancelled = params.isCancellationRequested?.() === true || isCancellationError(error);
       const historyItem: QueryHistoryItem = {
         id: createId('history'),
         connectionId: config.id,
@@ -136,8 +137,8 @@ export class QueryExecutor {
         favorite: false,
         executedAt: started,
         durationMs: Date.now() - started,
-        status: 'failed',
-        errorMessage: queryError.message,
+        status: cancelled ? 'cancelled' : 'failed',
+        errorMessage: cancelled ? undefined : queryError.message,
         tables: extractQueryTables(params.sql),
         columns: extractQualifiedColumns(params.sql)
       };
@@ -158,13 +159,13 @@ export class QueryExecutor {
         sourceQueryId: params.source?.queryId,
         sourceSectionIndex: params.source?.sectionIndex,
         sourceRange: params.source?.range,
-        executionStatus: 'failed',
+        executionStatus: cancelled ? 'cancelled' : 'failed',
         executionStartedAt: started,
         executionFinishedAt: Date.now(),
         executionTimeMs: Date.now() - started,
         maxRows: params.maxRows,
         rowOffset: params.offset && params.offset > 0 ? Math.floor(params.offset) : 0,
-        error: queryError,
+        error: cancelled ? undefined : queryError,
         resultSets: [],
         transaction: {
           mode: effectiveTransactionMode,
@@ -241,4 +242,18 @@ function isReadOnlySql(sql: string): boolean {
   const statements = splitSqlStatements(sql).map((statement) => statement.sql.trim()).filter(Boolean);
   const parts = statements.length ? statements : [sql.trim()].filter(Boolean);
   return parts.every((statement) => /^(select|with|values|show|describe|explain)\b/i.test(statement));
+}
+
+function isCancellationError(error: unknown): boolean {
+  const record = error as { code?: unknown; errno?: unknown; message?: unknown };
+  const code = typeof record?.code === 'string' ? record.code : undefined;
+  const errno = typeof record?.errno === 'number' ? record.errno : undefined;
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : String(record?.message ?? '');
+  if (/statement timeout/i.test(message)) {
+    return false;
+  }
+  return (code === '57014' && /\b(user request|canceling statement)\b/i.test(message)) ||
+    code === 'ER_QUERY_INTERRUPTED' ||
+    errno === 1317 ||
+    /\b(cancelled|canceled|canceling statement|cancelled by safety confirmation|query execution was interrupted|query interrupted)\b/i.test(message);
 }

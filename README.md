@@ -14,8 +14,8 @@ The extension is not intended to replace VS Code with a separate database IDE. I
 | --- | --- |
 | Connections | Save PostgreSQL and Redshift connections, connect/disconnect, and keep the selected connection available to SQL files. |
 | Schema explorer | Browse databases, schemas, tables, views, columns, keys, indexes, and object metadata from the Database activity view. |
-| Query consoles | Open persistent SQL consoles per connection. Consoles are stored under `.vscode-data-grip` when a workspace is open, or in VS Code extension storage when no workspace is open. |
-| SQL execution | Run the current query, a selected range, or a full SQL file. Multi-statement selections execute as one batch so temp tables and transactions share a session. |
+| Query consoles | Open persistent SQL consoles per connection. New console files are stored in VS Code extension global storage under `query-consoles`, outside the visible workspace. |
+| SQL execution | Run or cancel the current query, a selected range, or a full SQL file. Multi-statement selections execute as one batch so temp tables and transactions share a session. |
 | Results | Inspect query results in a VS Code panel with tabs, row limits, paging controls, copy/export actions, and execution status. |
 | Autocomplete | Use cached schema metadata for table, view, schema, alias, and column suggestions. |
 | Query sessions | Track active consoles and older query history so useful SQL can be found and reopened later. |
@@ -156,9 +156,9 @@ DATABASE_INTEGRATION_URL=postgres://postgres:postgres@localhost:5432/postgres np
 
 ## Troubleshooting
 
-### No Workspace Is Open
+### Query Console File Location
 
-If no VS Code workspace is open, query console files are stored in VS Code extension storage instead of `.vscode-data-grip`. This is expected. SQL autocomplete still works after schema metadata warms.
+Query console files are stored in VS Code extension global storage under `query-consoles`, not in the opened project. Existing consoles created by older versions under `.vscode-data-grip` can still be reopened from their saved records.
 
 ### Autocomplete Only Shows SQL Keywords
 

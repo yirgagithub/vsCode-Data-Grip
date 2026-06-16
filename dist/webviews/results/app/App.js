@@ -75,18 +75,23 @@ function App() {
     const canChart = !isPlanTab && !!resultSet?.rows.length && (resultSet.fields.length >= 2);
     return ((0, jsx_runtime_1.jsxs)("main", { className: `app ${active.resultSets.length > 1 ? 'with-resultset-tabs' : ''}`, children: [(0, jsx_runtime_1.jsx)(ResultsTabs_1.ResultsTabs, { tabs: tabs, activeTabId: active.id }), (0, jsx_runtime_1.jsx)(ResultToolbar_1.ResultToolbar, { tab: active, resultSet: resultSet, resultSetIndex: activeResultSetIndex, viewMode: viewMode, canChart: canChart, isPlanTab: isPlanTab, columnFiltersVisible: columnFiltersVisible, onSetViewMode: (mode) => setViewMode(active.id, mode), onToggleColumnFilters: () => setColumnFiltersVisible((visible) => !visible) }), active.resultSets.length > 1 && ((0, jsx_runtime_1.jsx)("div", { className: "resultset-tabs", children: active.resultSets.map((set, index) => ((0, jsx_runtime_1.jsxs)("button", { className: index === activeResultSetIndex ? 'active' : '', onClick: () => setActiveResultSetIndex(index), title: `${set.command ?? 'Result'} - ${set.rowCount} rows`, children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "table", className: "resultset-icon" }), (0, jsx_runtime_1.jsx)("span", { children: set.command ?? 'Result' }), (0, jsx_runtime_1.jsxs)("span", { className: "resultset-count", children: [set.rowCount.toLocaleString(), " rows"] })] }, set.id))) })), isRunning
                 ? (0, jsx_runtime_1.jsx)(RunningPanel, {})
-                : active.executionStatus === 'failed'
-                    ? (0, jsx_runtime_1.jsx)(MessagesPanel_1.MessagesPanel, { tab: active })
-                    : active.plan
-                        ? (0, jsx_runtime_1.jsx)(PlanView_1.PlanView, { plan: active.plan })
-                        : viewMode === 'chart'
-                            ? ((0, jsx_runtime_1.jsx)(react_1.Suspense, { fallback: (0, jsx_runtime_1.jsx)(ChartLoadingPanel, {}), children: (0, jsx_runtime_1.jsx)(ChartView, { resultSet: resultSet }) }))
-                            : (0, jsx_runtime_1.jsx)(ResultGrid_1.ResultGrid, { tab: active, resultSet: resultSet, columnFiltersVisible: columnFiltersVisible }), (0, jsx_runtime_1.jsx)(StatusBar_1.StatusBar, { tab: active, resultSet: resultSet })] }));
+                : active.executionStatus === 'cancelled'
+                    ? (0, jsx_runtime_1.jsx)(CancelledPanel, {})
+                    : active.executionStatus === 'failed'
+                        ? (0, jsx_runtime_1.jsx)(MessagesPanel_1.MessagesPanel, { tab: active })
+                        : active.plan
+                            ? (0, jsx_runtime_1.jsx)(PlanView_1.PlanView, { plan: active.plan })
+                            : viewMode === 'chart'
+                                ? ((0, jsx_runtime_1.jsx)(react_1.Suspense, { fallback: (0, jsx_runtime_1.jsx)(ChartLoadingPanel, {}), children: (0, jsx_runtime_1.jsx)(ChartView, { resultSet: resultSet }) }))
+                                : (0, jsx_runtime_1.jsx)(ResultGrid_1.ResultGrid, { tab: active, resultSet: resultSet, columnFiltersVisible: columnFiltersVisible }), (0, jsx_runtime_1.jsx)(StatusBar_1.StatusBar, { tab: active, resultSet: resultSet })] }));
 }
 function ChartLoadingPanel() {
     return ((0, jsx_runtime_1.jsxs)("section", { className: "grid-empty result-loading", "aria-live": "polite", children: [(0, jsx_runtime_1.jsx)("span", { className: "loading-spinner", "aria-hidden": "true" }), (0, jsx_runtime_1.jsx)("span", { children: "Loading chart..." })] }));
 }
 function RunningPanel() {
     return ((0, jsx_runtime_1.jsxs)("section", { className: "grid-empty result-loading", "aria-live": "polite", children: [(0, jsx_runtime_1.jsx)("span", { className: "loading-spinner", "aria-hidden": "true" }), (0, jsx_runtime_1.jsx)("span", { children: "Running query..." })] }));
+}
+function CancelledPanel() {
+    return ((0, jsx_runtime_1.jsxs)("section", { className: "grid-empty result-loading", "aria-live": "polite", children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "debug-stop", className: "empty-icon" }), (0, jsx_runtime_1.jsx)("span", { children: "Query cancelled." })] }));
 }
 //# sourceMappingURL=App.js.map
