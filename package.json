@@ -34,6 +34,7 @@
     "onCommand:database.executeCurrentQuery",
     "onCommand:database.executeSelection",
     "onCommand:database.executeFile",
+    "onCommand:database.cancelCurrentQuery",
     "onCommand:database.executeStatementRange",
     "onCommand:database.showResults",
     "onCommand:database.findPastQuery",
@@ -100,6 +101,13 @@
           "dark": "media/run-file-dark.svg",
           "light": "media/run-file-light.svg"
         }
+      },
+      {
+        "command": "database.cancelCurrentQuery",
+        "title": "Cancel Query",
+        "category": "Database",
+        "icon": "$(debug-stop)",
+        "enablement": "database.queryRunning"
       },
       {
         "command": "database.openSqlConsole",
@@ -736,6 +744,11 @@
           "group": "navigation@1"
         },
         {
+          "command": "database.cancelCurrentQuery",
+          "when": "editorLangId == sql && database.queryRunning",
+          "group": "navigation@2"
+        },
+        {
           "command": "database.findPastQuery",
           "when": "editorLangId == sql",
           "group": "history@1"
@@ -776,6 +789,11 @@
           "command": "database.executeFile",
           "when": "editorLangId == sql",
           "group": "navigation@1"
+        },
+        {
+          "command": "database.cancelCurrentQuery",
+          "when": "editorLangId == sql && database.queryRunning",
+          "group": "navigation@2"
         }
       ],
       "editor/title/context": [
@@ -788,6 +806,11 @@
           "command": "database.executeFile",
           "when": "editorLangId == sql",
           "group": "navigation@1"
+        },
+        {
+          "command": "database.cancelCurrentQuery",
+          "when": "editorLangId == sql && database.queryRunning",
+          "group": "navigation@2"
         },
         {
           "command": "database.findPastQuery",

@@ -25,6 +25,7 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
     private readonly revealSource?: (tab: QueryResultTab) => Promise<void>,
     private readonly onTabsChanged?: (tabs: QueryResultTab[]) => void,
     private readonly runActiveEditorSelection?: (maxRows?: number) => Promise<boolean>,
+    private readonly onCancelRequest?: (tabId: string) => Promise<void>,
     private readonly onCompareRequest?: (tab: QueryResultTab, resultSetIndex: number) => Promise<void>
   ) {
     this.tabs = this.sessionStore.getTabs();
@@ -167,6 +168,10 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
         });
         await this.addTab({ ...next, id: tab.id, pinned: tab.pinned, customTitle: tab.customTitle }, { replaceTabId: tab.id });
       }
+      return;
+    }
+    if (message.type === 'cancelTab') {
+      await this.onCancelRequest?.(message.tabId);
       return;
     }
     if (message.type === 'setTransactionMode') {

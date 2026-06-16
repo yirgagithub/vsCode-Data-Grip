@@ -43,13 +43,14 @@ class ResultsPanelProvider {
     revealSource;
     onTabsChanged;
     runActiveEditorSelection;
+    onCancelRequest;
     onCompareRequest;
     static viewType = 'sqlResults';
     view;
     tabs;
     activeTabId;
     activeConnectionId;
-    constructor(context, connectionManager, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection, onCompareRequest) {
+    constructor(context, connectionManager, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection, onCancelRequest, onCompareRequest) {
         this.context = context;
         this.connectionManager = connectionManager;
         this.sessionStore = sessionStore;
@@ -57,6 +58,7 @@ class ResultsPanelProvider {
         this.revealSource = revealSource;
         this.onTabsChanged = onTabsChanged;
         this.runActiveEditorSelection = runActiveEditorSelection;
+        this.onCancelRequest = onCancelRequest;
         this.onCompareRequest = onCompareRequest;
         this.tabs = this.sessionStore.getTabs();
         this.activeTabId = this.tabs[0]?.id;
@@ -192,6 +194,10 @@ class ResultsPanelProvider {
                 });
                 await this.addTab({ ...next, id: tab.id, pinned: tab.pinned, customTitle: tab.customTitle }, { replaceTabId: tab.id });
             }
+            return;
+        }
+        if (message.type === 'cancelTab') {
+            await this.onCancelRequest?.(message.tabId);
             return;
         }
         if (message.type === 'setTransactionMode') {

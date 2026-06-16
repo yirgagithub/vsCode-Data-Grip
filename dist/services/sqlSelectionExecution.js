@@ -1,9 +1,13 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.shouldRunSelectionForStatement = shouldRunSelectionForStatement;
-const sqlSplitter_1 = require("../database/sqlSplitter");
 function shouldRunSelectionForStatement(selected, statementRange) {
-    return selected.some((selection) => rangesOverlap(selection.range, statementRange) && (0, sqlSplitter_1.splitSqlStatements)(selection.sql).length > 1);
+    return selected.some((selection) => rangesOverlap(selection.range, statementRange) && looksExecutableSelection(selection.sql));
+}
+function looksExecutableSelection(sql) {
+    const text = sql.trim();
+    return /^(select|with|begin|commit|rollback|lock|create|alter|drop|insert|update|delete|merge|analyze|explain|grant|revoke|truncate|call)\b/i.test(text) ||
+        /;\s*\S/.test(text);
 }
 function rangesOverlap(a, b) {
     return comparePositions(a.start, b.end) <= 0 && comparePositions(a.end, b.start) >= 0;
