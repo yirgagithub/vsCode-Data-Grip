@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.7
+
+- Expanded the README into a user-focused guide for query consoles, SQL parameters, query sessions, history search, results, database explorer actions, AI assistance, and safety behavior.
+- Replaced company-specific screenshot guidance with generic SQL examples and neutral connection names.
+- Removed development command and test instructions from the public usage documentation.
+
 ## 0.0.5
 
 - Lazy-load database and export runtime dependencies so packaged installs do not fail when optional drivers are not loaded yet.
