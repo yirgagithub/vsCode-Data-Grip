@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.RedshiftDriver = void 0;
 const postgresDriver_1 = require("./postgresDriver");
 const queryPlanService_1 = require("../../services/queryPlanService");
+const identifiers_1 = require("../../utils/identifiers");
 class RedshiftDriver extends postgresDriver_1.PostgresDriver {
     id = 'redshift';
     displayName = 'Amazon Redshift';
@@ -111,7 +112,22 @@ class RedshiftDriver extends postgresDriver_1.PostgresDriver {
        from information_schema.columns
        where table_schema = $1 and table_name = $2
        order by ordinal_position`, [schema, table]);
-        return result.rows;
+        return result.rows.map((row) => {
+            const name = String(row.name ?? row.column_name);
+            const dataType = optionalString(row.dataType ?? row.datatype ?? row.data_type);
+            if (!dataType) {
+                throw new Error(`Redshift column metadata for ${(0, identifiers_1.qualifiedName)(schema, table)}.${name} did not include a data type.`);
+            }
+            return {
+                schema: String(row.schema ?? schema),
+                table: String(row.table ?? table),
+                name,
+                ordinal: Number(row.ordinal ?? row.ordinal_position),
+                dataType,
+                nullable: booleanFromDb(row.nullable),
+                defaultValue: optionalString(row.defaultValue ?? row.defaultvalue ?? row.column_default)
+            };
+        });
     }
     async getTableStats(connectionId, schema, table) {
         const pool = this.requirePool(connectionId);
@@ -188,5 +204,15 @@ function optionalString(value) {
     }
     const next = String(value).trim();
     return next || undefined;
+}
+function booleanFromDb(value) {
+    if (typeof value === 'boolean') {
+        return value;
+    }
+    if (typeof value === 'number') {
+        return value !== 0;
+    }
+    const normalized = optionalString(value)?.toLowerCase();
+    return normalized === 'true' || normalized === 't' || normalized === 'yes' || normalized === 'y' || normalized === '1';
 }
 //# sourceMappingURL=redshiftDriver.js.map

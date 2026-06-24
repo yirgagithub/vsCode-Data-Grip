@@ -1,0 +1,1 @@
+export { ConnectionPool } from 'mssql';

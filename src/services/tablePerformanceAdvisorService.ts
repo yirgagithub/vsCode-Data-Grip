@@ -9,8 +9,8 @@ import {
   TableWorkloadColumnRole,
   TableWorkloadSummary
 } from '../types';
-import { qualifiedName, quoteIdentifier } from '../utils/identifiers';
 import { QueryMemoryService } from './queryMemoryService';
+import { qualifiedSqlName, quoteSqlIdentifier } from './sqlDialect';
 
 export interface TablePerformanceAdvisorAi {
   adviseTablePerformance(request: TablePerformanceAdviceRequest): Promise<TablePerformanceAdvice>;
@@ -68,7 +68,11 @@ export class TablePerformanceAdvisorService {
 
 export function buildTablePerformancePrepassFlags(stats: TableStatsInfo, workload: TableWorkloadSummary): TablePerformancePrepassFlag[] {
   const flags: TablePerformancePrepassFlag[] = [];
-  const table = qualifiedName(stats.schema, stats.table);
+  const databaseType = stats.databaseType;
+  if (databaseType === 'redis') {
+    return flags;
+  }
+  const table = qualifiedSqlName(databaseType, stats.schema, stats.table);
   const redshift = stats.redshift;
   if (redshift) {
     const joinColumn = topWorkloadColumn(workload, 'join');
@@ -80,7 +84,7 @@ export function buildTablePerformancePrepassFlags(stats: TableStatsInfo, workloa
         message: 'Distribution skew is high for this Redshift table.',
         evidence: `skew_rows=${redshift.skewRows}`,
         recommendationKind: 'distkey',
-        ddl: joinColumn ? `alter table ${table} alter distkey ${quoteIdentifier(joinColumn)};` : undefined
+        ddl: joinColumn ? `alter table ${table} alter distkey ${quoteSqlIdentifier(databaseType, joinColumn)};` : undefined
       });
     }
     if ((redshift.unsortedPct ?? 0) > 20) {
@@ -110,9 +114,13 @@ export function buildTablePerformancePrepassFlags(stats: TableStatsInfo, workloa
         message: 'The workload repeatedly filters or orders this table without a leading sort key.',
         evidence: workloadEvidence(workload, filterColumn),
         recommendationKind: 'sortkey',
-        ddl: `alter table ${table} alter sortkey (${quoteIdentifier(filterColumn)});`
+        ddl: `alter table ${table} alter sortkey (${quoteSqlIdentifier(databaseType, filterColumn)});`
       });
     }
+    return flags;
+  }
+
+  if (databaseType !== 'postgres') {
     return flags;
   }
 
@@ -128,7 +136,7 @@ export function buildTablePerformancePrepassFlags(stats: TableStatsInfo, workloa
       evidence: `seq_scan=${seqScan}, idx_scan=${idxScan}, rows=${rowCount}`,
       recommendationKind: 'index',
       ddl: filterColumn
-        ? `create index concurrently if not exists ${quoteIdentifier(`${stats.table}_${filterColumn}_idx`)} on ${table} (${quoteIdentifier(filterColumn)});`
+        ? `create index concurrently if not exists ${quoteSqlIdentifier(databaseType, `${stats.table}_${filterColumn}_idx`)} on ${table} (${quoteSqlIdentifier(databaseType, filterColumn)});`
         : undefined
     });
   }

@@ -4,6 +4,7 @@ exports.SqlSafetyClassifier = void 0;
 const sqlSplitter_1 = require("../database/sqlSplitter");
 const DESTRUCTIVE_RE = /\b(drop|truncate|alter)\b/i;
 const WRITE_RE = /\b(insert\s+into|update|delete\s+from|create\s+(?:unique\s+)?index|create\s+table|create\s+schema)\b/i;
+const TABLE_NAME_RE = '((?:"[^"]+"|`[^`]+`|\\[[^\\]]+\\]|\\w+)(?:\\.(?:"[^"]+"|`[^`]+`|\\[[^\\]]+\\]|\\w+))?)';
 class SqlSafetyClassifier {
     classify(sql, options = {}) {
         const statements = (0, sqlSplitter_1.splitSqlStatements)(sql).map((statement) => statement.sql);
@@ -60,24 +61,24 @@ class SqlSafetyClassifier {
             previewAvailable: previewAvailable || risk === 'destructive' || risk === 'production'
         };
     }
-    previewSql(sql) {
+    previewSql(sql, databaseType = 'postgres') {
         const first = (0, sqlSplitter_1.splitSqlStatements)(sql)[0]?.sql ?? sql.trim();
         if (!first) {
             return undefined;
         }
         if (/^\s*(select|with)\b/i.test(first)) {
-            return `explain ${first}`;
+            return explainSql(databaseType, first);
         }
-        const deleteMatch = first.match(/\bdelete\s+from\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)([\s\S]*)/i);
+        const deleteMatch = first.match(new RegExp(`\\bdelete\\s+from\\s+${TABLE_NAME_RE}([\\s\\S]*)`, 'i'));
         if (deleteMatch) {
             const where = deleteMatch[2].match(/\bwhere\b[\s\S]*/i)?.[0] ?? '';
-            return `select *\nfrom ${deleteMatch[1]}\n${where}\nlimit 100;`.trim();
+            return limitedSelect(databaseType, deleteMatch[1], where);
         }
-        const updateMatch = first.match(/\bupdate\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)[\s\S]*?\bwhere\b([\s\S]*)/i);
+        const updateMatch = first.match(new RegExp(`\\bupdate\\s+${TABLE_NAME_RE}[\\s\\S]*?\\bwhere\\b([\\s\\S]*)`, 'i'));
         if (updateMatch) {
-            return `select *\nfrom ${updateMatch[1]}\nwhere ${updateMatch[2].trim()}\nlimit 100;`;
+            return limitedSelect(databaseType, updateMatch[1], `where ${updateMatch[2].trim()}`);
         }
-        return `explain ${first}`;
+        return explainSql(databaseType, first);
     }
     maxRisk(current, next) {
         const order = ['safe', 'write', 'destructive', 'production'];
@@ -85,4 +86,30 @@ class SqlSafetyClassifier {
     }
 }
 exports.SqlSafetyClassifier = SqlSafetyClassifier;
+function limitedSelect(databaseType, tableName, whereClause) {
+    const where = whereClause.trim();
+    if (databaseType === 'redis') {
+        return '-- Safety preview is not available for Redis commands.';
+    }
+    if (databaseType === 'sqlserver') {
+        return `select top (100) *\nfrom ${tableName}${where ? `\n${where}` : ''};`;
+    }
+    if (databaseType === 'oracle') {
+        return `select *\nfrom ${tableName}${where ? `\n${where}` : ''}\nfetch first 100 rows only;`;
+    }
+    return `select *\nfrom ${tableName}${where ? `\n${where}` : ''}\nlimit 100;`;
+}
+function explainSql(databaseType, sql) {
+    const statement = sql.trim().replace(/;+\s*$/, '');
+    if (databaseType === 'redis') {
+        return '-- Safety preview is not available for Redis commands.';
+    }
+    if (databaseType === 'sqlserver') {
+        return `set showplan_text on;\n${statement};\nset showplan_text off;`;
+    }
+    if (databaseType === 'oracle') {
+        return `explain plan for\n${statement};\nselect * from table(dbms_xplan.display);`;
+    }
+    return `explain ${statement};`;
+}
 //# sourceMappingURL=sqlSafetyClassifier.js.map

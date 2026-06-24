@@ -1,6 +1,7 @@
 src/**
 tests/**
 docs/**
+scripts/**
 .vscode-data-grip/**
 **/*.vsix
 .vscode-test/**
