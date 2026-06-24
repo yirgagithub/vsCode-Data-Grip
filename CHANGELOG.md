@@ -2,6 +2,7 @@
 
 ## 0.0.8
 
+- Added support for SQL Server, Oracle, Redis, Snowflake, and SQLite connections alongside PostgreSQL, Redshift, and MySQL, with engine-aware SQL dialect handling.
 - Added a table import preview that shows source data, inferred column mappings, and target column types before importing.
 - Let users adjust CSV/JSON-to-table column mappings manually before the import runs.
 - Changed table import to execute directly against the selected database connection instead of opening generated INSERT SQL in a query console.
