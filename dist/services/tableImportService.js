@@ -1,19 +1,57 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildTableImportPreview = buildTableImportPreview;
-const identifiers_1 = require("../utils/identifiers");
-function buildTableImportPreview(schema, table, tableColumns, fileName, text) {
+exports.buildTableImportData = buildTableImportData;
+exports.buildTableImportStatements = buildTableImportStatements;
+function buildTableImportPreview(_databaseType, _schema, _table, tableColumns, fileName, text) {
     const kind = fileName.toLowerCase().endsWith('.json') ? 'json' : 'csv';
     const source = kind === 'json' ? parseJsonSource(text) : parseCsvSource(text);
-    const targetColumns = tableColumns.map((column) => column.name);
-    const mapping = inferMapping(source.columns, targetColumns);
-    if (!mapping.length) {
+    if (!source.rows.length) {
+        throw new Error('No import rows were found.');
+    }
+    const mapping = inferMapping(source.columns, tableColumns);
+    if (!mapping.some((item) => item.source)) {
         throw new Error('Could not map any source fields to table columns.');
     }
-    const mappedTargets = unique(mapping.map((item) => item.target));
+    return {
+        kind,
+        fileName,
+        rowCount: source.rows.length,
+        sourceColumns: source.columns,
+        targetColumns: tableColumns.map((column) => ({
+            name: column.name,
+            dataType: column.dataType,
+            nullable: column.nullable,
+            defaultValue: column.defaultValue
+        })),
+        mapping,
+        sampleRows: source.rows.slice(0, 50),
+        warnings: [
+            ...source.warnings,
+            ...mappingWarnings(source.columns, tableColumns, mapping)
+        ]
+    };
+}
+function buildTableImportData(fileName, text, mapping) {
+    const kind = fileName.toLowerCase().endsWith('.json') ? 'json' : 'csv';
+    const source = kind === 'json' ? parseJsonSource(text) : parseCsvSource(text);
+    const activeMapping = mapping.filter((item) => Boolean(item.source?.trim()) && Boolean(item.target.trim()));
+    if (!activeMapping.length) {
+        throw new Error('Map at least one source column before importing.');
+    }
+    const sourceColumns = new Set(source.columns);
+    for (const item of activeMapping) {
+        if (!sourceColumns.has(item.source)) {
+            throw new Error(`Source column "${item.source}" was not found in the import file.`);
+        }
+    }
+    const targetColumns = unique(activeMapping.map((item) => item.target));
+    if (targetColumns.length !== activeMapping.length) {
+        throw new Error('Each target column can only be mapped once.');
+    }
     const rows = source.rows.map((row) => {
         const next = {};
-        for (const item of mapping) {
+        for (const item of activeMapping) {
             next[item.target] = row[item.source];
         }
         return next;
@@ -21,19 +59,17 @@ function buildTableImportPreview(schema, table, tableColumns, fileName, text) {
     if (!rows.length) {
         throw new Error('No import rows were found.');
     }
-    const batches = chunk(rows, 100).map((batch) => buildInsertBatch(schema, table, mappedTargets, batch));
-    const warnings = [
-        ...source.warnings,
-        ...mappingWarnings(source.columns, targetColumns, mapping)
-    ];
-    return {
-        kind,
-        rowCount: rows.length,
-        columns: source.columns,
-        mapping,
-        warnings,
-        sql: batches.join('\n')
-    };
+    return { columns: targetColumns, rows };
+}
+function buildTableImportStatements(databaseType, schema, table, data, batchSize = 100) {
+    if (!data.columns.length) {
+        throw new Error('Map at least one source column before importing.');
+    }
+    if (!data.rows.length) {
+        throw new Error('No import rows were found.');
+    }
+    const safeBatchSize = Number.isFinite(batchSize) && batchSize > 0 ? Math.floor(batchSize) : 100;
+    return chunk(data.rows, safeBatchSize).map((batch) => buildInsertBatch(databaseType, schema, table, data.columns, batch));
 }
 function parseJsonSource(text) {
     const parsed = JSON.parse(text);
@@ -124,56 +160,64 @@ function parseCsv(text) {
     return rows.filter((row) => row.some((value) => value.length > 0));
 }
 function inferMapping(sourceColumns, targetColumns) {
-    const targetLookup = new Map(targetColumns.map((column) => [column.toLowerCase(), column]));
-    const usedTargets = new Set();
+    const sourceLookup = new Map(sourceColumns.map((column) => [normalizeName(column), column]));
+    const usedSources = new Set();
     const mapping = [];
-    for (const source of sourceColumns) {
-        const exact = targetLookup.get(source.toLowerCase());
-        if (exact && !usedTargets.has(exact)) {
-            mapping.push({ source, target: exact });
-            usedTargets.add(exact);
+    for (const target of targetColumns) {
+        const exact = sourceLookup.get(normalizeName(target.name));
+        if (exact && !usedSources.has(exact)) {
+            mapping.push({ target: target.name, targetType: target.dataType, source: exact, auto: true });
+            usedSources.add(exact);
+            continue;
         }
+        mapping.push({ target: target.name, targetType: target.dataType, source: null, auto: true });
     }
-    if (mapping.length && mapping.length < sourceColumns.length) {
-        for (const source of sourceColumns) {
-            if (mapping.some((item) => item.source === source)) {
-                continue;
+    if (usedSources.size === 0) {
+        for (const [index, item] of mapping.entries()) {
+            const source = sourceColumns[index];
+            if (source) {
+                item.source = source;
+                usedSources.add(source);
             }
-            const fallback = targetColumns.find((column) => !usedTargets.has(column));
-            if (!fallback) {
-                break;
-            }
-            mapping.push({ source, target: fallback });
-            usedTargets.add(fallback);
         }
-    }
-    else if (!mapping.length) {
-        sourceColumns.forEach((source, index) => {
-            const target = targetColumns[index];
-            if (target) {
-                mapping.push({ source, target });
-                usedTargets.add(target);
-            }
-        });
     }
     return mapping;
 }
 function mappingWarnings(sourceColumns, targetColumns, mapping) {
-    const unmatchedSource = sourceColumns.filter((source) => !mapping.some((item) => item.source === source));
-    const unusedTargets = targetColumns.filter((target) => !mapping.some((item) => item.target === target));
+    const activeMapping = mapping.filter((item) => item.source);
+    const unmatchedSource = sourceColumns.filter((source) => !activeMapping.some((item) => item.source === source));
+    const unmappedRequiredTargets = targetColumns
+        .filter((target) => !target.nullable && !target.defaultValue && !activeMapping.some((item) => item.target === target.name))
+        .map((target) => target.name);
+    const unusedTargets = targetColumns
+        .filter((target) => !activeMapping.some((item) => item.target === target.name))
+        .map((target) => target.name)
+        .filter((target) => !unmappedRequiredTargets.includes(target));
     const warnings = [];
     if (unmatchedSource.length) {
         warnings.push(`Skipped source columns: ${unmatchedSource.join(', ')}.`);
+    }
+    if (unmappedRequiredTargets.length) {
+        warnings.push(`Required target columns left unmapped: ${unmappedRequiredTargets.join(', ')}.`);
     }
     if (unusedTargets.length) {
         warnings.push(`Target columns left unmapped: ${unusedTargets.join(', ')}.`);
     }
     return warnings;
 }
-function buildInsertBatch(schema, table, columns, rows) {
-    return `insert into ${(0, identifiers_1.qualifiedName)(schema, table)} (${columns.map(identifiers_1.quoteIdentifier).join(', ')})\nvalues\n${rows.map((row) => `  (${columns.map((column) => formatLiteral(row[column])).join(', ')})`).join(',\n')};`;
+function buildInsertBatch(databaseType, schema, table, columns, rows) {
+    return `insert into ${qualifiedSqlName(databaseType, schema, table)} (${columns.map((column) => quoteSqlIdentifier(databaseType, column)).join(', ')})\nvalues\n${rows.map((row) => `  (${columns.map((column) => sqlLiteral(databaseType, row[column])).join(', ')})`).join(',\n')};`;
 }
-function formatLiteral(value) {
+function qualifiedSqlName(databaseType, schema, table) {
+    return `${quoteSqlIdentifier(databaseType, schema)}.${quoteSqlIdentifier(databaseType, table)}`;
+}
+function quoteSqlIdentifier(databaseType, identifier) {
+    if (databaseType === 'mysql') {
+        return `\`${identifier.replace(/`/g, '``')}\``;
+    }
+    return `"${identifier.replace(/"/g, '""')}"`;
+}
+function sqlLiteral(_databaseType, value) {
     if (value === null || value === undefined) {
         return 'null';
     }
@@ -190,6 +234,9 @@ function formatLiteral(value) {
         return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
     }
     return `'${String(value).replace(/'/g, "''")}'`;
+}
+function normalizeName(value) {
+    return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 function parseScalar(text) {
     const trimmed = text.trim();
