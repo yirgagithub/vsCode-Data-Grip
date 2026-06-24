@@ -35,13 +35,14 @@ import { compareSchemas, formatSchemaDiffMarkdown } from './services/schemaDiffS
 import { querySnippets } from './services/querySnippetService';
 import { formatSqlText, sqlFormatterDialect } from './services/sqlFormattingService';
 import { buildTableCopyPreview } from './services/tableCopyService';
-import { buildTableImportPreview } from './services/tableImportService';
+import { buildTableImportData, buildTableImportPreview, buildTableImportStatements } from './services/tableImportService';
 import { SessionMonitorPanel } from './webviews/session/SessionMonitorPanel';
 import { ErDiagramPanel } from './webviews/erDiagram/ErDiagramPanel';
 import { ConnectionEditorPanel } from './webviews/connection/ConnectionEditorPanel';
 import { QueryMapProvider } from './webviews/queryMap/QueryMapProvider';
 import { ResultsPanelProvider } from './webviews/results/ResultsPanelProvider';
 import { TableDataPanel } from './webviews/table/TableDataPanel';
+import { TableImportPanel } from './webviews/table/TableImportPanel';
 import { Logger } from './utils/logger';
 import { qualifiedName, quoteIdentifier } from './utils/identifiers';
 import { createId } from './utils/id';
@@ -1083,30 +1084,53 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!(node instanceof TableNode)) {
       return;
     }
-    const files = await vscode.window.showOpenDialog({
-      canSelectMany: false,
-      openLabel: 'Import data',
-      filters: {
-        'Data files': ['csv', 'json']
+    try {
+      const files = await vscode.window.showOpenDialog({
+        canSelectMany: false,
+        openLabel: 'Import data',
+        filters: {
+          'Data files': ['csv', 'json']
+        }
+      });
+      const file = files?.[0];
+      if (!file) {
+        return;
       }
-    });
-    const file = files?.[0];
-    if (!file) {
-      return;
+      const fileBytes = await vscode.workspace.fs.readFile(file);
+      const fileText = Buffer.from(fileBytes).toString('utf8');
+      if (!connectionManager.isConnected(node.connection.id)) {
+        await connectionManager.connect(node.connection.id);
+      }
+      const columns = await schemaContext.getColumns(node.connection, node.table.schema, node.table.name);
+      const preview = buildTableImportPreview(node.connection.type, node.table.schema, node.table.name, columns, file.path, fileText);
+      await TableImportPanel.open(context, {
+        connectionName: node.connection.name,
+        databaseType: node.connection.type,
+        schema: node.table.schema,
+        table: node.table.name,
+        filePath: file.fsPath,
+        preview
+      }, async (mapping) => {
+        const data = buildTableImportData(file.path, fileText, mapping);
+        const statements = buildTableImportStatements(node.connection.type, node.table.schema, node.table.name, data);
+        await vscode.window.withProgress({
+          location: vscode.ProgressLocation.Notification,
+          title: `Importing ${data.rows.length.toLocaleString()} rows into ${qualifiedName(node.table.schema, node.table.name)}`,
+          cancellable: false
+        }, async (progress) => {
+          const driver = connectionManager.getDriver(node.connection.type);
+          for (const [index, sql] of statements.entries()) {
+            progress.report({ message: `Batch ${index + 1} of ${statements.length}` });
+            await driver.executeQuery({ connectionId: node.connection.id, sql });
+          }
+        });
+        void vscode.window.showInformationMessage(`Imported ${data.rows.length.toLocaleString()} rows into ${qualifiedName(node.table.schema, node.table.name)}.`);
+        tree.refresh(node);
+        return { rowCount: data.rows.length };
+      });
+    } catch (error) {
+      void vscode.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
-    const fileBytes = await vscode.workspace.fs.readFile(file);
-    const fileText = Buffer.from(fileBytes).toString('utf8');
-    const columns = await schemaContext.getColumns(node.connection, node.table.schema, node.table.name);
-    const preview = buildTableImportPreview(node.table.schema, node.table.name, columns, file.path, fileText);
-    const summary = [
-      `-- Import source: ${file.fsPath}`,
-      `-- Source columns: ${preview.columns.join(', ')}`,
-      `-- Row count: ${preview.rowCount}`,
-      ...preview.mapping.map((item) => `-- ${item.source} -> ${item.target}`),
-      ...preview.warnings.map((warning) => `-- ${warning}`),
-      ''
-    ].join('\n');
-    await openSqlScript(`Import ${node.table.name}`, `${summary}${preview.sql}\n`, node.connection);
   });
 
   register('database.copyTableToConnection', async (node?: unknown) => {

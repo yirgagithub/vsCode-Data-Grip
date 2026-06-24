@@ -1,35 +1,100 @@
-import { ColumnInfo } from '../types';
-import { qualifiedName, quoteIdentifier } from '../utils/identifiers';
+import { ColumnInfo, DatabaseType } from '../types';
 
 export type TableImportSourceKind = 'csv' | 'json';
 
+export interface TableImportColumnMapping {
+  target: string;
+  targetType?: string;
+  source: string | null;
+  auto: boolean;
+}
+
 export interface TableImportPreview {
   kind: TableImportSourceKind;
+  fileName: string;
   rowCount: number;
-  columns: string[];
-  mapping: Array<{ source: string; target: string }>;
+  sourceColumns: string[];
+  targetColumns: Array<{
+    name: string;
+    dataType?: string;
+    nullable?: boolean;
+    defaultValue?: string;
+  }>;
+  mapping: TableImportColumnMapping[];
+  sampleRows: Array<Record<string, unknown>>;
   warnings: string[];
-  sql: string;
+}
+
+export interface TableImportData {
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
 }
 
 export function buildTableImportPreview(
-  schema: string,
-  table: string,
+  _databaseType: DatabaseType,
+  _schema: string,
+  _table: string,
   tableColumns: ColumnInfo[],
   fileName: string,
   text: string
 ): TableImportPreview {
   const kind = fileName.toLowerCase().endsWith('.json') ? 'json' : 'csv';
   const source = kind === 'json' ? parseJsonSource(text) : parseCsvSource(text);
-  const targetColumns = tableColumns.map((column) => column.name);
-  const mapping = inferMapping(source.columns, targetColumns);
-  if (!mapping.length) {
+  if (!source.rows.length) {
+    throw new Error('No import rows were found.');
+  }
+  const mapping = inferMapping(source.columns, tableColumns);
+  if (!mapping.some((item) => item.source)) {
     throw new Error('Could not map any source fields to table columns.');
   }
-  const mappedTargets = unique(mapping.map((item) => item.target));
+
+  return {
+    kind,
+    fileName,
+    rowCount: source.rows.length,
+    sourceColumns: source.columns,
+    targetColumns: tableColumns.map((column) => ({
+      name: column.name,
+      dataType: column.dataType,
+      nullable: column.nullable,
+      defaultValue: column.defaultValue
+    })),
+    mapping,
+    sampleRows: source.rows.slice(0, 50),
+    warnings: [
+      ...source.warnings,
+      ...mappingWarnings(source.columns, tableColumns, mapping)
+    ]
+  };
+}
+
+export function buildTableImportData(
+  fileName: string,
+  text: string,
+  mapping: Array<Pick<TableImportColumnMapping, 'source' | 'target'>>
+): TableImportData {
+  const kind = fileName.toLowerCase().endsWith('.json') ? 'json' : 'csv';
+  const source = kind === 'json' ? parseJsonSource(text) : parseCsvSource(text);
+  const activeMapping = mapping.filter((item): item is { source: string; target: string } => Boolean(item.source?.trim()) && Boolean(item.target.trim()));
+  if (!activeMapping.length) {
+    throw new Error('Map at least one source column before importing.');
+  }
+
+  const sourceColumns = new Set(source.columns);
+  for (const item of activeMapping) {
+    if (!sourceColumns.has(item.source)) {
+      throw new Error(`Source column "${item.source}" was not found in the import file.`);
+    }
+  }
+
+  const targetColumns = unique(activeMapping.map((item) => item.target));
+  if (targetColumns.length !== activeMapping.length) {
+    throw new Error('Each target column can only be mapped once.');
+  }
+
   const rows = source.rows.map((row) => {
     const next: Record<string, unknown> = {};
-    for (const item of mapping) {
+    for (const item of activeMapping) {
       next[item.target] = row[item.source];
     }
     return next;
@@ -38,20 +103,24 @@ export function buildTableImportPreview(
     throw new Error('No import rows were found.');
   }
 
-  const batches = chunk(rows, 100).map((batch) => buildInsertBatch(schema, table, mappedTargets, batch));
-  const warnings = [
-    ...source.warnings,
-    ...mappingWarnings(source.columns, targetColumns, mapping)
-  ];
+  return { columns: targetColumns, rows };
+}
 
-  return {
-    kind,
-    rowCount: rows.length,
-    columns: source.columns,
-    mapping,
-    warnings,
-    sql: batches.join('\n')
-  };
+export function buildTableImportStatements(
+  databaseType: DatabaseType,
+  schema: string,
+  table: string,
+  data: TableImportData,
+  batchSize = 100
+): string[] {
+  if (!data.columns.length) {
+    throw new Error('Map at least one source column before importing.');
+  }
+  if (!data.rows.length) {
+    throw new Error('No import rows were found.');
+  }
+  const safeBatchSize = Number.isFinite(batchSize) && batchSize > 0 ? Math.floor(batchSize) : 100;
+  return chunk(data.rows, safeBatchSize).map((batch) => buildInsertBatch(databaseType, schema, table, data.columns, batch));
 }
 
 interface ParsedSource {
@@ -152,50 +221,50 @@ function parseCsv(text: string): string[][] {
   return rows.filter((row) => row.some((value) => value.length > 0));
 }
 
-function inferMapping(sourceColumns: string[], targetColumns: string[]): Array<{ source: string; target: string }> {
-  const targetLookup = new Map(targetColumns.map((column) => [column.toLowerCase(), column]));
-  const usedTargets = new Set<string>();
-  const mapping: Array<{ source: string; target: string }> = [];
+function inferMapping(sourceColumns: string[], targetColumns: ColumnInfo[]): TableImportColumnMapping[] {
+  const sourceLookup = new Map(sourceColumns.map((column) => [normalizeName(column), column]));
+  const usedSources = new Set<string>();
+  const mapping: TableImportColumnMapping[] = [];
 
-  for (const source of sourceColumns) {
-    const exact = targetLookup.get(source.toLowerCase());
-    if (exact && !usedTargets.has(exact)) {
-      mapping.push({ source, target: exact });
-      usedTargets.add(exact);
+  for (const target of targetColumns) {
+    const exact = sourceLookup.get(normalizeName(target.name));
+    if (exact && !usedSources.has(exact)) {
+      mapping.push({ target: target.name, targetType: target.dataType, source: exact, auto: true });
+      usedSources.add(exact);
+      continue;
     }
+    mapping.push({ target: target.name, targetType: target.dataType, source: null, auto: true });
   }
 
-  if (mapping.length && mapping.length < sourceColumns.length) {
-    for (const source of sourceColumns) {
-      if (mapping.some((item) => item.source === source)) {
-        continue;
+  if (usedSources.size === 0) {
+    for (const [index, item] of mapping.entries()) {
+      const source = sourceColumns[index];
+      if (source) {
+        item.source = source;
+        usedSources.add(source);
       }
-      const fallback = targetColumns.find((column) => !usedTargets.has(column));
-      if (!fallback) {
-        break;
-      }
-      mapping.push({ source, target: fallback });
-      usedTargets.add(fallback);
     }
-  } else if (!mapping.length) {
-    sourceColumns.forEach((source, index) => {
-      const target = targetColumns[index];
-      if (target) {
-        mapping.push({ source, target });
-        usedTargets.add(target);
-      }
-    });
   }
 
   return mapping;
 }
 
-function mappingWarnings(sourceColumns: string[], targetColumns: string[], mapping: Array<{ source: string; target: string }>): string[] {
-  const unmatchedSource = sourceColumns.filter((source) => !mapping.some((item) => item.source === source));
-  const unusedTargets = targetColumns.filter((target) => !mapping.some((item) => item.target === target));
+function mappingWarnings(sourceColumns: string[], targetColumns: ColumnInfo[], mapping: TableImportColumnMapping[]): string[] {
+  const activeMapping = mapping.filter((item) => item.source);
+  const unmatchedSource = sourceColumns.filter((source) => !activeMapping.some((item) => item.source === source));
+  const unmappedRequiredTargets = targetColumns
+    .filter((target) => !target.nullable && !target.defaultValue && !activeMapping.some((item) => item.target === target.name))
+    .map((target) => target.name);
+  const unusedTargets = targetColumns
+    .filter((target) => !activeMapping.some((item) => item.target === target.name))
+    .map((target) => target.name)
+    .filter((target) => !unmappedRequiredTargets.includes(target));
   const warnings: string[] = [];
   if (unmatchedSource.length) {
     warnings.push(`Skipped source columns: ${unmatchedSource.join(', ')}.`);
+  }
+  if (unmappedRequiredTargets.length) {
+    warnings.push(`Required target columns left unmapped: ${unmappedRequiredTargets.join(', ')}.`);
   }
   if (unusedTargets.length) {
     warnings.push(`Target columns left unmapped: ${unusedTargets.join(', ')}.`);
@@ -203,11 +272,22 @@ function mappingWarnings(sourceColumns: string[], targetColumns: string[], mappi
   return warnings;
 }
 
-function buildInsertBatch(schema: string, table: string, columns: string[], rows: Array<Record<string, unknown>>): string {
-  return `insert into ${qualifiedName(schema, table)} (${columns.map(quoteIdentifier).join(', ')})\nvalues\n${rows.map((row) => `  (${columns.map((column) => formatLiteral(row[column])).join(', ')})`).join(',\n')};`;
+function buildInsertBatch(databaseType: DatabaseType, schema: string, table: string, columns: string[], rows: Array<Record<string, unknown>>): string {
+  return `insert into ${qualifiedSqlName(databaseType, schema, table)} (${columns.map((column) => quoteSqlIdentifier(databaseType, column)).join(', ')})\nvalues\n${rows.map((row) => `  (${columns.map((column) => sqlLiteral(databaseType, row[column])).join(', ')})`).join(',\n')};`;
 }
 
-function formatLiteral(value: unknown): string {
+function qualifiedSqlName(databaseType: DatabaseType, schema: string, table: string): string {
+  return `${quoteSqlIdentifier(databaseType, schema)}.${quoteSqlIdentifier(databaseType, table)}`;
+}
+
+function quoteSqlIdentifier(databaseType: DatabaseType, identifier: string): string {
+  if (databaseType === 'mysql') {
+    return `\`${identifier.replace(/`/g, '``')}\``;
+  }
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+
+function sqlLiteral(_databaseType: DatabaseType, value: unknown): string {
   if (value === null || value === undefined) {
     return 'null';
   }
@@ -224,6 +304,10 @@ function formatLiteral(value: unknown): string {
     return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
   }
   return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function normalizeName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 function parseScalar(text: string): unknown {
