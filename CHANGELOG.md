@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.8
+
+- Added a table import preview that shows source data, inferred column mappings, and target column types before importing.
+- Let users adjust CSV/JSON-to-table column mappings manually before the import runs.
+- Changed table import to execute directly against the selected database connection instead of opening generated INSERT SQL in a query console.
+
 ## 0.0.7
 
 - Expanded the README into a user-focused guide for query consoles, SQL parameters, query sessions, history search, results, database explorer actions, AI assistance, and safety behavior.
