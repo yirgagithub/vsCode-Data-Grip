@@ -123,18 +123,20 @@ export class ConnectionEditorPanel {
 
   private fromForm(form: FormConnection): ConnectionConfigWithPassword {
     const port = Number(form.port);
-    if (!form.name.trim() || !form.host.trim() || !form.database.trim() || !form.username.trim()) {
-      throw new Error('Name, host, database, and username are required.');
+    const hostRequired = form.type !== 'sqlite';
+    const usernameRequired = form.type !== 'sqlite' && form.type !== 'redis';
+    if (!form.name.trim() || !form.database.trim() || (hostRequired && !form.host.trim()) || (usernameRequired && !form.username.trim())) {
+      throw new Error('Name, database, host, and username are required where the selected database type needs them.');
     }
-    if (!Number.isInteger(port) || port <= 0) {
+    if (form.type !== 'sqlite' && (!Number.isInteger(port) || port <= 0)) {
       throw new Error('Port must be a positive number.');
     }
     return {
       id: form.id ?? this.existing?.id ?? createId('conn'),
       name: form.name.trim(),
       type: form.type,
-      host: form.host.trim(),
-      port,
+      host: form.host.trim() || 'localhost',
+      port: form.type === 'sqlite' ? 0 : port,
       database: form.database.trim(),
       username: form.username.trim(),
       password: form.password === '' ? undefined : form.password,
@@ -725,6 +727,11 @@ export class ConnectionEditorPanel {
               <option value="postgres">PostgreSQL</option>
               <option value="redshift">Amazon Redshift</option>
               <option value="mysql">MySQL</option>
+              <option value="sqlite">SQLite</option>
+              <option value="sqlserver">Microsoft SQL Server</option>
+              <option value="oracle">Oracle</option>
+              <option value="redis">Redis</option>
+              <option value="snowflake">Snowflake</option>
             </select>
             <span class="field-label">Color:</span>
             <select name="color" aria-label="Connection color">
@@ -749,6 +756,11 @@ export class ConnectionEditorPanel {
                 <button type="button" data-db-type="postgres">default</button>
                 <button type="button" data-db-type="redshift">IAM cluster/region</button>
                 <button type="button" data-db-type="mysql">MySQL</button>
+                <button type="button" data-db-type="sqlite">SQLite</button>
+                <button type="button" data-db-type="sqlserver">SQL Server</button>
+                <button type="button" data-db-type="oracle">Oracle</button>
+                <button type="button" data-db-type="redis">Redis</button>
+                <button type="button" data-db-type="snowflake">Snowflake</button>
               </div>
               <span class="field-label">Host:</span>
               <div class="inline-row full-row">
@@ -945,7 +957,19 @@ export class ConnectionEditorPanel {
       const port = form.elements.namedItem('port').value || '';
       const database = form.elements.namedItem('database').value || 'database';
       sourceName.textContent = name;
-      urlPreview.value = 'jdbc:' + (type === 'redshift' ? 'redshift' : type === 'mysql' ? 'mysql' : 'postgresql') + '://' + host + (port ? ':' + port : '') + '/' + database;
+      const scheme = {
+        postgres: 'postgresql',
+        redshift: 'redshift',
+        mysql: 'mysql',
+        sqlite: 'sqlite',
+        sqlserver: 'sqlserver',
+        oracle: 'oracle',
+        redis: 'redis',
+        snowflake: 'snowflake'
+      }[type] || type;
+      urlPreview.value = type === 'sqlite'
+        ? 'sqlite:' + database
+        : scheme + '://' + host + (port ? ':' + port : '') + '/' + database;
       typeButtons.forEach((button) => button.classList.toggle('active', button.dataset.dbType === type));
       renderSourceList();
     }

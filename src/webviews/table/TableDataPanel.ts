@@ -4,6 +4,7 @@ import { TableNode } from '../../explorer/nodes';
 import { DataProfileReport } from '../../types';
 import { TablePerformanceAdvisorReport } from '../../services/tablePerformanceAdvisorService';
 import { qualifiedName } from '../../utils/identifiers';
+import { qualifiedSqlName } from '../../services/sqlDialect';
 import { loadBundledRuntime } from '../../runtime/runtimeLoader';
 
 type TableDataMessage =
@@ -207,7 +208,12 @@ export class TableDataPanel {
     initialLoading = false
   ): string {
     const nonce = Date.now().toString();
-    const safeTable = escapeHtml(qualifiedName(node.table.schema, node.table.name));
+    const tableSqlName = qualifiedSqlName(node.connection.type, node.table.schema, node.table.name);
+    const safeTable = escapeHtml(tableSqlName);
+    const insertTargetJson = JSON.stringify(tableSqlName).replace(/</g, '\\u003c');
+    const identifierDialectJson = JSON.stringify(node.connection.type).replace(/</g, '\\u003c');
+    const canGenerateSqlJson = JSON.stringify(node.connection.type !== 'redis');
+    const booleanLiteralModeJson = JSON.stringify(node.connection.type === 'sqlserver' || node.connection.type === 'oracle' ? 'numeric' : 'keyword');
 
     return `<!doctype html>
 <html lang="en">
@@ -1026,10 +1032,18 @@ export class TableDataPanel {
     function markdownValue(value) {
       return cell(value).replaceAll('|', '\\|').replaceAll('\\r', ' ').replaceAll('\\n', ' ');
     }
+    const insertTarget = ${insertTargetJson};
+    const identifierDialect = ${identifierDialectJson};
+    const canGenerateSql = ${canGenerateSqlJson};
+    const booleanLiteralMode = ${booleanLiteralModeJson};
     function sqlLiteral(value) {
       if (value === null || value === undefined) return 'null';
       if (typeof value === 'number' || typeof value === 'bigint') return String(value);
-      if (typeof value === 'boolean') return value ? 'true' : 'false';
+      if (typeof value === 'boolean') {
+        return booleanLiteralMode === 'numeric'
+          ? (value ? '1' : '0')
+          : (value ? 'true' : 'false');
+      }
       if (value instanceof Date) return "'" + value.toISOString().replace(/'/g, "''") + "'";
       if (typeof value === 'object') return "'" + JSON.stringify(value).replace(/'/g, "''") + "'";
       return "'" + String(value).replace(/'/g, "''") + "'";
@@ -1044,9 +1058,14 @@ export class TableDataPanel {
       return next === '' ? '(empty)' : next;
     }
     function sqlIdentifier(column) {
-      return /^[A-Za-z_][A-Za-z0-9_]*$/.test(column)
-        ? column
-        : '"' + column.replaceAll('"', '""') + '"';
+      if (identifierDialect === 'mysql') {
+        const tick = String.fromCharCode(96);
+        return tick + column.replaceAll(tick, tick + tick) + tick;
+      }
+      if (identifierDialect === 'sqlserver') {
+        return '[' + column.replaceAll(']', ']]') + ']';
+      }
+      return '"' + column.replaceAll('"', '""') + '"';
     }
     function suggestColumnContext(input) {
       const cursor = input.selectionStart ?? input.value.length;
@@ -1196,7 +1215,10 @@ export class TableDataPanel {
         if (!visibleRows.length) {
           return '';
         }
-        return 'insert into ${qualifiedName(node.table.schema, node.table.name)} (' + columns.map((column) => sqlIdentifier(column)).join(', ') + ')\\nvalues\\n' + visibleRows.map((row) => '  (' + columns.map((column) => sqlLiteral(row[column])).join(', ') + ')').join(',\\n') + ';';
+        if (!canGenerateSql) {
+          return '-- INSERT export is not available for Redis connections. Use Redis commands instead.\\n';
+        }
+        return 'insert into ' + insertTarget + ' (' + columns.map((column) => sqlIdentifier(column)).join(', ') + ')\\nvalues\\n' + visibleRows.map((row) => '  (' + columns.map((column) => sqlLiteral(row[column])).join(', ') + ')').join(',\\n') + ';';
       }
       if (format === 'xlsx') {
         return '';

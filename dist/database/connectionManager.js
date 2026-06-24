@@ -38,6 +38,11 @@ const vscode = __importStar(require("vscode"));
 const postgresDriver_1 = require("./drivers/postgresDriver");
 const redshiftDriver_1 = require("./drivers/redshiftDriver");
 const mysqlDriver_1 = require("./drivers/mysqlDriver");
+const sqliteDriver_1 = require("./drivers/sqliteDriver");
+const sqlServerDriver_1 = require("./drivers/sqlServerDriver");
+const oracleDriver_1 = require("./drivers/oracleDriver");
+const redisDriver_1 = require("./drivers/redisDriver");
+const snowflakeDriver_1 = require("./drivers/snowflakeDriver");
 const id_1 = require("../utils/id");
 const connectionDefaults_1 = require("../services/connectionDefaults");
 const sshTunnelManager_1 = require("../services/sshTunnelManager");
@@ -54,6 +59,11 @@ class ConnectionManager {
         this.drivers.set('postgres', new postgresDriver_1.PostgresDriver());
         this.drivers.set('redshift', new redshiftDriver_1.RedshiftDriver());
         this.drivers.set('mysql', new mysqlDriver_1.MySQLDriver());
+        this.drivers.set('sqlite', new sqliteDriver_1.SQLiteDriver());
+        this.drivers.set('sqlserver', new sqlServerDriver_1.SqlServerDriver());
+        this.drivers.set('oracle', new oracleDriver_1.OracleDriver());
+        this.drivers.set('redis', new redisDriver_1.RedisDriver());
+        this.drivers.set('snowflake', new snowflakeDriver_1.SnowflakeDriver());
     }
     getConnections() {
         return this.store.getAll();
@@ -222,7 +232,12 @@ class ConnectionManager {
         const typePick = await vscode.window.showQuickPick([
             { label: 'PostgreSQL', type: 'postgres' },
             { label: 'Amazon Redshift', type: 'redshift' },
-            { label: 'MySQL', type: 'mysql' }
+            { label: 'MySQL', type: 'mysql' },
+            { label: 'SQLite', type: 'sqlite' },
+            { label: 'Microsoft SQL Server', type: 'sqlserver' },
+            { label: 'Oracle', type: 'oracle' },
+            { label: 'Redis', type: 'redis' },
+            { label: 'Snowflake', type: 'snowflake' }
         ], { placeHolder: 'Database type' });
         if (!typePick) {
             return undefined;
@@ -233,8 +248,8 @@ class ConnectionManager {
         if (!name) {
             return undefined;
         }
-        const host = await vscode.window.showInputBox({ prompt: 'Host', value: existing?.host ?? 'localhost' });
-        if (!host) {
+        const host = await vscode.window.showInputBox({ prompt: type === 'snowflake' ? 'Account / host' : 'Host', value: existing?.host ?? 'localhost' });
+        if (type !== 'sqlite' && !host) {
             return undefined;
         }
         const port = Number(await vscode.window.showInputBox({ prompt: 'Port', value: String(existing?.port ?? defaults.port) }));
@@ -243,7 +258,7 @@ class ConnectionManager {
             return undefined;
         }
         const username = await vscode.window.showInputBox({ prompt: 'Username', value: existing?.username });
-        if (!username) {
+        if (type !== 'sqlite' && type !== 'redis' && !username) {
             return undefined;
         }
         const password = await vscode.window.showInputBox({ prompt: 'Password', password: true });
@@ -252,10 +267,10 @@ class ConnectionManager {
             id: existing?.id ?? (0, id_1.createId)('conn'),
             name,
             type,
-            host,
-            port,
+            host: host || 'localhost',
+            port: type === 'sqlite' ? 0 : port,
             database,
-            username,
+            username: username ?? '',
             password,
             sslMode: (ssl ?? defaults.sslMode),
             color: existing?.color ?? defaults.color,

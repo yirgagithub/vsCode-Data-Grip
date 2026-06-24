@@ -18,4 +18,12 @@ describe('result format helpers', () => {
       'insert into "public"."users" ("id", "name", "active")\nvalues\n  (1, \'Ada\', true);'
     );
   });
+
+  it('renders insert SQL for the requested database type', () => {
+    expect(rowsToInsertSql([
+      { id: 1, name: 'Ada', active: true }
+    ], 'app', 'users', 'mysql')).toBe(
+      'insert into `app`.`users` (`id`, `name`, `active`)\nvalues\n  (1, \'Ada\', true);'
+    );
+  });
 });

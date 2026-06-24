@@ -18,7 +18,7 @@ vi.mock('pg', () => {
       if (pgMock.failSsl && this.config.ssl) {
         throw new Error('The server does not support SSL connections');
       }
-      return { rows: [{ version: 'PostgreSQL 16' }], fields: [], rowCount: 1 };
+      return respond(sql);
     });
 
     async connect() {
@@ -165,7 +165,49 @@ describe('RedshiftDriver metadata', () => {
     expect(sql).toContain('pg_namespace');
     expect(sql).toContain("name not like 'pg_temp%'");
   });
+
+  it('normalizes lower-case Redshift column metadata before generating DDL', async () => {
+    const driver = new RedshiftDriver();
+    await driver.connect(config({ type: 'redshift', port: 5439, sslMode: 'require' }));
+
+    const ddl = await driver.getTableDDL('local', 'public', 'adjust_kpi_fact');
+
+    expect(ddl).toContain('"date_dim_key" integer not null');
+    expect(ddl).toContain('"event_revenue" numeric(18,2)');
+    expect(ddl).not.toContain('undefined');
+  });
 });
+
+function respond(sql: unknown) {
+  const text = String(sql);
+  if (text.includes('information_schema.columns')) {
+    return {
+      rows: [
+        {
+          schema: 'public',
+          table: 'adjust_kpi_fact',
+          name: 'date_dim_key',
+          ordinal: 1,
+          datatype: 'integer',
+          nullable: false,
+          defaultvalue: null
+        },
+        {
+          schema: 'public',
+          table: 'adjust_kpi_fact',
+          name: 'event_revenue',
+          ordinal: 2,
+          datatype: 'numeric(18,2)',
+          nullable: true,
+          defaultvalue: null
+        }
+      ],
+      fields: [],
+      rowCount: 2
+    };
+  }
+  return { rows: [{ version: 'PostgreSQL 16' }], fields: [], rowCount: 1 };
+}
 
 function config(overrides: Partial<ConnectionConfigWithPassword> = {}): ConnectionConfigWithPassword {
   return {

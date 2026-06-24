@@ -1,9 +1,19 @@
-import { ColumnInfo, SchemaCacheEntry, TableInfo, ViewInfo } from '../types';
-import { qualifiedName, quoteIdentifier } from '../utils/identifiers';
+import { ColumnInfo, DatabaseType, TableInfo, ViewInfo } from '../types';
+import {
+  assertSqlGeneratingType,
+  createPlaceholderViewSql,
+  createTableSql,
+  dropTableIfExistsSql,
+  dropViewIfExistsSql,
+  qualifiedSqlName,
+  quoteSqlIdentifier,
+  SqlGeneratingDatabaseType
+} from './sqlDialect';
 
 export interface SchemaDiffRequest {
   sourceConnectionName: string;
   targetConnectionName: string;
+  targetDatabaseType?: DatabaseType;
   sourceSchema: SchemaSnapshot;
   targetSchema: SchemaSnapshot;
 }
@@ -18,6 +28,7 @@ export interface SchemaSnapshot {
 export interface SchemaDiffReport {
   sourceConnectionName: string;
   targetConnectionName: string;
+  targetDatabaseType: SqlGeneratingDatabaseType;
   sourceSchema: string;
   targetSchema: string;
   createTables: Array<{ schema: string; name: string; ddl: string }>;
@@ -36,6 +47,7 @@ export interface SchemaDiffReport {
 }
 
 export function compareSchemas(request: SchemaDiffRequest): SchemaDiffReport {
+  const targetDatabaseType = assertSqlGeneratingType(request.targetDatabaseType ?? 'postgres', 'Schema diff migration SQL');
   const sourceTables = tableMap(request.sourceSchema.tables);
   const targetTables = tableMap(request.targetSchema.tables);
   const sourceViews = viewMap(request.sourceSchema.views);
@@ -46,7 +58,7 @@ export function compareSchemas(request: SchemaDiffRequest): SchemaDiffReport {
     .map((table) => ({
       schema: table.schema,
       name: table.name,
-      ddl: buildCreateTableSql(table.schema, table.name, request.sourceSchema.columns[tableKey(table.schema, table.name)] ?? [])
+      ddl: createTableSql(targetDatabaseType, table.schema, table.name, request.sourceSchema.columns[tableKey(table.schema, table.name)] ?? [])
     }));
   const dropTables = [...targetTables.values()]
     .filter((table) => !sourceTables.has(tableKey(table.schema, table.name)))
@@ -56,7 +68,7 @@ export function compareSchemas(request: SchemaDiffRequest): SchemaDiffReport {
     .map((view) => ({
       schema: view.schema,
       name: view.name,
-      ddl: buildCreateViewSql(view.schema, view.name)
+      ddl: createPlaceholderViewSql(targetDatabaseType, view.schema, view.name)
     }));
   const dropViews = [...targetViews.values()]
     .filter((view) => !sourceViews.has(viewKey(view.schema, view.name)))
@@ -67,16 +79,18 @@ export function compareSchemas(request: SchemaDiffRequest): SchemaDiffReport {
     .map((table) => compareTableColumns(
       table.schema,
       table.name,
+      targetDatabaseType,
       request.sourceSchema.columns[tableKey(table.schema, table.name)] ?? [],
       request.targetSchema.columns[tableKey(table.schema, table.name)] ?? []
     ))
     .filter((change) => change.addedColumns.length || change.removedColumns.length || change.typeChanges.length || change.nullableChanges.length);
 
-  const migrationSql = buildMigrationSql({ createTables, dropTables, createViews, dropViews, alterTables });
+  const migrationSql = buildMigrationSql(targetDatabaseType, { createTables, dropTables, createViews, dropViews, alterTables });
 
   return {
     sourceConnectionName: request.sourceConnectionName,
     targetConnectionName: request.targetConnectionName,
+    targetDatabaseType,
     sourceSchema: request.sourceSchema.schemaName,
     targetSchema: request.targetSchema.schemaName,
     createTables,
@@ -102,17 +116,17 @@ export function formatSchemaDiffMarkdown(report: SchemaDiffReport): string {
     `- Tables to alter: ${report.alterTables.length}`
   ];
 
-  appendObjects(lines, '## Create Tables', report.createTables.map((item) => `${qualifiedName(item.schema, item.name)}\n\`\`\`sql\n${item.ddl}\n\`\`\``));
-  appendSimple(lines, '## Drop Tables', report.dropTables.map((item) => qualifiedName(item.schema, item.name)));
-  appendObjects(lines, '## Create Views', report.createViews.map((item) => `${qualifiedName(item.schema, item.name)}\n\`\`\`sql\n${item.ddl}\n\`\`\``));
-  appendSimple(lines, '## Drop Views', report.dropViews.map((item) => qualifiedName(item.schema, item.name)));
+  appendObjects(lines, '## Create Tables', report.createTables.map((item) => `${qualifiedSqlName(report.targetDatabaseType, item.schema, item.name)}\n\`\`\`sql\n${item.ddl}\n\`\`\``));
+  appendSimple(lines, '## Drop Tables', report.dropTables.map((item) => qualifiedSqlName(report.targetDatabaseType, item.schema, item.name)));
+  appendObjects(lines, '## Create Views', report.createViews.map((item) => `${qualifiedSqlName(report.targetDatabaseType, item.schema, item.name)}\n\`\`\`sql\n${item.ddl}\n\`\`\``));
+  appendSimple(lines, '## Drop Views', report.dropViews.map((item) => qualifiedSqlName(report.targetDatabaseType, item.schema, item.name)));
 
   if (report.alterTables.length) {
     lines.push('');
     lines.push('## Table Changes');
     for (const table of report.alterTables) {
       lines.push('');
-      lines.push(`### ${qualifiedName(table.schema, table.name)}`);
+      lines.push(`### ${qualifiedSqlName(report.targetDatabaseType, table.schema, table.name)}`);
       if (table.addedColumns.length) {
         lines.push(`- Added columns: ${table.addedColumns.map((item) => `${item.name}`).join(', ')}`);
       }
@@ -139,6 +153,7 @@ export function formatSchemaDiffMarkdown(report: SchemaDiffReport): string {
 function compareTableColumns(
   schema: string,
   name: string,
+  targetDatabaseType: SqlGeneratingDatabaseType,
   sourceColumns: ColumnInfo[],
   targetColumns: ColumnInfo[]
 ): SchemaDiffReport['alterTables'][number] {
@@ -148,7 +163,7 @@ function compareTableColumns(
     .filter((column) => !targetByName.has(column.name))
     .map((column) => ({
       name: column.name,
-      ddl: `alter table ${qualifiedName(schema, name)} add column ${quoteIdentifier(column.name)} ${column.dataType}${column.defaultValue ? ` default ${column.defaultValue}` : ''}${column.nullable ? '' : ' not null'};`
+      ddl: addColumnMigrationSql(targetDatabaseType, schema, name, column)
     }));
   const removedColumns = targetColumns
     .filter((column) => !sourceByName.has(column.name))
@@ -176,7 +191,7 @@ function compareTableColumns(
   return { schema, name, addedColumns, removedColumns, typeChanges, nullableChanges };
 }
 
-function buildMigrationSql(report: Pick<SchemaDiffReport, 'createTables' | 'dropTables' | 'createViews' | 'dropViews' | 'alterTables'>): string {
+function buildMigrationSql(targetDatabaseType: SqlGeneratingDatabaseType, report: Pick<SchemaDiffReport, 'createTables' | 'dropTables' | 'createViews' | 'dropViews' | 'alterTables'>): string {
   const statements: string[] = [];
   for (const item of report.createTables) {
     statements.push(item.ddl);
@@ -190,23 +205,23 @@ function buildMigrationSql(report: Pick<SchemaDiffReport, 'createTables' | 'drop
     }
   }
   for (const item of report.dropViews) {
-    statements.push(`drop view if exists ${qualifiedName(item.schema, item.name)};`);
+    statements.push(dropViewIfExistsSql(targetDatabaseType, item.schema, item.name));
   }
   for (const item of report.dropTables) {
-    statements.push(`drop table if exists ${qualifiedName(item.schema, item.name)};`);
+    statements.push(dropTableIfExistsSql(targetDatabaseType, item.schema, item.name));
   }
   return statements.join('\n');
 }
 
-function buildCreateTableSql(schema: string, table: string, columns: ColumnInfo[]): string {
-  const ddlColumns = columns.length
-    ? columns.map((column) => `  ${quoteIdentifier(column.name)} ${column.dataType}${column.defaultValue ? ` default ${column.defaultValue}` : ''}${column.nullable ? '' : ' not null'}`)
-    : ['  id integer'];
-  return `create table ${qualifiedName(schema, table)} (\n${ddlColumns.join(',\n')}\n);`;
-}
-
-function buildCreateViewSql(schema: string, view: string): string {
-  return `create view ${qualifiedName(schema, view)} as\nselect 1 as placeholder;\n`;
+function addColumnMigrationSql(type: SqlGeneratingDatabaseType, schema: string, table: string, column: ColumnInfo): string {
+  const dataType = column.dataType?.trim();
+  if (!dataType) {
+    throw new Error(`Missing data type for ${column.schema}.${column.table}.${column.name}.`);
+  }
+  const addKeyword = type === 'sqlserver' || type === 'oracle' ? 'add' : 'add column';
+  const defaultValue = column.defaultValue ? ` default ${column.defaultValue}` : '';
+  const nullable = column.nullable ? '' : ' not null';
+  return `alter table ${qualifiedSqlName(type, schema, table)}\n  ${addKeyword} ${quoteSqlIdentifier(type, column.name)} ${dataType}${defaultValue}${nullable};`;
 }
 
 function tableMap(items: TableInfo[]): Map<string, TableInfo> {

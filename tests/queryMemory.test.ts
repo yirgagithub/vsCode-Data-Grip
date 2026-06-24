@@ -137,6 +137,8 @@ describe('SqlSafetyClassifier', () => {
   it('builds preview sql for risky writes', () => {
     expect(classifier.previewSql('delete from invoices where customer_id = 10')).toContain('select *');
     expect(classifier.previewSql('update public.users set active = false where id = 1')).toContain('where id = 1');
+    expect(classifier.previewSql('delete from [dbo].[invoices] where customer_id = 10', 'sqlserver')).toContain('select top (100) *');
+    expect(classifier.previewSql('update "APP"."USERS" set active = 0 where id = 1', 'oracle')).toContain('fetch first 100 rows only');
   });
 });
 
@@ -958,6 +960,14 @@ describe('connection defaults', () => {
       database: 'mysql',
       sslMode: 'disable'
     });
+  });
+
+  it('provides defaults for every supported driver type', () => {
+    expect(connectionDefaultsForType('sqlite')).toMatchObject({ port: '0', database: ':memory:' });
+    expect(connectionDefaultsForType('sqlserver')).toMatchObject({ port: '1433', database: 'master' });
+    expect(connectionDefaultsForType('oracle')).toMatchObject({ port: '1521', database: 'ORCLPDB1' });
+    expect(connectionDefaultsForType('redis')).toMatchObject({ port: '6379', database: '0' });
+    expect(connectionDefaultsForType('snowflake')).toMatchObject({ port: '443', database: 'SNOWFLAKE' });
   });
 });
 

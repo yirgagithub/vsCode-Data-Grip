@@ -1,6 +1,7 @@
 import { PostgresDriver } from './postgresDriver';
 import { ActiveSessionInfo, ColumnInfo, ConnectionConfigWithPassword, ExecuteQueryParams, ExplainQueryOptions, QueryPlanResult, SchemaInfo, TableInfo, TableStatsInfo, ViewInfo } from '../../types';
 import { textExplainPlan } from '../../services/queryPlanService';
+import { qualifiedName } from '../../utils/identifiers';
 
 export class RedshiftDriver extends PostgresDriver {
   override readonly id = 'redshift' as const;
@@ -132,7 +133,22 @@ export class RedshiftDriver extends PostgresDriver {
        order by ordinal_position`,
       [schema, table]
     );
-    return result.rows;
+    return result.rows.map((row: Record<string, unknown>) => {
+      const name = String(row.name ?? row.column_name);
+      const dataType = optionalString(row.dataType ?? row.datatype ?? row.data_type);
+      if (!dataType) {
+        throw new Error(`Redshift column metadata for ${qualifiedName(schema, table)}.${name} did not include a data type.`);
+      }
+      return {
+        schema: String(row.schema ?? schema),
+        table: String(row.table ?? table),
+        name,
+        ordinal: Number(row.ordinal ?? row.ordinal_position),
+        dataType,
+        nullable: booleanFromDb(row.nullable),
+        defaultValue: optionalString(row.defaultValue ?? row.defaultvalue ?? row.column_default)
+      };
+    });
   }
 
   override async getTableStats(connectionId: string, schema: string, table: string): Promise<TableStatsInfo> {
@@ -214,4 +230,15 @@ function optionalString(value: unknown): string | undefined {
   }
   const next = String(value).trim();
   return next || undefined;
+}
+
+function booleanFromDb(value: unknown): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  const normalized = optionalString(value)?.toLowerCase();
+  return normalized === 'true' || normalized === 't' || normalized === 'yes' || normalized === 'y' || normalized === '1';
 }
