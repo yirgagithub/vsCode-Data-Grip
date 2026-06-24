@@ -119,7 +119,7 @@ class QueryMemoryController {
             }
         }
         else if (picked.action === 'preview') {
-            const preview = this.safety.previewSql(item.sql);
+            const preview = this.safety.previewSql(item.sql, item.databaseType);
             if (preview) {
                 await this.openSql(preview, 'Query Safety Preview');
             }

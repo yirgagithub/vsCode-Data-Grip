@@ -2,8 +2,9 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.compareSchemas = compareSchemas;
 exports.formatSchemaDiffMarkdown = formatSchemaDiffMarkdown;
-const identifiers_1 = require("../utils/identifiers");
+const sqlDialect_1 = require("./sqlDialect");
 function compareSchemas(request) {
+    const targetDatabaseType = (0, sqlDialect_1.assertSqlGeneratingType)(request.targetDatabaseType ?? 'postgres', 'Schema diff migration SQL');
     const sourceTables = tableMap(request.sourceSchema.tables);
     const targetTables = tableMap(request.targetSchema.tables);
     const sourceViews = viewMap(request.sourceSchema.views);
@@ -13,7 +14,7 @@ function compareSchemas(request) {
         .map((table) => ({
         schema: table.schema,
         name: table.name,
-        ddl: buildCreateTableSql(table.schema, table.name, request.sourceSchema.columns[tableKey(table.schema, table.name)] ?? [])
+        ddl: (0, sqlDialect_1.createTableSql)(targetDatabaseType, table.schema, table.name, request.sourceSchema.columns[tableKey(table.schema, table.name)] ?? [])
     }));
     const dropTables = [...targetTables.values()]
         .filter((table) => !sourceTables.has(tableKey(table.schema, table.name)))
@@ -23,19 +24,20 @@ function compareSchemas(request) {
         .map((view) => ({
         schema: view.schema,
         name: view.name,
-        ddl: buildCreateViewSql(view.schema, view.name)
+        ddl: (0, sqlDialect_1.createPlaceholderViewSql)(targetDatabaseType, view.schema, view.name)
     }));
     const dropViews = [...targetViews.values()]
         .filter((view) => !sourceViews.has(viewKey(view.schema, view.name)))
         .map((view) => ({ schema: view.schema, name: view.name }));
     const alterTables = [...sourceTables.values()]
         .filter((table) => targetTables.has(tableKey(table.schema, table.name)))
-        .map((table) => compareTableColumns(table.schema, table.name, request.sourceSchema.columns[tableKey(table.schema, table.name)] ?? [], request.targetSchema.columns[tableKey(table.schema, table.name)] ?? []))
+        .map((table) => compareTableColumns(table.schema, table.name, targetDatabaseType, request.sourceSchema.columns[tableKey(table.schema, table.name)] ?? [], request.targetSchema.columns[tableKey(table.schema, table.name)] ?? []))
         .filter((change) => change.addedColumns.length || change.removedColumns.length || change.typeChanges.length || change.nullableChanges.length);
-    const migrationSql = buildMigrationSql({ createTables, dropTables, createViews, dropViews, alterTables });
+    const migrationSql = buildMigrationSql(targetDatabaseType, { createTables, dropTables, createViews, dropViews, alterTables });
     return {
         sourceConnectionName: request.sourceConnectionName,
         targetConnectionName: request.targetConnectionName,
+        targetDatabaseType,
         sourceSchema: request.sourceSchema.schemaName,
         targetSchema: request.targetSchema.schemaName,
         createTables,
@@ -59,16 +61,16 @@ function formatSchemaDiffMarkdown(report) {
         `- Views to drop: ${report.dropViews.length}`,
         `- Tables to alter: ${report.alterTables.length}`
     ];
-    appendObjects(lines, '## Create Tables', report.createTables.map((item) => `${(0, identifiers_1.qualifiedName)(item.schema, item.name)}\n\`\`\`sql\n${item.ddl}\n\`\`\``));
-    appendSimple(lines, '## Drop Tables', report.dropTables.map((item) => (0, identifiers_1.qualifiedName)(item.schema, item.name)));
-    appendObjects(lines, '## Create Views', report.createViews.map((item) => `${(0, identifiers_1.qualifiedName)(item.schema, item.name)}\n\`\`\`sql\n${item.ddl}\n\`\`\``));
-    appendSimple(lines, '## Drop Views', report.dropViews.map((item) => (0, identifiers_1.qualifiedName)(item.schema, item.name)));
+    appendObjects(lines, '## Create Tables', report.createTables.map((item) => `${(0, sqlDialect_1.qualifiedSqlName)(report.targetDatabaseType, item.schema, item.name)}\n\`\`\`sql\n${item.ddl}\n\`\`\``));
+    appendSimple(lines, '## Drop Tables', report.dropTables.map((item) => (0, sqlDialect_1.qualifiedSqlName)(report.targetDatabaseType, item.schema, item.name)));
+    appendObjects(lines, '## Create Views', report.createViews.map((item) => `${(0, sqlDialect_1.qualifiedSqlName)(report.targetDatabaseType, item.schema, item.name)}\n\`\`\`sql\n${item.ddl}\n\`\`\``));
+    appendSimple(lines, '## Drop Views', report.dropViews.map((item) => (0, sqlDialect_1.qualifiedSqlName)(report.targetDatabaseType, item.schema, item.name)));
     if (report.alterTables.length) {
         lines.push('');
         lines.push('## Table Changes');
         for (const table of report.alterTables) {
             lines.push('');
-            lines.push(`### ${(0, identifiers_1.qualifiedName)(table.schema, table.name)}`);
+            lines.push(`### ${(0, sqlDialect_1.qualifiedSqlName)(report.targetDatabaseType, table.schema, table.name)}`);
             if (table.addedColumns.length) {
                 lines.push(`- Added columns: ${table.addedColumns.map((item) => `${item.name}`).join(', ')}`);
             }
@@ -90,14 +92,14 @@ function formatSchemaDiffMarkdown(report) {
     lines.push('```');
     return lines.join('\n');
 }
-function compareTableColumns(schema, name, sourceColumns, targetColumns) {
+function compareTableColumns(schema, name, targetDatabaseType, sourceColumns, targetColumns) {
     const targetByName = new Map(targetColumns.map((column) => [column.name, column]));
     const sourceByName = new Map(sourceColumns.map((column) => [column.name, column]));
     const addedColumns = sourceColumns
         .filter((column) => !targetByName.has(column.name))
         .map((column) => ({
         name: column.name,
-        ddl: `alter table ${(0, identifiers_1.qualifiedName)(schema, name)} add column ${(0, identifiers_1.quoteIdentifier)(column.name)} ${column.dataType}${column.defaultValue ? ` default ${column.defaultValue}` : ''}${column.nullable ? '' : ' not null'};`
+        ddl: addColumnMigrationSql(targetDatabaseType, schema, name, column)
     }));
     const removedColumns = targetColumns
         .filter((column) => !sourceByName.has(column.name))
@@ -124,7 +126,7 @@ function compareTableColumns(schema, name, sourceColumns, targetColumns) {
     }));
     return { schema, name, addedColumns, removedColumns, typeChanges, nullableChanges };
 }
-function buildMigrationSql(report) {
+function buildMigrationSql(targetDatabaseType, report) {
     const statements = [];
     for (const item of report.createTables) {
         statements.push(item.ddl);
@@ -138,21 +140,22 @@ function buildMigrationSql(report) {
         }
     }
     for (const item of report.dropViews) {
-        statements.push(`drop view if exists ${(0, identifiers_1.qualifiedName)(item.schema, item.name)};`);
+        statements.push((0, sqlDialect_1.dropViewIfExistsSql)(targetDatabaseType, item.schema, item.name));
     }
     for (const item of report.dropTables) {
-        statements.push(`drop table if exists ${(0, identifiers_1.qualifiedName)(item.schema, item.name)};`);
+        statements.push((0, sqlDialect_1.dropTableIfExistsSql)(targetDatabaseType, item.schema, item.name));
     }
     return statements.join('\n');
 }
-function buildCreateTableSql(schema, table, columns) {
-    const ddlColumns = columns.length
-        ? columns.map((column) => `  ${(0, identifiers_1.quoteIdentifier)(column.name)} ${column.dataType}${column.defaultValue ? ` default ${column.defaultValue}` : ''}${column.nullable ? '' : ' not null'}`)
-        : ['  id integer'];
-    return `create table ${(0, identifiers_1.qualifiedName)(schema, table)} (\n${ddlColumns.join(',\n')}\n);`;
-}
-function buildCreateViewSql(schema, view) {
-    return `create view ${(0, identifiers_1.qualifiedName)(schema, view)} as\nselect 1 as placeholder;\n`;
+function addColumnMigrationSql(type, schema, table, column) {
+    const dataType = column.dataType?.trim();
+    if (!dataType) {
+        throw new Error(`Missing data type for ${column.schema}.${column.table}.${column.name}.`);
+    }
+    const addKeyword = type === 'sqlserver' || type === 'oracle' ? 'add' : 'add column';
+    const defaultValue = column.defaultValue ? ` default ${column.defaultValue}` : '';
+    const nullable = column.nullable ? '' : ' not null';
+    return `alter table ${(0, sqlDialect_1.qualifiedSqlName)(type, schema, table)}\n  ${addKeyword} ${(0, sqlDialect_1.quoteSqlIdentifier)(type, column.name)} ${dataType}${defaultValue}${nullable};`;
 }
 function tableMap(items) {
     return new Map(items.map((item) => [tableKey(item.schema, item.name), item]));

@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.TableDataPanel = void 0;
 const vscode = __importStar(require("vscode"));
 const identifiers_1 = require("../../utils/identifiers");
+const sqlDialect_1 = require("../../services/sqlDialect");
 const runtimeLoader_1 = require("../../runtime/runtimeLoader");
 class TableDataPanel {
     static async open(context, connectionManager, node) {
@@ -176,7 +177,12 @@ class TableDataPanel {
     }
     static html(webview, extensionUri, node, rows, columns, durationMs, maxRows, hasMore, initialLoading = false) {
         const nonce = Date.now().toString();
-        const safeTable = escapeHtml((0, identifiers_1.qualifiedName)(node.table.schema, node.table.name));
+        const tableSqlName = (0, sqlDialect_1.qualifiedSqlName)(node.connection.type, node.table.schema, node.table.name);
+        const safeTable = escapeHtml(tableSqlName);
+        const insertTargetJson = JSON.stringify(tableSqlName).replace(/</g, '\\u003c');
+        const identifierDialectJson = JSON.stringify(node.connection.type).replace(/</g, '\\u003c');
+        const canGenerateSqlJson = JSON.stringify(node.connection.type !== 'redis');
+        const booleanLiteralModeJson = JSON.stringify(node.connection.type === 'sqlserver' || node.connection.type === 'oracle' ? 'numeric' : 'keyword');
         return `<!doctype html>
 <html lang="en">
 <head>
@@ -994,10 +1000,18 @@ class TableDataPanel {
     function markdownValue(value) {
       return cell(value).replaceAll('|', '\\|').replaceAll('\\r', ' ').replaceAll('\\n', ' ');
     }
+    const insertTarget = ${insertTargetJson};
+    const identifierDialect = ${identifierDialectJson};
+    const canGenerateSql = ${canGenerateSqlJson};
+    const booleanLiteralMode = ${booleanLiteralModeJson};
     function sqlLiteral(value) {
       if (value === null || value === undefined) return 'null';
       if (typeof value === 'number' || typeof value === 'bigint') return String(value);
-      if (typeof value === 'boolean') return value ? 'true' : 'false';
+      if (typeof value === 'boolean') {
+        return booleanLiteralMode === 'numeric'
+          ? (value ? '1' : '0')
+          : (value ? 'true' : 'false');
+      }
       if (value instanceof Date) return "'" + value.toISOString().replace(/'/g, "''") + "'";
       if (typeof value === 'object') return "'" + JSON.stringify(value).replace(/'/g, "''") + "'";
       return "'" + String(value).replace(/'/g, "''") + "'";
@@ -1012,9 +1026,14 @@ class TableDataPanel {
       return next === '' ? '(empty)' : next;
     }
     function sqlIdentifier(column) {
-      return /^[A-Za-z_][A-Za-z0-9_]*$/.test(column)
-        ? column
-        : '"' + column.replaceAll('"', '""') + '"';
+      if (identifierDialect === 'mysql') {
+        const tick = String.fromCharCode(96);
+        return tick + column.replaceAll(tick, tick + tick) + tick;
+      }
+      if (identifierDialect === 'sqlserver') {
+        return '[' + column.replaceAll(']', ']]') + ']';
+      }
+      return '"' + column.replaceAll('"', '""') + '"';
     }
     function suggestColumnContext(input) {
       const cursor = input.selectionStart ?? input.value.length;
@@ -1164,7 +1183,10 @@ class TableDataPanel {
         if (!visibleRows.length) {
           return '';
         }
-        return 'insert into ${(0, identifiers_1.qualifiedName)(node.table.schema, node.table.name)} (' + columns.map((column) => sqlIdentifier(column)).join(', ') + ')\\nvalues\\n' + visibleRows.map((row) => '  (' + columns.map((column) => sqlLiteral(row[column])).join(', ') + ')').join(',\\n') + ';';
+        if (!canGenerateSql) {
+          return '-- INSERT export is not available for Redis connections. Use Redis commands instead.\\n';
+        }
+        return 'insert into ' + insertTarget + ' (' + columns.map((column) => sqlIdentifier(column)).join(', ') + ')\\nvalues\\n' + visibleRows.map((row) => '  (' + columns.map((column) => sqlLiteral(row[column])).join(', ') + ')').join(',\\n') + ';';
       }
       if (format === 'xlsx') {
         return '';

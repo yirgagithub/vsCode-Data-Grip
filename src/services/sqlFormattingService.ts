@@ -1,7 +1,7 @@
 import { ConnectionConfig } from '../types';
 import { loadBundledRuntime } from '../runtime/runtimeLoader';
 
-export type SqlFormatterDialect = 'postgresql' | 'redshift' | 'mysql';
+export type SqlFormatterDialect = 'postgresql' | 'redshift' | 'mysql' | 'sqlite' | 'transactsql' | 'plsql' | 'snowflake';
 
 export function sqlFormatterDialect(connection?: ConnectionConfig): SqlFormatterDialect {
   if (connection?.type === 'redshift') {
@@ -9,6 +9,18 @@ export function sqlFormatterDialect(connection?: ConnectionConfig): SqlFormatter
   }
   if (connection?.type === 'mysql') {
     return 'mysql';
+  }
+  if (connection?.type === 'sqlite') {
+    return 'sqlite';
+  }
+  if (connection?.type === 'sqlserver') {
+    return 'transactsql';
+  }
+  if (connection?.type === 'oracle') {
+    return 'plsql';
+  }
+  if (connection?.type === 'snowflake') {
+    return 'snowflake';
   }
   return 'postgresql';
 }
