@@ -34,7 +34,7 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode26 = __toESM(require("vscode"));
+var vscode27 = __toESM(require("vscode"));
 
 // src/database/connectionManager.ts
 var vscode = __toESM(require("vscode"));
@@ -7707,18 +7707,55 @@ function chunk(items, size) {
 }
 
 // src/services/tableImportService.ts
-function buildTableImportPreview(schema, table, tableColumns, fileName, text) {
+function buildTableImportPreview(_databaseType, _schema, _table, tableColumns, fileName, text) {
   const kind = fileName.toLowerCase().endsWith(".json") ? "json" : "csv";
   const source = kind === "json" ? parseJsonSource(text) : parseCsvSource(text);
-  const targetColumns = tableColumns.map((column) => column.name);
-  const mapping = inferMapping(source.columns, targetColumns);
-  if (!mapping.length) {
+  if (!source.rows.length) {
+    throw new Error("No import rows were found.");
+  }
+  const mapping = inferMapping(source.columns, tableColumns);
+  if (!mapping.some((item) => item.source)) {
     throw new Error("Could not map any source fields to table columns.");
   }
-  const mappedTargets = unique(mapping.map((item) => item.target));
+  return {
+    kind,
+    fileName,
+    rowCount: source.rows.length,
+    sourceColumns: source.columns,
+    targetColumns: tableColumns.map((column) => ({
+      name: column.name,
+      dataType: column.dataType,
+      nullable: column.nullable,
+      defaultValue: column.defaultValue
+    })),
+    mapping,
+    sampleRows: source.rows.slice(0, 50),
+    warnings: [
+      ...source.warnings,
+      ...mappingWarnings(source.columns, tableColumns, mapping)
+    ]
+  };
+}
+function buildTableImportData(fileName, text, mapping) {
+  const kind = fileName.toLowerCase().endsWith(".json") ? "json" : "csv";
+  const source = kind === "json" ? parseJsonSource(text) : parseCsvSource(text);
+  const activeMapping = mapping.filter((item) => Boolean(item.source?.trim()) && Boolean(item.target.trim()));
+  if (!activeMapping.length) {
+    throw new Error("Map at least one source column before importing.");
+  }
+  const sourceColumns = new Set(source.columns);
+  for (const item of activeMapping) {
+    if (!sourceColumns.has(item.source)) {
+      throw new Error(`Source column "${item.source}" was not found in the import file.`);
+    }
+  }
+  const targetColumns = unique(activeMapping.map((item) => item.target));
+  if (targetColumns.length !== activeMapping.length) {
+    throw new Error("Each target column can only be mapped once.");
+  }
   const rows = source.rows.map((row) => {
     const next = {};
-    for (const item of mapping) {
+    for (const item of activeMapping) {
       next[item.target] = row[item.source];
     }
     return next;
@@ -7726,19 +7763,17 @@ function buildTableImportPreview(schema, table, tableColumns, fileName, text) {
   if (!rows.length) {
     throw new Error("No import rows were found.");
   }
-  const batches = chunk2(rows, 100).map((batch) => buildInsertBatch2(schema, table, mappedTargets, batch));
-  const warnings = [
-    ...source.warnings,
-    ...mappingWarnings(source.columns, targetColumns, mapping)
-  ];
-  return {
-    kind,
-    rowCount: rows.length,
-    columns: source.columns,
-    mapping,
-    warnings,
-    sql: batches.join("\n")
-  };
+  return { columns: targetColumns, rows };
+}
+function buildTableImportStatements(databaseType, schema, table, data, batchSize = 100) {
+  if (!data.columns.length) {
+    throw new Error("Map at least one source column before importing.");
+  }
+  if (!data.rows.length) {
+    throw new Error("No import rows were found.");
+  }
+  const safeBatchSize = Number.isFinite(batchSize) && batchSize > 0 ? Math.floor(batchSize) : 100;
+  return chunk2(data.rows, safeBatchSize).map((batch) => buildInsertBatch2(databaseType, schema, table, data.columns, batch));
 }
 function parseJsonSource(text) {
   const parsed = JSON.parse(text);
@@ -7827,57 +7862,61 @@ function parseCsv(text) {
   return rows.filter((row) => row.some((value) => value.length > 0));
 }
 function inferMapping(sourceColumns, targetColumns) {
-  const targetLookup = new Map(targetColumns.map((column) => [column.toLowerCase(), column]));
-  const usedTargets = /* @__PURE__ */ new Set();
+  const sourceLookup = new Map(sourceColumns.map((column) => [normalizeName(column), column]));
+  const usedSources = /* @__PURE__ */ new Set();
   const mapping = [];
-  for (const source of sourceColumns) {
-    const exact = targetLookup.get(source.toLowerCase());
-    if (exact && !usedTargets.has(exact)) {
-      mapping.push({ source, target: exact });
-      usedTargets.add(exact);
+  for (const target of targetColumns) {
+    const exact = sourceLookup.get(normalizeName(target.name));
+    if (exact && !usedSources.has(exact)) {
+      mapping.push({ target: target.name, targetType: target.dataType, source: exact, auto: true });
+      usedSources.add(exact);
+      continue;
     }
+    mapping.push({ target: target.name, targetType: target.dataType, source: null, auto: true });
   }
-  if (mapping.length && mapping.length < sourceColumns.length) {
-    for (const source of sourceColumns) {
-      if (mapping.some((item) => item.source === source)) {
-        continue;
+  if (usedSources.size === 0) {
+    for (const [index, item] of mapping.entries()) {
+      const source = sourceColumns[index];
+      if (source) {
+        item.source = source;
+        usedSources.add(source);
       }
-      const fallback = targetColumns.find((column) => !usedTargets.has(column));
-      if (!fallback) {
-        break;
-      }
-      mapping.push({ source, target: fallback });
-      usedTargets.add(fallback);
     }
-  } else if (!mapping.length) {
-    sourceColumns.forEach((source, index) => {
-      const target = targetColumns[index];
-      if (target) {
-        mapping.push({ source, target });
-        usedTargets.add(target);
-      }
-    });
   }
   return mapping;
 }
 function mappingWarnings(sourceColumns, targetColumns, mapping) {
-  const unmatchedSource = sourceColumns.filter((source) => !mapping.some((item) => item.source === source));
-  const unusedTargets = targetColumns.filter((target) => !mapping.some((item) => item.target === target));
+  const activeMapping = mapping.filter((item) => item.source);
+  const unmatchedSource = sourceColumns.filter((source) => !activeMapping.some((item) => item.source === source));
+  const unmappedRequiredTargets = targetColumns.filter((target) => !target.nullable && !target.defaultValue && !activeMapping.some((item) => item.target === target.name)).map((target) => target.name);
+  const unusedTargets = targetColumns.filter((target) => !activeMapping.some((item) => item.target === target.name)).map((target) => target.name).filter((target) => !unmappedRequiredTargets.includes(target));
   const warnings = [];
   if (unmatchedSource.length) {
     warnings.push(`Skipped source columns: ${unmatchedSource.join(", ")}.`);
+  }
+  if (unmappedRequiredTargets.length) {
+    warnings.push(`Required target columns left unmapped: ${unmappedRequiredTargets.join(", ")}.`);
   }
   if (unusedTargets.length) {
     warnings.push(`Target columns left unmapped: ${unusedTargets.join(", ")}.`);
   }
   return warnings;
 }
-function buildInsertBatch2(schema, table, columns, rows) {
-  return `insert into ${qualifiedName(schema, table)} (${columns.map(quoteIdentifier).join(", ")})
+function buildInsertBatch2(databaseType, schema, table, columns, rows) {
+  return `insert into ${qualifiedSqlName(databaseType, schema, table)} (${columns.map((column) => quoteSqlIdentifier(databaseType, column)).join(", ")})
 values
-${rows.map((row) => `  (${columns.map((column) => formatLiteral2(row[column])).join(", ")})`).join(",\n")};`;
+${rows.map((row) => `  (${columns.map((column) => sqlLiteral(databaseType, row[column])).join(", ")})`).join(",\n")};`;
 }
-function formatLiteral2(value) {
+function qualifiedSqlName(databaseType, schema, table) {
+  return `${quoteSqlIdentifier(databaseType, schema)}.${quoteSqlIdentifier(databaseType, table)}`;
+}
+function quoteSqlIdentifier(databaseType, identifier) {
+  if (databaseType === "mysql") {
+    return `\`${identifier.replace(/`/g, "``")}\``;
+  }
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+function sqlLiteral(_databaseType, value) {
   if (value === null || value === void 0) {
     return "null";
   }
@@ -7894,6 +7933,9 @@ function formatLiteral2(value) {
     return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
   }
   return `'${String(value).replace(/'/g, "''")}'`;
+}
+function normalizeName(value) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 function parseScalar(text) {
   const trimmed = text.trim();
@@ -13042,10 +13084,477 @@ function histogramHtml(histogram) {
   }).join("");
 }
 
-// src/utils/logger.ts
+// src/webviews/table/TableImportPanel.ts
 var vscode25 = __toESM(require("vscode"));
+var TableImportPanel = class {
+  static async open(context, request, onImport) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const panel = vscode25.window.createWebviewPanel(
+        "databaseTableImport",
+        `Import ${request.table}`,
+        vscode25.ViewColumn.Active,
+        { enableScripts: true, retainContextWhenHidden: true }
+      );
+      context.subscriptions.push(panel);
+      panel.iconPath = vscode25.Uri.joinPath(context.extensionUri, "media", "database.svg");
+      panel.webview.html = this.html(panel.webview, context.extensionUri, request);
+      const settle = () => {
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+      };
+      panel.onDidDispose(settle);
+      panel.webview.onDidReceiveMessage(async (message) => {
+        if (message.type === "cancel") {
+          panel.dispose();
+          return;
+        }
+        if (message.type !== "import") {
+          return;
+        }
+        try {
+          await panel.webview.postMessage({ type: "state", state: "running", message: "Importing data..." });
+          const result = await onImport(message.mapping ?? []);
+          await panel.webview.postMessage({
+            type: "state",
+            state: "success",
+            message: `Imported ${result.rowCount.toLocaleString()} rows into ${qualifiedName(request.schema, request.table)}.`
+          });
+          settle();
+        } catch (error) {
+          await panel.webview.postMessage({
+            type: "state",
+            state: "error",
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+      });
+    });
+  }
+  static html(webview, extensionUri, request) {
+    const nonce = Date.now().toString();
+    const codicon = webview.asWebviewUri(vscode25.Uri.joinPath(extensionUri, "media", "codicons", "codicon.css"));
+    const stateJson = JSON.stringify({
+      connectionName: request.connectionName,
+      databaseType: request.databaseType,
+      schema: request.schema,
+      table: request.table,
+      filePath: request.filePath,
+      preview: request.preview
+    }).replace(/</g, "\\u003c");
+    const title = `Import ${qualifiedName(request.schema, request.table)}`;
+    return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="${codicon}" rel="stylesheet">
+  <title>${escapeHtml3(title)}</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: var(--vscode-editor-background);
+      --panel: var(--vscode-sideBar-background);
+      --header: var(--vscode-editorWidget-background);
+      --border: var(--vscode-panel-border);
+      --text: var(--vscode-editor-foreground);
+      --muted: var(--vscode-descriptionForeground);
+      --accent: var(--vscode-button-background);
+      --accent-text: var(--vscode-button-foreground);
+      --danger: var(--vscode-errorForeground);
+      --success: var(--vscode-testing-iconPassed);
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--vscode-font-family);
+    }
+    .shell {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      height: 100vh;
+      min-width: 760px;
+    }
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      padding: 12px 16px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 16px;
+      color: var(--muted);
+      min-width: 0;
+    }
+    .meta span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 360px;
+    }
+    .summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    main {
+      display: grid;
+      grid-template-columns: 42% 58%;
+      min-height: 0;
+    }
+    section {
+      min-width: 0;
+      min-height: 0;
+      border-right: 1px solid var(--border);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    section:last-child { border-right: 0; }
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 40px;
+      padding: 0 12px;
+      background: var(--header);
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    .scroll {
+      overflow: auto;
+      min-height: 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      padding: 6px 8px;
+      text-align: left;
+      vertical-align: middle;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--header);
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .mapping-table th:nth-child(1), .mapping-table td:nth-child(1) { width: 34%; }
+    .mapping-table th:nth-child(2), .mapping-table td:nth-child(2) { width: 24%; }
+    .mapping-table th:nth-child(3), .mapping-table td:nth-child(3) { width: 42%; }
+    select {
+      width: 100%;
+      height: 26px;
+      color: var(--text);
+      background: var(--vscode-dropdown-background);
+      border: 1px solid var(--vscode-dropdown-border);
+      border-radius: 3px;
+      padding: 2px 22px 2px 6px;
+      font-family: inherit;
+      font-size: inherit;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      height: 18px;
+      padding: 0 6px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .warnings {
+      display: none;
+      padding: 8px 12px;
+      color: var(--vscode-editorWarning-foreground);
+      border-bottom: 1px solid var(--border);
+      background: var(--vscode-inputValidation-warningBackground);
+    }
+    .warnings.visible { display: block; }
+    .warnings div + div { margin-top: 4px; }
+    footer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+    }
+    .status {
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .status.error { color: var(--danger); }
+    .status.success { color: var(--success); }
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-width: 84px;
+      height: 30px;
+      padding: 0 12px;
+      color: var(--vscode-button-secondaryForeground);
+      background: var(--vscode-button-secondaryBackground);
+      border: 0;
+      border-radius: 3px;
+      font-family: inherit;
+      font-size: inherit;
+      cursor: pointer;
+    }
+    button.primary {
+      color: var(--accent-text);
+      background: var(--accent);
+    }
+    button:disabled {
+      cursor: default;
+      opacity: 0.6;
+    }
+    .empty {
+      padding: 24px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <h1>${escapeHtml3(title)}</h1>
+        <div class="meta">
+          <span id="sourceMeta"></span>
+          <span id="targetMeta"></span>
+          <span id="connectionMeta"></span>
+        </div>
+      </div>
+      <div class="summary">
+        <span class="codicon codicon-table"></span>
+        <span id="rowSummary"></span>
+      </div>
+    </header>
+    <main>
+      <section>
+        <div class="section-title">
+          <span>Mapping</span>
+          <span class="badge" id="mappingSummary"></span>
+        </div>
+        <div class="warnings" id="warnings"></div>
+        <div class="scroll">
+          <table class="mapping-table">
+            <thead>
+              <tr>
+                <th>to: Column</th>
+                <th>to: Type</th>
+                <th>from: Column</th>
+              </tr>
+            </thead>
+            <tbody id="mappingRows"></tbody>
+          </table>
+        </div>
+      </section>
+      <section>
+        <div class="section-title">
+          <span>Data Preview</span>
+          <span class="badge" id="previewSummary"></span>
+        </div>
+        <div class="scroll" id="previewHost"></div>
+      </section>
+    </main>
+    <footer>
+      <div class="status" id="status"></div>
+      <div class="actions">
+        <button id="cancelButton">Cancel</button>
+        <button class="primary" id="importButton"><span class="codicon codicon-cloud-upload"></span>Import</button>
+      </div>
+    </footer>
+  </div>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    const state = ${stateJson};
+    const mapping = state.preview.mapping.map((item) => ({ ...item }));
+    const sourceColumns = state.preview.sourceColumns;
+    const targetByName = new Map(state.preview.targetColumns.map((column) => [column.name, column]));
+
+    const sourceMeta = document.getElementById('sourceMeta');
+    const targetMeta = document.getElementById('targetMeta');
+    const connectionMeta = document.getElementById('connectionMeta');
+    const rowSummary = document.getElementById('rowSummary');
+    const mappingSummary = document.getElementById('mappingSummary');
+    const previewSummary = document.getElementById('previewSummary');
+    const mappingRows = document.getElementById('mappingRows');
+    const previewHost = document.getElementById('previewHost');
+    const warnings = document.getElementById('warnings');
+    const status = document.getElementById('status');
+    const importButton = document.getElementById('importButton');
+    const cancelButton = document.getElementById('cancelButton');
+
+    sourceMeta.textContent = 'from: ' + state.filePath;
+    targetMeta.textContent = 'to: ' + state.schema + '.' + state.table;
+    connectionMeta.textContent = state.connectionName + ' (' + state.databaseType + ')';
+    rowSummary.textContent = state.preview.rowCount.toLocaleString() + ' rows';
+    previewSummary.textContent = Math.min(state.preview.sampleRows.length, 50) + ' shown';
+    status.textContent = 'Review mappings, then import directly into the table.';
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      })[char]);
+    }
+
+    function formatCell(value) {
+      if (value === null || value === undefined) {
+        return '<span style="color: var(--muted)">null</span>';
+      }
+      if (typeof value === 'object') {
+        return escapeHtml(JSON.stringify(value));
+      }
+      return escapeHtml(value);
+    }
+
+    function optionHtml(selected) {
+      const options = ['<option value="">Not mapped</option>'];
+      for (const column of sourceColumns) {
+        options.push('<option value="' + escapeHtml(column) + '"' + (column === selected ? ' selected' : '') + '>' + escapeHtml(column) + '</option>');
+      }
+      return options.join('');
+    }
+
+    function renderMapping() {
+      mappingRows.innerHTML = mapping.map((item, index) => {
+        const target = targetByName.get(item.target) ?? {};
+        const badge = item.source && item.auto ? ' <span class="badge">Auto</span>' : '';
+        return '<tr>' +
+          '<td title="' + escapeHtml(item.target) + '">' + escapeHtml(item.target) + badge + '</td>' +
+          '<td title="' + escapeHtml(target.dataType ?? '') + '">' + escapeHtml(target.dataType ?? '') + '</td>' +
+          '<td><select data-index="' + index + '">' + optionHtml(item.source) + '</select></td>' +
+          '</tr>';
+      }).join('');
+      mappingRows.querySelectorAll('select').forEach((select) => {
+        select.addEventListener('change', (event) => {
+          const index = Number(event.currentTarget.dataset.index);
+          mapping[index].source = event.currentTarget.value || null;
+          mapping[index].auto = false;
+          renderMapping();
+        });
+      });
+      const mapped = mapping.filter((item) => item.source).length;
+      mappingSummary.textContent = mapped + ' of ' + mapping.length + ' mapped';
+      importButton.disabled = mapped === 0;
+    }
+
+    function renderWarnings() {
+      const items = state.preview.warnings ?? [];
+      warnings.className = items.length ? 'warnings visible' : 'warnings';
+      warnings.innerHTML = items.map((item) => '<div>' + escapeHtml(item) + '</div>').join('');
+    }
+
+    function renderPreview() {
+      if (!state.preview.sampleRows.length || !sourceColumns.length) {
+        previewHost.innerHTML = '<div class="empty">No preview rows.</div>';
+        return;
+      }
+      const head = '<thead><tr>' + sourceColumns.map((column) => '<th title="' + escapeHtml(column) + '">' + escapeHtml(column) + '</th>').join('') + '</tr></thead>';
+      const body = '<tbody>' + state.preview.sampleRows.map((row) => (
+        '<tr>' + sourceColumns.map((column) => '<td title="' + escapeHtml(row[column] ?? '') + '">' + formatCell(row[column]) + '</td>').join('') + '</tr>'
+      )).join('') + '</tbody>';
+      previewHost.innerHTML = '<table>' + head + body + '</table>';
+    }
+
+    importButton.addEventListener('click', () => {
+      importButton.disabled = true;
+      cancelButton.disabled = true;
+      status.className = 'status';
+      status.textContent = 'Importing data...';
+      vscode.postMessage({
+        type: 'import',
+        mapping: mapping.map((item) => ({ target: item.target, source: item.source }))
+      });
+    });
+
+    cancelButton.addEventListener('click', () => {
+      vscode.postMessage({ type: 'cancel' });
+    });
+
+    window.addEventListener('message', (event) => {
+      const message = event.data ?? {};
+      if (message.type !== 'state') {
+        return;
+      }
+      status.className = 'status ' + (message.state === 'error' || message.state === 'success' ? message.state : '');
+      status.textContent = message.message ?? '';
+      if (message.state === 'error') {
+        importButton.disabled = mapping.filter((item) => item.source).length === 0;
+        cancelButton.disabled = false;
+      }
+      if (message.state === 'success') {
+        importButton.disabled = true;
+        cancelButton.textContent = 'Close';
+        cancelButton.disabled = false;
+      }
+    });
+
+    renderWarnings();
+    renderMapping();
+    renderPreview();
+  </script>
+</body>
+</html>`;
+  }
+};
+function escapeHtml3(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[char] ?? char);
+}
+
+// src/utils/logger.ts
+var vscode26 = __toESM(require("vscode"));
 var Logger = class {
-  output = vscode25.window.createOutputChannel("Database");
+  output = vscode26.window.createOutputChannel("Database");
   info(message) {
     this.output.appendLine(`[info] ${message}`);
   }
@@ -13075,16 +13584,16 @@ function activate(context) {
   const schemaContext = new SchemaContextService(connectionManager, new SchemaMetadataCacheStore(context));
   const sectionService = new SqlSectionService();
   const highlighter = new SqlSectionHighlighter();
-  const sqlDiagnostics = vscode26.languages.createDiagnosticCollection("database-sql");
+  const sqlDiagnostics = vscode27.languages.createDiagnosticCollection("database-sql");
   const diagnosticsService = new SqlDiagnosticsService(connectionManager, schemaContext, sectionService);
   const parameterPrompt = new SqlParameterPrompt();
   const aiAdapter = new VsCodeLanguageModelSqlAdapter();
   const refreshAiAvailability = () => {
     void aiAdapter.isAvailable().then((available) => {
-      void vscode26.commands.executeCommand("setContext", "database.aiAvailable", available);
+      void vscode27.commands.executeCommand("setContext", "database.aiAvailable", available);
     });
   };
-  void vscode26.commands.executeCommand("setContext", "database.aiAvailable", false);
+  void vscode27.commands.executeCommand("setContext", "database.aiAvailable", false);
   refreshAiAvailability();
   const memoryStore = new QueryMemoryStore(context);
   const memoryService = new QueryMemoryService(historyStore, memoryStore, consoleStore, connectionManager, aiAdapter);
@@ -13100,20 +13609,20 @@ function activate(context) {
   const consoleAutoSaveQueued = /* @__PURE__ */ new Set();
   const runningDocuments = /* @__PURE__ */ new Map();
   const runningQueries = /* @__PURE__ */ new Map();
-  void vscode26.commands.executeCommand("setContext", "database.queryRunning", false);
-  const statementRunningDecoration = vscode26.window.createTextEditorDecorationType({
+  void vscode27.commands.executeCommand("setContext", "database.queryRunning", false);
+  const statementRunningDecoration = vscode27.window.createTextEditorDecorationType({
     before: {
-      contentIconPath: vscode26.Uri.joinPath(context.extensionUri, "media", "sql-running.svg"),
+      contentIconPath: vscode27.Uri.joinPath(context.extensionUri, "media", "sql-running.svg"),
       width: "12px",
       height: "12px",
       margin: "0 6px 0 0"
     }
   });
-  const statementCompletedDecoration = vscode26.window.createTextEditorDecorationType({
-    before: { contentText: "\u2713 ", color: new vscode26.ThemeColor("testing.iconPassed") }
+  const statementCompletedDecoration = vscode27.window.createTextEditorDecorationType({
+    before: { contentText: "\u2713 ", color: new vscode27.ThemeColor("testing.iconPassed") }
   });
-  const statementFailedDecoration = vscode26.window.createTextEditorDecorationType({
-    before: { contentText: "\u2717 ", color: new vscode26.ThemeColor("testing.iconFailed") }
+  const statementFailedDecoration = vscode27.window.createTextEditorDecorationType({
+    before: { contentText: "\u2717 ", color: new vscode27.ThemeColor("testing.iconFailed") }
   });
   let pruningMissingConsoles = false;
   let pruningUnknownConnections = false;
@@ -13136,7 +13645,7 @@ function activate(context) {
       await highlighter.reveal(documentUri, rangeToPlain(section.range), section.sql);
     },
     async (documentUri, section) => {
-      const editor = vscode26.window.activeTextEditor;
+      const editor = vscode27.window.activeTextEditor;
       if (!editor || editor.document.languageId !== "sql" || editor.document.uri.toString() !== documentUri) {
         return;
       }
@@ -13196,32 +13705,32 @@ function activate(context) {
   context.subscriptions.push(connectionManager.onDidChangeActiveConnections(() => {
     refreshQueryMap();
     tree.refresh();
-    updateSqlConnectionStatus(vscode26.window.activeTextEditor);
-    const activeDocument = vscode26.window.activeTextEditor?.document;
+    updateSqlConnectionStatus(vscode27.window.activeTextEditor);
+    const activeDocument = vscode27.window.activeTextEditor?.document;
     const connection = activeDocument?.languageId === "sql" ? connectionForDocument(activeDocument) : void 0;
     if (connection && connectionManager.isConnected(connection.id)) {
       schemaContext.refreshDefaultSchemaInBackground(connection);
     }
   }));
-  const treeView = vscode26.window.createTreeView("databaseExplorer", { treeDataProvider: tree, showCollapseAll: true });
+  const treeView = vscode27.window.createTreeView("databaseExplorer", { treeDataProvider: tree, showCollapseAll: true });
   context.subscriptions.push(
     treeView,
     highlighter,
     queryOutput,
     sqlDiagnostics,
-    vscode26.window.registerWebviewViewProvider(ResultsPanelProvider.viewType, results),
-    vscode26.window.registerWebviewViewProvider(QueryMapProvider.viewType, queryMap)
+    vscode27.window.registerWebviewViewProvider(ResultsPanelProvider.viewType, results),
+    vscode27.window.registerWebviewViewProvider(QueryMapProvider.viewType, queryMap)
   );
-  const status = vscode26.window.createStatusBarItem(vscode26.StatusBarAlignment.Left, 90);
+  const status = vscode27.window.createStatusBarItem(vscode27.StatusBarAlignment.Left, 90);
   status.command = "database.pickConnection";
   status.text = "$(database) Database";
   status.show();
   context.subscriptions.push(status, statementRunningDecoration, statementCompletedDecoration, statementFailedDecoration);
-  const sqlCodeLensRefresh = new vscode26.EventEmitter();
+  const sqlCodeLensRefresh = new vscode27.EventEmitter();
   context.subscriptions.push(sqlCodeLensRefresh);
   context.subscriptions.push(registerSqlCompletions(connectionManager, schemaContext, sectionService, connectionForDocument, context));
   context.subscriptions.push(registerSqlConnectionCodeLens(sqlConnectionLensTitle, sectionService, sqlCodeLensRefresh.event));
-  context.subscriptions.push(vscode26.window.onDidChangeActiveTextEditor((editor) => {
+  context.subscriptions.push(vscode27.window.onDidChangeActiveTextEditor((editor) => {
     queryMap.updateFromEditor(editor);
     syncResultsToEditor(editor);
     updateSqlConnectionStatus(editor);
@@ -13229,26 +13738,26 @@ function activate(context) {
     highlighter.refreshVisibleEditors();
     updateSqlDiagnostics(editor?.document, editor?.selection);
   }));
-  context.subscriptions.push(vscode26.window.onDidChangeTextEditorSelection((event) => {
+  context.subscriptions.push(vscode27.window.onDidChangeTextEditorSelection((event) => {
     highlightActiveSqlSection(event.textEditor);
     updateSqlDiagnostics(event.textEditor.document, event.selections[0]);
   }));
-  context.subscriptions.push(vscode26.workspace.onDidChangeTextDocument((event) => {
+  context.subscriptions.push(vscode27.workspace.onDidChangeTextDocument((event) => {
     autoSaveQueryConsoleDocument(event.document);
-    const editor = vscode26.window.activeTextEditor;
+    const editor = vscode27.window.activeTextEditor;
     if (editor?.document.uri.toString() === event.document.uri.toString()) {
       queryMap.updateFromEditor(editor);
       highlightActiveSqlSection(editor);
     }
     updateSqlDiagnostics(event.document, editor?.selection);
   }));
-  context.subscriptions.push(vscode26.workspace.onDidCloseTextDocument((document) => {
+  context.subscriptions.push(vscode27.workspace.onDidCloseTextDocument((document) => {
     const documentUri = document.uri.toString();
     consoleAutoSaves.delete(documentUri);
     consoleAutoSaveQueued.delete(documentUri);
     sqlDiagnostics.delete(document.uri);
   }));
-  context.subscriptions.push(vscode26.workspace.onDidChangeConfiguration((event) => {
+  context.subscriptions.push(vscode27.workspace.onDidChangeConfiguration((event) => {
     if (event.affectsConfiguration("database.ai")) {
       refreshAiAvailability();
     }
@@ -13262,25 +13771,25 @@ function activate(context) {
     }
   };
   context.subscriptions.push(
-    vscode26.languages.registerDocumentFormattingEditProvider("sql", sqlFormatter),
-    vscode26.languages.registerDocumentRangeFormattingEditProvider("sql", sqlFormatter)
+    vscode27.languages.registerDocumentFormattingEditProvider("sql", sqlFormatter),
+    vscode27.languages.registerDocumentRangeFormattingEditProvider("sql", sqlFormatter)
   );
   refreshQueryMap();
   void schemaContext.warmFromDisk(connectionManager.getConnections());
-  queryMap.updateFromEditor(vscode26.window.activeTextEditor);
+  queryMap.updateFromEditor(vscode27.window.activeTextEditor);
   queryMap.updateResults(results.getTabs());
-  highlightActiveSqlSection(vscode26.window.activeTextEditor);
-  updateSqlConnectionStatus(vscode26.window.activeTextEditor);
-  for (const document of vscode26.workspace.textDocuments) {
+  highlightActiveSqlSection(vscode27.window.activeTextEditor);
+  updateSqlConnectionStatus(vscode27.window.activeTextEditor);
+  for (const document of vscode27.workspace.textDocuments) {
     updateSqlDiagnostics(document);
   }
   const register = (command, callback) => {
-    context.subscriptions.push(vscode26.commands.registerCommand(command, async (...args) => {
+    context.subscriptions.push(vscode27.commands.registerCommand(command, async (...args) => {
       try {
         return await callback(...args);
       } catch (error) {
         logger.error(command, error);
-        void vscode26.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+        void vscode27.window.showErrorMessage(error instanceof Error ? error.message : String(error));
         return void 0;
       }
     }));
@@ -13461,7 +13970,7 @@ function activate(context) {
     updateQueryRunningContext();
   }
   function updateQueryRunningContext() {
-    void vscode26.commands.executeCommand("setContext", "database.queryRunning", runningQueries.size > 0);
+    void vscode27.commands.executeCommand("setContext", "database.queryRunning", runningQueries.size > 0);
   }
   function trackRunningProgress(running, progress) {
     if (!progress.executionId) {
@@ -13490,7 +13999,7 @@ function activate(context) {
         return runningTab;
       }
     }
-    const activeDocumentUri = vscode26.window.activeTextEditor?.document.uri.toString();
+    const activeDocumentUri = vscode27.window.activeTextEditor?.document.uri.toString();
     if (activeDocumentUri) {
       const runningForDocument = [...runningQueries.values()].filter((running) => running.documentUri === activeDocumentUri).sort((a, b) => b.startedAt - a.startedAt)[0];
       if (runningForDocument) {
@@ -13502,12 +14011,12 @@ function activate(context) {
   async function cancelRunningQuery(tabId) {
     const running = runningQueryForCancellation(tabId);
     if (!running) {
-      void vscode26.window.showInformationMessage("No query is currently running.");
+      void vscode27.window.showInformationMessage("No query is currently running.");
       return;
     }
     running.cancelRequested = true;
     if (!running.executionIds.size) {
-      void vscode26.window.showInformationMessage(`Cancel requested for ${running.title}.`);
+      void vscode27.window.showInformationMessage(`Cancel requested for ${running.title}.`);
       return;
     }
     const executionIds = [...running.executionIds];
@@ -13519,14 +14028,14 @@ function activate(context) {
     if (failures.length) {
       logger.error("database.cancelCurrentQuery", failures.map((failure) => failure.reason).join("\n"));
     }
-    void vscode26.window.showInformationMessage(`Cancel requested for ${running.title}.`);
+    void vscode27.window.showInformationMessage(`Cancel requested for ${running.title}.`);
   }
   function createStatementStatusUpdater(editor, range, sql) {
     const statements = splitSqlStatements(sql);
     const sqlParts = statements.length ? statements : [{ sql, start: 0, end: sql.length }];
     const baseOffset = editor.document.offsetAt(range.start);
     const statuses = sqlParts.map((statement) => ({
-      range: new vscode26.Range(
+      range: new vscode27.Range(
         editor.document.positionAt(baseOffset + statement.start),
         editor.document.positionAt(baseOffset + statement.start)
       ),
@@ -13628,13 +14137,13 @@ function activate(context) {
     if (document.lineCount === 0) {
       return [];
     }
-    const targetRange = range ?? new vscode26.Range(0, 0, document.lineCount - 1, document.lineAt(document.lineCount - 1).range.end.character);
+    const targetRange = range ?? new vscode27.Range(0, 0, document.lineCount - 1, document.lineAt(document.lineCount - 1).range.end.character);
     const source = document.getText(targetRange);
     const formatted = await formatSqlText(source, sqlFormatterDialect(connectionForDocument(document)));
     if (formatted === source) {
       return [];
     }
-    return [vscode26.TextEdit.replace(targetRange, formatted)];
+    return [vscode27.TextEdit.replace(targetRange, formatted)];
   }
   function connectionFromArg(node) {
     const id = connectionIdFromArg(node);
@@ -13648,7 +14157,7 @@ function activate(context) {
     ).connection?.id;
   }
   function activeConnectionId() {
-    const editor = vscode26.window.activeTextEditor;
+    const editor = vscode27.window.activeTextEditor;
     return editor?.document.languageId === "sql" ? connectionForDocument(editor.document)?.id : void 0;
   }
   function syncResultsToEditor(editor) {
@@ -13728,7 +14237,7 @@ function activate(context) {
     if (!id) {
       return;
     }
-    const answer = await vscode26.window.showWarningMessage("Delete this connection?", { modal: true }, "Delete");
+    const answer = await vscode27.window.showWarningMessage("Delete this connection?", { modal: true }, "Delete");
     if (answer === "Delete") {
       await connectionManager.delete(id);
       await schemaContext.deletePersistent(id);
@@ -13742,7 +14251,7 @@ function activate(context) {
       return;
     }
     const message = await connectionManager.test(id);
-    void vscode26.window.showInformationMessage(`Connection successful: ${message}`);
+    void vscode27.window.showInformationMessage(`Connection successful: ${message}`);
   });
   register("database.connect", async (node) => {
     const id = connectionIdFromArg(node) ?? (await connectionManager.pickConnection())?.id;
@@ -13786,14 +14295,14 @@ function activate(context) {
   });
   register("database.showResults", () => results.show(activeConnectionId()));
   register("database.focusResults", () => results.show(activeConnectionId()));
-  register("database.focusExplorer", () => vscode26.commands.executeCommand("databaseExplorer.focus"));
+  register("database.focusExplorer", () => vscode27.commands.executeCommand("databaseExplorer.focus"));
   register("database.goToDatabaseObject", async () => {
     const objects = await collectDatabaseObjects();
     if (!objects.length) {
-      void vscode26.window.showInformationMessage("No cached database objects found yet.");
+      void vscode27.window.showInformationMessage("No cached database objects found yet.");
       return;
     }
-    const picked = await vscode26.window.showQuickPick(objects, {
+    const picked = await vscode27.window.showQuickPick(objects, {
       placeHolder: "Go to database object",
       matchOnDetail: true,
       matchOnDescription: true
@@ -13803,13 +14312,13 @@ function activate(context) {
     }
     await treeView.reveal(picked.node, { expand: true, focus: true, select: true });
     if (picked.objectKind === "table") {
-      await vscode26.commands.executeCommand("database.openTableData", picked.node);
+      await vscode27.commands.executeCommand("database.openTableData", picked.node);
     }
   });
   register("database.sessionMonitor", async (node) => {
     const connection = connectionFromArg(node) ?? connectionManager.getPreferredConnection();
     if (!connection) {
-      void vscode26.window.showInformationMessage("Pick a database connection first.");
+      void vscode27.window.showInformationMessage("Pick a database connection first.");
       return;
     }
     await SessionMonitorPanel.open(context, connectionManager, connection);
@@ -13826,40 +14335,40 @@ function activate(context) {
   register("database.openSqlConsole", async (node) => {
     const connection = connectionFromArg(node) ?? connectionManager.getPreferredConnection() ?? await connectionManager.pickConnection();
     const doc = await consoleStore.openOrCreate(connection, "", { reuse: false });
-    await vscode26.window.showTextDocument(doc, { viewColumn: vscode26.ViewColumn.Active, preview: false });
+    await vscode27.window.showTextDocument(doc, { viewColumn: vscode27.ViewColumn.Active, preview: false });
     results.setActiveConnection(connection?.id);
     if (connection) {
       void warmSqlMetadata(connection, "Query console");
     }
     refreshQueryMap();
-    queryMap.updateFromEditor(vscode26.window.activeTextEditor);
+    queryMap.updateFromEditor(vscode27.window.activeTextEditor);
   });
   register("database.openQueryFile", async (node) => {
     const connection = connectionFromArg(node) ?? connectionManager.getPreferredConnection();
     const doc = await consoleStore.openOrCreate(connection, "", { reuse: false });
-    await vscode26.window.showTextDocument(doc, { viewColumn: vscode26.ViewColumn.Active, preview: false });
+    await vscode27.window.showTextDocument(doc, { viewColumn: vscode27.ViewColumn.Active, preview: false });
     results.setActiveConnection(connection?.id);
     if (connection) {
       void warmSqlMetadata(connection, "Query file");
     }
     refreshQueryMap();
-    queryMap.updateFromEditor(vscode26.window.activeTextEditor);
+    queryMap.updateFromEditor(vscode27.window.activeTextEditor);
   });
   register("database.executeCurrentQuery", () => executeFromEditor("run"));
   register("database.executeSelection", () => executeFromEditor("selection"));
   register("database.executeFile", () => executeFromEditor("run"));
   register("database.cancelCurrentQuery", () => cancelRunningQuery());
   register("database.executeStatementRange", async (uriText, startLine, startCharacter, endLine, endCharacter) => {
-    const editor = vscode26.window.activeTextEditor;
+    const editor = vscode27.window.activeTextEditor;
     if (!editor || typeof uriText !== "string" || editor.document.uri.toString() !== uriText) {
       return;
     }
     if (![startLine, startCharacter, endLine, endCharacter].every((value) => typeof value === "number")) {
       return;
     }
-    const range = new vscode26.Range(
-      new vscode26.Position(startLine, startCharacter),
-      new vscode26.Position(endLine, endCharacter)
+    const range = new vscode27.Range(
+      new vscode27.Position(startLine, startCharacter),
+      new vscode27.Position(endLine, endCharacter)
     );
     const selections = selectedSqlDetections(editor);
     if (shouldRunSelectionForStatement(selections, range)) {
@@ -13884,8 +14393,8 @@ function activate(context) {
     if (!(node instanceof TableNode)) {
       return;
     }
-    const report = await vscode26.window.withProgress({
-      location: vscode26.ProgressLocation.Notification,
+    const report = await vscode27.window.withProgress({
+      location: vscode27.ProgressLocation.Notification,
       title: `Analyzing ${qualifiedName(node.table.schema, node.table.name)}`,
       cancellable: false
     }, () => tablePerformanceAdvisor.analyzeTable(node.connection, node.table.schema, node.table.name));
@@ -13895,10 +14404,10 @@ function activate(context) {
     if (!(node instanceof TableNode)) {
       return;
     }
-    const configuredSampleRows = vscode26.workspace.getConfiguration("database").get("dataProfile.sampleRows", 5e3);
+    const configuredSampleRows = vscode27.workspace.getConfiguration("database").get("dataProfile.sampleRows", 5e3);
     const sampleRows = Number.isFinite(configuredSampleRows) && configuredSampleRows && configuredSampleRows > 0 ? Math.floor(configuredSampleRows) : 5e3;
-    const report = await vscode26.window.withProgress({
-      location: vscode26.ProgressLocation.Notification,
+    const report = await vscode27.window.withProgress({
+      location: vscode27.ProgressLocation.Notification,
       title: `Profiling ${qualifiedName(node.table.schema, node.table.name)}`,
       cancellable: false
     }, () => dataProfiler.profileTable(node.connection, node.table.schema, node.table.name, sampleRows));
@@ -13915,7 +14424,7 @@ function activate(context) {
     const stats = await connectionManager.getDriver(target.connection.type).getTableStats(target.connection.id, target.schema, target.name);
     const sql = maintenanceScriptFromStats(stats);
     if (!sql) {
-      void vscode26.window.showInformationMessage(`No Redshift maintenance SQL was generated for ${qualifiedName(target.schema, target.name)}.`);
+      void vscode27.window.showInformationMessage(`No Redshift maintenance SQL was generated for ${qualifiedName(target.schema, target.name)}.`);
       return;
     }
     await openSqlScript(`Maintenance ${target.name}`, `${sql}
@@ -13938,10 +14447,10 @@ function activate(context) {
     }
     const sourceSchema = await schemaContext.loadSchema(source.connection, source.schema);
     if (sourceSchema.status !== "ready") {
-      void vscode26.window.showWarningMessage(`Could not load source schema ${source.schema}: ${sourceSchema.errorMessage ?? "metadata unavailable"}`);
+      void vscode27.window.showWarningMessage(`Could not load source schema ${source.schema}: ${sourceSchema.errorMessage ?? "metadata unavailable"}`);
       return;
     }
-    const targetSchemaName = await vscode26.window.showInputBox({
+    const targetSchemaName = await vscode27.window.showInputBox({
       title: "Target schema",
       prompt: "Schema to compare against",
       value: source.schema,
@@ -13952,7 +14461,7 @@ function activate(context) {
     }
     const targetSchema = await schemaContext.loadSchema(targetConnection, targetSchemaName.trim());
     if (targetSchema.status !== "ready") {
-      void vscode26.window.showWarningMessage(`Could not load target schema ${targetSchemaName.trim()}: ${targetSchema.errorMessage ?? "metadata unavailable"}`);
+      void vscode27.window.showWarningMessage(`Could not load target schema ${targetSchemaName.trim()}: ${targetSchema.errorMessage ?? "metadata unavailable"}`);
       return;
     }
     const report = compareSchemas({
@@ -13961,31 +14470,31 @@ function activate(context) {
       sourceSchema: snapshotFromSchemaEntry(sourceSchema),
       targetSchema: snapshotFromSchemaEntry(targetSchema)
     });
-    const doc = await vscode26.workspace.openTextDocument({
+    const doc = await vscode27.workspace.openTextDocument({
       language: "markdown",
       content: formatSchemaDiffMarkdown(report)
     });
-    await vscode26.window.showTextDocument(doc, { preview: true, viewColumn: vscode26.ViewColumn.Beside });
+    await vscode27.window.showTextDocument(doc, { preview: true, viewColumn: vscode27.ViewColumn.Beside });
   });
   register("database.showErDiagram", async (node) => {
     const target = schemaLikeTarget(node);
     if (!target) {
       return;
     }
-    const report = await vscode26.window.withProgress({
-      location: vscode26.ProgressLocation.Notification,
+    const report = await vscode27.window.withProgress({
+      location: vscode27.ProgressLocation.Notification,
       title: `Building ER diagram for ${target.schema}`,
       cancellable: false
     }, () => erDiagramService.build({ connection: target.connection, schemaName: target.schema }));
     await ErDiagramPanel.open(context, report);
   });
   register("database.insertQuerySnippet", async () => {
-    const editor = vscode26.window.activeTextEditor;
+    const editor = vscode27.window.activeTextEditor;
     if (!editor || editor.document.languageId !== "sql") {
-      void vscode26.window.showInformationMessage("Open a SQL editor before inserting a query snippet.");
+      void vscode27.window.showInformationMessage("Open a SQL editor before inserting a query snippet.");
       return;
     }
-    const picked = await vscode26.window.showQuickPick(querySnippets().map((snippet) => ({
+    const picked = await vscode27.window.showQuickPick(querySnippets().map((snippet) => ({
       label: snippet.label,
       description: snippet.description,
       snippet
@@ -13995,49 +14504,71 @@ function activate(context) {
     if (!picked) {
       return;
     }
-    await editor.insertSnippet(new vscode26.SnippetString(picked.snippet.snippet));
+    await editor.insertSnippet(new vscode27.SnippetString(picked.snippet.snippet));
   });
   register("database.copyName", async (node) => {
     const name = objectName(node);
     if (name) {
-      await vscode26.env.clipboard.writeText(name);
+      await vscode27.env.clipboard.writeText(name);
     }
   });
   register("database.copyQualifiedName", async (node) => {
     const name = qualifiedObjectName(node);
     if (name) {
-      await vscode26.env.clipboard.writeText(name);
+      await vscode27.env.clipboard.writeText(name);
     }
   });
   register("database.importTableData", async (node) => {
     if (!(node instanceof TableNode)) {
       return;
     }
-    const files = await vscode26.window.showOpenDialog({
-      canSelectMany: false,
-      openLabel: "Import data",
-      filters: {
-        "Data files": ["csv", "json"]
+    try {
+      const files = await vscode27.window.showOpenDialog({
+        canSelectMany: false,
+        openLabel: "Import data",
+        filters: {
+          "Data files": ["csv", "json"]
+        }
+      });
+      const file = files?.[0];
+      if (!file) {
+        return;
       }
-    });
-    const file = files?.[0];
-    if (!file) {
-      return;
+      const fileBytes = await vscode27.workspace.fs.readFile(file);
+      const fileText = Buffer.from(fileBytes).toString("utf8");
+      if (!connectionManager.isConnected(node.connection.id)) {
+        await connectionManager.connect(node.connection.id);
+      }
+      const columns = await schemaContext.getColumns(node.connection, node.table.schema, node.table.name);
+      const preview = buildTableImportPreview(node.connection.type, node.table.schema, node.table.name, columns, file.path, fileText);
+      await TableImportPanel.open(context, {
+        connectionName: node.connection.name,
+        databaseType: node.connection.type,
+        schema: node.table.schema,
+        table: node.table.name,
+        filePath: file.fsPath,
+        preview
+      }, async (mapping) => {
+        const data = buildTableImportData(file.path, fileText, mapping);
+        const statements = buildTableImportStatements(node.connection.type, node.table.schema, node.table.name, data);
+        await vscode27.window.withProgress({
+          location: vscode27.ProgressLocation.Notification,
+          title: `Importing ${data.rows.length.toLocaleString()} rows into ${qualifiedName(node.table.schema, node.table.name)}`,
+          cancellable: false
+        }, async (progress) => {
+          const driver = connectionManager.getDriver(node.connection.type);
+          for (const [index, sql] of statements.entries()) {
+            progress.report({ message: `Batch ${index + 1} of ${statements.length}` });
+            await driver.executeQuery({ connectionId: node.connection.id, sql });
+          }
+        });
+        void vscode27.window.showInformationMessage(`Imported ${data.rows.length.toLocaleString()} rows into ${qualifiedName(node.table.schema, node.table.name)}.`);
+        tree.refresh(node);
+        return { rowCount: data.rows.length };
+      });
+    } catch (error) {
+      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
-    const fileBytes = await vscode26.workspace.fs.readFile(file);
-    const fileText = Buffer.from(fileBytes).toString("utf8");
-    const columns = await schemaContext.getColumns(node.connection, node.table.schema, node.table.name);
-    const preview = buildTableImportPreview(node.table.schema, node.table.name, columns, file.path, fileText);
-    const summary = [
-      `-- Import source: ${file.fsPath}`,
-      `-- Source columns: ${preview.columns.join(", ")}`,
-      `-- Row count: ${preview.rowCount}`,
-      ...preview.mapping.map((item) => `-- ${item.source} -> ${item.target}`),
-      ...preview.warnings.map((warning) => `-- ${warning}`),
-      ""
-    ].join("\n");
-    await openSqlScript(`Import ${node.table.name}`, `${summary}${preview.sql}
-`, node.connection);
   });
   register("database.copyTableToConnection", async (node) => {
     if (!(node instanceof TableNode)) {
@@ -14048,7 +14579,7 @@ function activate(context) {
     if (!destination) {
       return;
     }
-    const targetSchema = await vscode26.window.showInputBox({
+    const targetSchema = await vscode27.window.showInputBox({
       title: "Target schema",
       prompt: "Schema to create the copied table in",
       value: destination.defaultSchema ?? sourceConnection.defaultSchema ?? node.table.schema,
@@ -14057,7 +14588,7 @@ function activate(context) {
     if (!targetSchema) {
       return;
     }
-    const targetTable = await vscode26.window.showInputBox({
+    const targetTable = await vscode27.window.showInputBox({
       title: "Target table",
       prompt: "Name of the copied table",
       value: `${node.table.name}_copy`,
@@ -14069,8 +14600,8 @@ function activate(context) {
     if (!connectionManager.isConnected(sourceConnection.id)) {
       await connectionManager.connect(sourceConnection.id);
     }
-    const [columns, sourceRows, sourceDdl] = await vscode26.window.withProgress({
-      location: vscode26.ProgressLocation.Notification,
+    const [columns, sourceRows, sourceDdl] = await vscode27.window.withProgress({
+      location: vscode27.ProgressLocation.Notification,
       title: `Copying ${qualifiedName(node.table.schema, node.table.name)}`,
       cancellable: false
     }, async () => Promise.all([
@@ -14110,7 +14641,7 @@ function activate(context) {
     await sqlDocumentConnections.set(doc.uri.toString(), connection.id);
     await connectionManager.setSelectedConnection(connection.id);
     results.setActiveConnection(connection.id);
-    updateSqlConnectionStatus(vscode26.window.activeTextEditor);
+    updateSqlConnectionStatus(vscode27.window.activeTextEditor);
     refreshQueryMap();
     sqlCodeLensRefresh.fire();
   }
@@ -14183,7 +14714,7 @@ where ${quoteIdentifier("id")} = '<id>';
     }
   });
   register("database.newObject", async (node) => {
-    const picked = await vscode26.window.showQuickPick([
+    const picked = await vscode27.window.showQuickPick([
       { label: "Query Console", command: "database.openSqlConsole" },
       { label: "Query File", command: "database.openQueryFile" },
       { label: "CREATE TABLE script", command: "database.newTable" },
@@ -14198,7 +14729,7 @@ where ${quoteIdentifier("id")} = '<id>';
       { label: "CREATE SEQUENCE script", command: "database.newSequence" }
     ], { placeHolder: "Generate database SQL script" });
     if (picked) {
-      await vscode26.commands.executeCommand(picked.command, node);
+      await vscode27.commands.executeCommand(picked.command, node);
     }
   });
   register("database.newTable", async (node) => openSqlScript("New Table", newObjectTemplate(node, "table"), schemaFromNode(node).connection));
@@ -14214,19 +14745,19 @@ where ${quoteIdentifier("id")} = '<id>';
   register("database.quickDocumentation", async (node) => {
     const docs = await quickDocumentation(connectionManager, node);
     if (docs) {
-      void vscode26.window.showInformationMessage(docs, { modal: true });
+      void vscode27.window.showInformationMessage(docs, { modal: true });
     }
   });
   register("database.showQueryHistory", async () => {
     const connection = connectionManager.getPreferredConnection();
-    const picked = await vscode26.window.showQuickPick(queryConsoleHistoryItems().filter((item) => !connection || item.connectionId === connection.id).map((item) => ({
+    const picked = await vscode27.window.showQuickPick(queryConsoleHistoryItems().filter((item) => !connection || item.connectionId === connection.id).map((item) => ({
       label: `${item.favorite ? "$(star-full) " : ""}${item.sql.replace(/\s+/g, " ").slice(0, 90)}`,
       description: `${item.status}${item.rowCount !== void 0 ? ` - ${item.rowCount} rows` : ""}`,
       detail: `${new Date(item.executedAt).toLocaleString()}${item.sourceFile ? ` - ${item.sourceFile}` : ""}`,
       item
     })), { placeHolder: "Query console history", matchOnDetail: true });
     if (picked) {
-      const action = await vscode26.window.showQuickPick([
+      const action = await vscode27.window.showQuickPick([
         { label: "Open in Console", action: "open" },
         { label: picked.item.favorite ? "Remove Favorite" : "Favorite", action: "favorite" },
         { label: "Copy SQL", action: "copy" },
@@ -14237,7 +14768,7 @@ where ${quoteIdentifier("id")} = '<id>';
       } else if (action?.action === "favorite") {
         await historyStore.update({ ...picked.item, favorite: !picked.item.favorite });
       } else if (action?.action === "copy") {
-        await vscode26.env.clipboard.writeText(picked.item.sql);
+        await vscode27.env.clipboard.writeText(picked.item.sql);
       } else if (action?.action === "delete") {
         await historyStore.delete(picked.item.id);
       }
@@ -14248,17 +14779,17 @@ where ${quoteIdentifier("id")} = '<id>';
   register("database.visualExplainSql", () => runVisualExplain(false));
   register("database.visualExplainAnalyzeSql", () => runVisualExplain(true));
   async function executeFromEditor(mode, options = {}) {
-    const editor = vscode26.window.activeTextEditor;
+    const editor = vscode27.window.activeTextEditor;
     if (!editor) {
       return;
     }
     const selectedDetections = mode === "file" ? [] : selectedSqlDetections(editor);
     let detections;
     if (mode === "file") {
-      detections = [{ sql: editor.document.getText(), range: new vscode26.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length)) }];
+      detections = [{ sql: editor.document.getText(), range: new vscode27.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length)) }];
     } else if (mode === "run") {
       const detected = sectionService.detectExecutable(editor.document, editor.selection);
-      detections = selectedDetections.length > 0 ? selectedDetections : detected ? [detected] : [{ sql: editor.document.getText(), range: new vscode26.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length)) }];
+      detections = selectedDetections.length > 0 ? selectedDetections : detected ? [detected] : [{ sql: editor.document.getText(), range: new vscode27.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length)) }];
     } else if (mode === "selection" || selectedDetections.length > 0) {
       detections = selectedDetections;
     } else {
@@ -14266,7 +14797,7 @@ where ${quoteIdentifier("id")} = '<id>';
       detections = detected ? [detected] : [];
     }
     if (!detections.some((detected) => detected.sql.trim())) {
-      void vscode26.window.showInformationMessage("No SQL section to run.");
+      void vscode27.window.showInformationMessage("No SQL section to run.");
       return;
     }
     const forceNewResultTab = detections.length > 1;
@@ -14277,15 +14808,15 @@ where ${quoteIdentifier("id")} = '<id>';
   async function compareResultTabs(sourceTab, resultSetIndex) {
     const sourceResultSet = sourceTab.resultSets[resultSetIndex] ?? sourceTab.resultSets[0];
     if (!sourceResultSet) {
-      void vscode26.window.showInformationMessage("This result tab does not contain rows to compare.");
+      void vscode27.window.showInformationMessage("This result tab does not contain rows to compare.");
       return;
     }
     const candidates = results.getTabs().filter((tab) => tab.id !== sourceTab.id && tab.resultSets.length > 0);
     if (!candidates.length) {
-      void vscode26.window.showInformationMessage("Open another result tab on the same connection to compare against.");
+      void vscode27.window.showInformationMessage("Open another result tab on the same connection to compare against.");
       return;
     }
-    const picked = await vscode26.window.showQuickPick(candidates.map((tab) => ({
+    const picked = await vscode27.window.showQuickPick(candidates.map((tab) => ({
       label: tab.customTitle ?? tab.title,
       description: `${tab.executionStatus}${tab.executionTimeMs !== void 0 ? ` - ${tab.executionTimeMs}ms` : ""}`,
       detail: `${tab.databaseName ?? "database"} \u2022 ${tab.resultSets[0]?.rowCount ?? 0} rows`,
@@ -14298,7 +14829,7 @@ where ${quoteIdentifier("id")} = '<id>';
     }
     const targetResultSet = picked.tab.resultSets[resultSetIndex] ?? picked.tab.resultSets[0];
     if (!targetResultSet) {
-      void vscode26.window.showInformationMessage("The selected comparison tab does not contain a matching result set.");
+      void vscode27.window.showInformationMessage("The selected comparison tab does not contain a matching result set.");
       return;
     }
     const report = compareResultSets(
@@ -14307,21 +14838,21 @@ where ${quoteIdentifier("id")} = '<id>';
       sourceTab.customTitle ?? sourceTab.title,
       picked.tab.customTitle ?? picked.tab.title
     );
-    const doc = await vscode26.workspace.openTextDocument({
+    const doc = await vscode27.workspace.openTextDocument({
       language: "markdown",
       content: formatResultSetDiffMarkdown(report)
     });
-    await vscode26.window.showTextDocument(doc, { preview: true, viewColumn: vscode26.ViewColumn.Beside });
+    await vscode27.window.showTextDocument(doc, { preview: true, viewColumn: vscode27.ViewColumn.Beside });
   }
   async function runVisualExplain(analyze) {
-    const editor = vscode26.window.activeTextEditor;
+    const editor = vscode27.window.activeTextEditor;
     if (!editor || editor.document.languageId !== "sql") {
-      void vscode26.window.showInformationMessage("Open a SQL editor before running Visual Explain.");
+      void vscode27.window.showInformationMessage("Open a SQL editor before running Visual Explain.");
       return;
     }
     const resolved = resolveConnectionForDocument(editor.document);
     if (resolved.isBound && !resolved.connection) {
-      void vscode26.window.showErrorMessage(`This SQL console is bound to a connection that no longer exists: ${resolved.boundConnectionId}`);
+      void vscode27.window.showErrorMessage(`This SQL console is bound to a connection that no longer exists: ${resolved.boundConnectionId}`);
       return;
     }
     const connection = resolved.connection ?? await connectionManager.pickConnection();
@@ -14329,7 +14860,7 @@ where ${quoteIdentifier("id")} = '<id>';
       return;
     }
     if (analyze) {
-      const answer = await vscode26.window.showWarningMessage(
+      const answer = await vscode27.window.showWarningMessage(
         "EXPLAIN ANALYZE executes the SQL to collect runtime timings.",
         { modal: true },
         "Run EXPLAIN ANALYZE"
@@ -14346,7 +14877,7 @@ where ${quoteIdentifier("id")} = '<id>';
     }
     const detected = selectedSqlDetections(editor)[0] ?? sectionService.detectExecutable(editor.document, editor.selection);
     if (!detected?.sql.trim()) {
-      void vscode26.window.showInformationMessage("No SQL section to explain.");
+      void vscode27.window.showInformationMessage("No SQL section to explain.");
       return;
     }
     const sourceSql = detected.sql;
@@ -14366,8 +14897,8 @@ where ${quoteIdentifier("id")} = '<id>';
       range: sourceRange
     }), { forceNew: true });
     try {
-      const plan = await vscode26.window.withProgress({
-        location: vscode26.ProgressLocation.Notification,
+      const plan = await vscode27.window.withProgress({
+        location: vscode27.ProgressLocation.Notification,
         title: `${analyze ? "Running EXPLAIN ANALYZE" : "Running EXPLAIN"} for ${connection.name}`,
         cancellable: false
       }, () => queryPlanAnalyzer.explain(connection, executableSql, { analyze }));
@@ -14398,7 +14929,7 @@ where ${quoteIdentifier("id")} = '<id>';
     }
   }
   async function executeActiveMultiStatementSelection(maxRows) {
-    const editor = vscode26.window.activeTextEditor;
+    const editor = vscode27.window.activeTextEditor;
     if (!editor || editor.document.languageId !== "sql") {
       return false;
     }
@@ -14455,10 +14986,10 @@ where ${quoteIdentifier("id")} = '<id>';
     diagnosticTimers.set(documentUri, timer);
   }
   async function showSqlMetadataStatus() {
-    const editor = vscode26.window.activeTextEditor;
+    const editor = vscode27.window.activeTextEditor;
     const connection = editor?.document.languageId === "sql" ? connectionForDocument(editor.document) : connectionManager.getPreferredConnection();
     if (!connection) {
-      void vscode26.window.showInformationMessage("No database connection is selected for this SQL editor.");
+      void vscode27.window.showInformationMessage("No database connection is selected for this SQL editor.");
       return;
     }
     const status2 = await schemaContext.metadataStatus(connection);
@@ -14493,20 +15024,20 @@ where ${quoteIdentifier("id")} = '<id>';
       `- Storage fallback: ${status2.storageError ? `in-memory only (${status2.storageError})` : "disk cache available"}`,
       ""
     ].join("\n");
-    const doc = await vscode26.workspace.openTextDocument({ language: "markdown", content });
-    await vscode26.window.showTextDocument(doc, { preview: true, viewColumn: vscode26.ViewColumn.Beside });
+    const doc = await vscode27.workspace.openTextDocument({ language: "markdown", content });
+    await vscode27.window.showTextDocument(doc, { preview: true, viewColumn: vscode27.ViewColumn.Beside });
   }
   async function warmSqlMetadata(connection, surface) {
     try {
       await connectAndRefreshSqlMetadata(connectionManager, schemaContext, connection);
     } catch (error) {
-      void vscode26.window.showWarningMessage(`${surface} is bound to ${connection.name}, but metadata refresh could not connect: ${error instanceof Error ? error.message : String(error)}`);
+      void vscode27.window.showWarningMessage(`${surface} is bound to ${connection.name}, but metadata refresh could not connect: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   async function setSqlFileConnection(resource) {
     const document = await sqlDocumentFromArg(resource);
     if (!document) {
-      void vscode26.window.showInformationMessage("Open a SQL file before selecting a database connection.");
+      void vscode27.window.showInformationMessage("Open a SQL file before selecting a database connection.");
       return;
     }
     const connection = await connectionManager.pickConnection();
@@ -14520,18 +15051,18 @@ where ${quoteIdentifier("id")} = '<id>';
         await connectionManager.connect(connection.id);
       }
     } catch (error) {
-      void vscode26.window.showWarningMessage(`SQL file is bound to ${connection.name}, but connection failed: ${error instanceof Error ? error.message : String(error)}`);
+      void vscode27.window.showWarningMessage(`SQL file is bound to ${connection.name}, but connection failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     schemaContext.invalidate(connection.id);
     schemaContext.refreshDefaultSchemaInBackground(connection);
     results.setActiveConnection(connection.id);
-    updateSqlConnectionStatus(vscode26.window.activeTextEditor);
-    updateSqlDiagnostics(document, vscode26.window.activeTextEditor?.document.uri.toString() === document.uri.toString() ? vscode26.window.activeTextEditor.selection : void 0);
+    updateSqlConnectionStatus(vscode27.window.activeTextEditor);
+    updateSqlDiagnostics(document, vscode27.window.activeTextEditor?.document.uri.toString() === document.uri.toString() ? vscode27.window.activeTextEditor.selection : void 0);
     refreshQueryMap();
     sqlCodeLensRefresh.fire();
   }
   async function sqlDocumentFromArg(resource) {
-    const document = resource instanceof vscode26.Uri ? await vscode26.workspace.openTextDocument(resource) : vscode26.window.activeTextEditor?.document;
+    const document = resource instanceof vscode27.Uri ? await vscode27.workspace.openTextDocument(resource) : vscode27.window.activeTextEditor?.document;
     if (!document) {
       return void 0;
     }
@@ -14541,7 +15072,7 @@ where ${quoteIdentifier("id")} = '<id>';
   async function executeDetected(editor, detected, options = {}) {
     const resolved = resolveConnectionForDocument(editor.document);
     if (resolved.isBound && !resolved.connection) {
-      void vscode26.window.showErrorMessage(`This SQL console is bound to a connection that no longer exists: ${resolved.boundConnectionId}`);
+      void vscode27.window.showErrorMessage(`This SQL console is bound to a connection that no longer exists: ${resolved.boundConnectionId}`);
       return;
     }
     const connection = resolved.connection ?? await connectionManager.pickConnection();
@@ -14559,7 +15090,7 @@ where ${quoteIdentifier("id")} = '<id>';
     if (executableSql === void 0) {
       return;
     }
-    const decoration = vscode26.window.createTextEditorDecorationType({ backgroundColor: new vscode26.ThemeColor("editor.findMatchHighlightBackground") });
+    const decoration = vscode27.window.createTextEditorDecorationType({ backgroundColor: new vscode27.ThemeColor("editor.findMatchHighlightBackground") });
     editor.setDecorations(decoration, [detected.range]);
     let endDocumentExecution;
     let runningTabId;
@@ -14712,13 +15243,13 @@ where ${quoteIdentifier("id")} = '<id>';
   }
   async function runAi(action) {
     if (!await aiAdapter.isAvailable()) {
-      void vscode26.window.showInformationMessage("AI SQL actions need a VS Code language model provider or configured database.ai.openAiCompatible settings.");
+      void vscode27.window.showInformationMessage("AI SQL actions need a VS Code language model provider or configured database.ai.openAiCompatible settings.");
       return;
     }
-    const editor = vscode26.window.activeTextEditor;
+    const editor = vscode27.window.activeTextEditor;
     const connection = editor ? connectionForDocument(editor.document) : void 0;
     if (!editor || !connection) {
-      void vscode26.window.showInformationMessage("Open a SQL editor and select a connection first.");
+      void vscode27.window.showInformationMessage("Open a SQL editor and select a connection first.");
       return;
     }
     const section = sectionService.detect(editor.document, editor.selection);
@@ -14738,22 +15269,22 @@ where ${quoteIdentifier("id")} = '<id>';
         }))
       }
     });
-    const doc = await vscode26.workspace.openTextDocument({ language: "sql", content: `${sql}
+    const doc = await vscode27.workspace.openTextDocument({ language: "sql", content: `${sql}
 ` });
-    await vscode26.window.showTextDocument(doc, { preview: true, viewColumn: vscode26.ViewColumn.Beside });
+    await vscode27.window.showTextDocument(doc, { preview: true, viewColumn: vscode27.ViewColumn.Beside });
   }
   async function openHistoryItem(item) {
     if (item.documentUri) {
       try {
-        const doc2 = await vscode26.workspace.openTextDocument(vscode26.Uri.parse(item.documentUri));
-        const editor2 = await vscode26.window.showTextDocument(doc2, { preview: false });
+        const doc2 = await vscode27.workspace.openTextDocument(vscode27.Uri.parse(item.documentUri));
+        const editor2 = await vscode27.window.showTextDocument(doc2, { preview: false });
         const currentText = doc2.getText();
         if (item.sourceRange && currentText.includes(item.sql.trim())) {
           const range = rangeFromPlain2(item.sourceRange);
-          editor2.selection = new vscode26.Selection(range.start, range.end);
+          editor2.selection = new vscode27.Selection(range.start, range.end);
           editor2.revealRange(range);
         } else {
-          const fullRange = new vscode26.Range(doc2.positionAt(0), doc2.positionAt(currentText.length));
+          const fullRange = new vscode27.Range(doc2.positionAt(0), doc2.positionAt(currentText.length));
           await editor2.edit((edit) => edit.replace(fullRange, `${item.sql}
 `));
         }
@@ -14765,7 +15296,7 @@ where ${quoteIdentifier("id")} = '<id>';
     }
     const doc = await consoleStore.openOrCreate(connectionManager.getConnection(item.connectionId), `${item.sql}
 `, { reuse: false });
-    const editor = await vscode26.window.showTextDocument(doc, { preview: false });
+    const editor = await vscode27.window.showTextDocument(doc, { preview: false });
     results.setActiveConnection(item.connectionId);
     refreshQueryMap();
   }
@@ -14774,7 +15305,7 @@ where ${quoteIdentifier("id")} = '<id>';
       return;
     }
     await highlighter.reveal(tab.sourceDocumentUri, tab.sourceRange, tab.queryText);
-    const editor = vscode26.window.activeTextEditor;
+    const editor = vscode27.window.activeTextEditor;
     queryMap.updateFromEditor(editor?.document.uri.toString() === tab.sourceDocumentUri ? editor : void 0);
   }
 }
@@ -14796,7 +15327,7 @@ function trimSelection(document, selection) {
   const trailing = text.match(/\s*$/)?.[0].length ?? 0;
   const startOffset = document.offsetAt(selection.start) + leading;
   const endOffset = document.offsetAt(selection.end) - trailing;
-  return new vscode26.Range(document.positionAt(startOffset), document.positionAt(Math.max(startOffset, endOffset)));
+  return new vscode27.Range(document.positionAt(startOffset), document.positionAt(Math.max(startOffset, endOffset)));
 }
 function compareRanges(a, b) {
   return a.start.compareTo(b.start) || a.end.compareTo(b.end);
@@ -14876,11 +15407,11 @@ function registerSqlCompletions(connectionManager, schemaContext, sectionService
     "having",
     "union all"
   ];
-  return vscode26.languages.registerCompletionItemProvider("sql", {
+  return vscode27.languages.registerCompletionItemProvider("sql", {
     async provideCompletionItems(document, position) {
       const linePrefix = document.lineAt(position).text.slice(0, position.character);
       const items = keywords.map((keyword) => {
-        const item = new vscode26.CompletionItem(keyword, vscode26.CompletionItemKind.Keyword);
+        const item = new vscode27.CompletionItem(keyword, vscode27.CompletionItemKind.Keyword);
         item.insertText = keyword;
         return item;
       });
@@ -14906,8 +15437,8 @@ async function getMetadataCompletionItems(connectionManager, schemaContext, sect
   if (connectionManager.isConnected(config.id)) {
     schemaContext.refreshDefaultSchemaInBackground(config);
   }
-  const section = sectionService.detect(document, new vscode26.Selection(position, position));
-  const statementPrefix = section ? document.getText(new vscode26.Range(section.range.start, position)) : linePrefix;
+  const section = sectionService.detect(document, new vscode27.Selection(position, position));
+  const statementPrefix = section ? document.getText(new vscode27.Range(section.range.start, position)) : linePrefix;
   const relationContext = relationCompletionContext(linePrefix);
   if (relationContext?.schema) {
     const entry2 = await schemaContext.getCachedForConnection(config, defaultSchema);
@@ -14915,7 +15446,7 @@ async function getMetadataCompletionItems(connectionManager, schemaContext, sect
       return [];
     }
     return relationCompletionCandidates(entry2, relationContext).slice(0, 300).map((relation) => {
-      const item = new vscode26.CompletionItem(relation.name, vscode26.CompletionItemKind.Struct);
+      const item = new vscode27.CompletionItem(relation.name, vscode27.CompletionItemKind.Struct);
       item.detail = `${relation.schema}.${relation.name}`;
       item.insertText = relation.name;
       return item;
@@ -14932,7 +15463,7 @@ async function getMetadataCompletionItems(connectionManager, schemaContext, sect
       return [];
     }
     return columns.slice(0, 300).map((column) => {
-      const item = new vscode26.CompletionItem(column.name, vscode26.CompletionItemKind.Field);
+      const item = new vscode27.CompletionItem(column.name, vscode27.CompletionItemKind.Field);
       item.detail = column.dataType;
       item.insertText = column.name;
       return item;
@@ -14947,10 +15478,10 @@ async function getMetadataCompletionItems(connectionManager, schemaContext, sect
   }
   const items = [];
   for (const schema of entry.schemas.slice(0, 30)) {
-    items.push(new vscode26.CompletionItem(schema.name, vscode26.CompletionItemKind.Module));
+    items.push(new vscode27.CompletionItem(schema.name, vscode27.CompletionItemKind.Module));
   }
   for (const table of [...entry.tables, ...entry.views].slice(0, 300)) {
-    const tableItem = new vscode26.CompletionItem(table.name, vscode26.CompletionItemKind.Struct);
+    const tableItem = new vscode27.CompletionItem(table.name, vscode27.CompletionItemKind.Struct);
     tableItem.detail = `${table.schema}.${table.name}`;
     tableItem.insertText = table.name;
     items.push(tableItem);
@@ -14965,7 +15496,7 @@ async function getSectionColumnCompletionItems(schemaContext, config, tables, de
       if (items.some((item2) => item2.label === column.name)) {
         continue;
       }
-      const item = new vscode26.CompletionItem(column.name, vscode26.CompletionItemKind.Field);
+      const item = new vscode27.CompletionItem(column.name, vscode27.CompletionItemKind.Field);
       item.detail = `${table.schema ?? defaultSchema}.${table.table} ${column.dataType}`;
       item.insertText = column.name;
       items.push(item);
@@ -14979,28 +15510,28 @@ async function showFirstSchemaCompletionMessage(context, connection) {
     return;
   }
   await context.globalState.update(key, true);
-  void vscode26.window.showInformationMessage(`Schema-backed SQL completions are ready for ${connection.name}.`);
+  void vscode27.window.showInformationMessage(`Schema-backed SQL completions are ready for ${connection.name}.`);
 }
 function filterMetadataItems(items, linePrefix) {
   if (/\b(from|join|update|into)\s+[\w"]*$/i.test(linePrefix) || /\.$/.test(linePrefix)) {
     return items;
   }
-  return items.filter((item) => item.kind === vscode26.CompletionItemKind.Keyword);
+  return items.filter((item) => item.kind === vscode27.CompletionItemKind.Keyword);
 }
 function registerSqlConnectionCodeLens(connectionLensTitle, sectionService, refreshEvent) {
-  const emitter = new vscode26.EventEmitter();
-  const documentEvents = vscode26.workspace.onDidChangeTextDocument((event) => {
+  const emitter = new vscode27.EventEmitter();
+  const documentEvents = vscode27.workspace.onDidChangeTextDocument((event) => {
     if (event.document.languageId === "sql") {
       emitter.fire();
     }
   });
   const refreshEvents = refreshEvent?.(() => emitter.fire());
-  const provider = vscode26.languages.registerCodeLensProvider("sql", {
+  const provider = vscode27.languages.registerCodeLensProvider("sql", {
     onDidChangeCodeLenses: emitter.event,
     provideCodeLenses(document) {
-      const top = new vscode26.Range(0, 0, 0, 0);
+      const top = new vscode27.Range(0, 0, 0, 0);
       const lenses = [
-        new vscode26.CodeLens(top, {
+        new vscode27.CodeLens(top, {
           title: connectionLensTitle(document),
           tooltip: "Select the database connection for this SQL file",
           command: "database.setSqlFileConnection",
@@ -15011,8 +15542,8 @@ function registerSqlConnectionCodeLens(connectionLensTitle, sectionService, refr
         if (!section.sql.trim()) {
           continue;
         }
-        const range = new vscode26.Range(section.range.start, section.range.start);
-        lenses.push(new vscode26.CodeLens(range, {
+        const range = new vscode27.Range(section.range.start, section.range.start);
+        lenses.push(new vscode27.CodeLens(range, {
           title: "$(play) Execute SQL Section",
           tooltip: "Run this SQL section.",
           command: "database.executeStatementRange",
@@ -15028,7 +15559,7 @@ function registerSqlConnectionCodeLens(connectionLensTitle, sectionService, refr
       return lenses;
     }
   });
-  return refreshEvents ? vscode26.Disposable.from(documentEvents, refreshEvents, provider, emitter) : vscode26.Disposable.from(documentEvents, provider, emitter);
+  return refreshEvents ? vscode27.Disposable.from(documentEvents, refreshEvents, provider, emitter) : vscode27.Disposable.from(documentEvents, provider, emitter);
 }
 function stripQuotes3(value) {
   return value.replace(/^"|"$/g, "");
@@ -15045,20 +15576,20 @@ function rangeToPlain(range) {
   };
 }
 async function openSqlEditor(connectionManager, title, content = "", connection = connectionManager.getPreferredConnection()) {
-  const uri = vscode26.Uri.parse(`untitled:${title}${connection ? ` - ${connection.name}` : ""}.sql`);
-  const doc = await vscode26.workspace.openTextDocument(uri);
-  const editor = await vscode26.window.showTextDocument(doc, {
-    viewColumn: vscode26.ViewColumn.Active,
+  const uri = vscode27.Uri.parse(`untitled:${title}${connection ? ` - ${connection.name}` : ""}.sql`);
+  const doc = await vscode27.workspace.openTextDocument(uri);
+  const editor = await vscode27.window.showTextDocument(doc, {
+    viewColumn: vscode27.ViewColumn.Active,
     preview: false
   });
-  await vscode26.languages.setTextDocumentLanguage(doc, "sql");
+  await vscode27.languages.setTextDocumentLanguage(doc, "sql");
   if (content && doc.getText().length === 0) {
-    await editor.edit((edit) => edit.insert(new vscode26.Position(0, 0), content));
+    await editor.edit((edit) => edit.insert(new vscode27.Position(0, 0), content));
   }
   return doc;
 }
 function configuredDefaultMaxRows() {
-  const maxRows = vscode26.workspace.getConfiguration("database").get("defaultMaxRows", 500);
+  const maxRows = vscode27.workspace.getConfiguration("database").get("defaultMaxRows", 500);
   return Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : void 0;
 }
 function objectName(node) {
@@ -15136,10 +15667,10 @@ function tableLikeTarget(node) {
 async function pickDestinationConnection(connectionManager, sourceConnectionId) {
   const connections = connectionManager.getConnections().filter((connection) => connection.id !== sourceConnectionId);
   if (!connections.length) {
-    void vscode26.window.showInformationMessage("Add another database connection before copying a table.");
+    void vscode27.window.showInformationMessage("Add another database connection before copying a table.");
     return void 0;
   }
-  const picked = await vscode26.window.showQuickPick(connections.map((connection) => ({
+  const picked = await vscode27.window.showQuickPick(connections.map((connection) => ({
     label: connection.name,
     description: `${connection.type}${connection.production ? " - prod" : ""}`,
     detail: `${connection.username}@${connection.host}:${connection.port}/${connection.database}`,

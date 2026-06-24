@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTableImportPreview } from '../src/services/tableImportService';
+import { buildTableImportData, buildTableImportPreview, buildTableImportStatements } from '../src/services/tableImportService';
 import { ColumnInfo } from '../src/types';
 
 const columns: ColumnInfo[] = [
@@ -9,26 +9,50 @@ const columns: ColumnInfo[] = [
 ];
 
 describe('tableImportService', () => {
-  it('builds batched insert SQL from CSV input', () => {
-    const preview = buildTableImportPreview('public', 'users', columns, 'users.csv', 'id,name,active\n1,Ada,true\n2,Ben,false\n');
+  it('builds an editable import preview from CSV input', () => {
+    const preview = buildTableImportPreview('postgres', 'public', 'users', columns, 'users.csv', 'id,name,active\n1,Ada,true\n2,Ben,false\n');
 
     expect(preview.rowCount).toBe(2);
+    expect(preview.sourceColumns).toEqual(['id', 'name', 'active']);
     expect(preview.mapping).toEqual([
-      { source: 'id', target: 'id' },
-      { source: 'name', target: 'name' },
-      { source: 'active', target: 'active' }
+      { source: 'id', target: 'id', targetType: 'integer', auto: true },
+      { source: 'name', target: 'name', targetType: 'text', auto: true },
+      { source: 'active', target: 'active', targetType: 'boolean', auto: true }
     ]);
-    expect(preview.sql).toContain('insert into "public"."users" ("id", "name", "active")');
-    expect(preview.sql).toContain('(1, \'Ada\', true)');
-    expect(preview.sql).toContain('(2, \'Ben\', false)');
+    expect(preview.sampleRows).toEqual([
+      { id: 1, name: 'Ada', active: true },
+      { id: 2, name: 'Ben', active: false }
+    ]);
   });
 
-  it('builds batched insert SQL from JSON input', () => {
-    const preview = buildTableImportPreview('public', 'users', columns, 'users.json', JSON.stringify([
+  it('builds an editable import preview from JSON input', () => {
+    const preview = buildTableImportPreview('postgres', 'public', 'users', columns, 'users.json', JSON.stringify([
       { id: 10, name: 'Ava', active: true }
     ]));
 
     expect(preview.rowCount).toBe(1);
-    expect(preview.sql).toContain('(10, \'Ava\', true)');
+    expect(preview.sampleRows).toEqual([{ id: 10, name: 'Ava', active: true }]);
+  });
+
+  it('materializes rows with a manual mapping', () => {
+    const data = buildTableImportData('users.csv', 'user_id,full_name\n1,Ada\n', [
+      { source: 'user_id', target: 'id' },
+      { source: 'full_name', target: 'name' },
+      { source: null, target: 'active' }
+    ]);
+
+    expect(data).toEqual({
+      columns: ['id', 'name'],
+      rows: [{ id: 1, name: 'Ada' }]
+    });
+  });
+
+  it('uses destination database syntax for direct import batches', () => {
+    const preview = buildTableImportPreview('mysql', 'app', 'users', columns, 'users.csv', 'id,name,active\n1,Ada,true\n');
+    const data = buildTableImportData('users.csv', 'id,name,active\n1,Ada,true\n', preview.mapping);
+    const [sql] = buildTableImportStatements('mysql', 'app', 'users', data);
+
+    expect(sql).toContain('insert into `app`.`users` (`id`, `name`, `active`)');
+    expect(sql).toContain("(1, 'Ada', true)");
   });
 });

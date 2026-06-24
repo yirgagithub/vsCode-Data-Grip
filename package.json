@@ -2,7 +2,7 @@
   "name": "vscode-data-grip",
   "displayName": "Data Grip",
   "description": "A VS Code database client for PostgreSQL, Redshift, and MySQL.",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "publisher": "vs-code-database-client",
   "icon": "media/icon.png",
   "repository": {
