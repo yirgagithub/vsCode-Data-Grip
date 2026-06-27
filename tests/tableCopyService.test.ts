@@ -37,6 +37,23 @@ describe('table copy service', () => {
     expect(preview.sql).not.toContain('insert into "archive"."empty_table_copy"');
     expect(preview.warnings).toContain('No data rows were found; only the table structure will be copied.');
   });
+
+  it('uses destination database syntax for copy scripts', () => {
+    const preview = buildTableCopyPreview(
+      'public',
+      'orders',
+      'archive',
+      'orders_copy',
+      columns(),
+      [{ id: 1, status: 'new' }],
+      'source',
+      'target',
+      'mysql'
+    );
+
+    expect(preview.sql).toContain('create table `archive`.`orders_copy`');
+    expect(preview.sql).toContain('insert into `archive`.`orders_copy` (`id`, `status`)');
+  });
 });
 
 function columns(): ColumnInfo[] {

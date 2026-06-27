@@ -33,6 +33,7 @@ import { QueryPlanAnalyzerService } from './services/queryPlanAnalyzerService';
 import { compareResultSets, formatResultSetDiffMarkdown } from './services/resultSetDiffService';
 import { compareSchemas, formatSchemaDiffMarkdown } from './services/schemaDiffService';
 import { querySnippets } from './services/querySnippetService';
+import { addColumnSql, createSchemaSql, deleteTemplateSql, dropObjectSql, insertTemplateSql, NewObjectKind, newObjectSql, qualifiedSqlName, quoteSqlIdentifier, renameObjectSql, selectAllTableSql, selectTableSql, updateTemplateSql } from './services/sqlDialect';
 import { formatSqlText, sqlFormatterDialect } from './services/sqlFormattingService';
 import { buildTableCopyPreview } from './services/tableCopyService';
 import { buildTableImportData, buildTableImportPreview, buildTableImportStatements } from './services/tableImportService';
@@ -1024,6 +1025,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const report = compareSchemas({
       sourceConnectionName: source.connection.name,
       targetConnectionName: targetConnection.name,
+      targetDatabaseType: targetConnection.type,
       sourceSchema: snapshotFromSchemaEntry(sourceSchema),
       targetSchema: snapshotFromSchemaEntry(targetSchema)
     });
@@ -1138,8 +1140,14 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     const sourceConnection = node.connection;
+    if (!canGenerateSqlScript(sourceConnection, 'Copy table')) {
+      return;
+    }
     const destination = await pickDestinationConnection(connectionManager, sourceConnection.id);
     if (!destination) {
+      return;
+    }
+    if (!canGenerateSqlScript(destination, 'Copy table')) {
       return;
     }
     const targetSchema = await vscode.window.showInputBox({
@@ -1163,37 +1171,42 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!connectionManager.isConnected(sourceConnection.id)) {
       await connectionManager.connect(sourceConnection.id);
     }
-    const [columns, sourceRows, sourceDdl] = await vscode.window.withProgress({
-      location: vscode.ProgressLocation.Notification,
-      title: `Copying ${qualifiedName(node.table.schema, node.table.name)}`,
-      cancellable: false
-    }, async () => Promise.all([
-      schemaContext.getColumns(sourceConnection, node.table.schema, node.table.name),
-      connectionManager.getDriver(sourceConnection.type).executeQuery({
-        connectionId: sourceConnection.id,
-        sql: `select * from ${qualifiedName(node.table.schema, node.table.name)}`
-      }),
-      connectionManager.getDriver(sourceConnection.type).getTableDDL(sourceConnection.id, node.table.schema, node.table.name)
-    ]));
-    const preview = buildTableCopyPreview(
-      node.table.schema,
-      node.table.name,
-      targetSchema.trim(),
-      targetTable.trim(),
-      columns,
-      sourceRows.rows,
-      sourceConnection.name,
-      destination.name
-    );
-    const header = [
-      `-- Source connection: ${sourceConnection.name}`,
-      `-- Destination connection: ${destination.name}`,
-      `-- Source table: ${qualifiedName(node.table.schema, node.table.name)}`,
-      `-- Source DDL:`,
-      ...sourceDdl.trim().split('\n').map((line) => `-- ${line}`),
-      ''
-    ].join('\n');
-    await openSqlScript(`Copy ${node.table.name} to ${destination.name}`, `${header}${preview.sql}\n`, destination);
+    try {
+      const [columns, sourceRows, sourceDdl] = await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: `Copying ${qualifiedName(node.table.schema, node.table.name)}`,
+        cancellable: false
+      }, async () => Promise.all([
+        schemaContext.getColumns(sourceConnection, node.table.schema, node.table.name),
+        connectionManager.getDriver(sourceConnection.type).executeQuery({
+          connectionId: sourceConnection.id,
+          sql: selectAllTableSql(sourceConnection.type, node.table.schema, node.table.name)
+        }),
+        connectionManager.getDriver(sourceConnection.type).getTableDDL(sourceConnection.id, node.table.schema, node.table.name)
+      ]));
+      const preview = buildTableCopyPreview(
+        node.table.schema,
+        node.table.name,
+        targetSchema.trim(),
+        targetTable.trim(),
+        columns,
+        sourceRows.rows,
+        sourceConnection.name,
+        destination.name,
+        destination.type
+      );
+      const header = [
+        `-- Source connection: ${sourceConnection.name}`,
+        `-- Destination connection: ${destination.name}`,
+        `-- Source table: ${qualifiedName(node.table.schema, node.table.name)}`,
+        `-- Source DDL:`,
+        ...sourceDdl.trim().split('\n').map((line) => `-- ${line}`),
+        ''
+      ].join('\n');
+      await openSqlScript(`Copy ${node.table.name} to ${destination.name}`, `${header}${preview.sql}\n`, destination);
+    } catch (error) {
+      void vscode.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+    }
   });
 
   async function openSqlScript(title: string, content: string, connection?: ConnectionConfig): Promise<void> {
@@ -1209,17 +1222,37 @@ export function activate(context: vscode.ExtensionContext): void {
     sqlCodeLensRefresh.fire();
   }
 
+  async function openGeneratedObjectScript(title: string, node: unknown, kind: NewObjectKind): Promise<void> {
+    const target = schemaFromNode(node);
+    if (!target.connection) {
+      return;
+    }
+    try {
+      await openSqlScript(title, newObjectTemplate(node, kind), target.connection);
+    } catch (error) {
+      void vscode.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   register('database.showObjectDdl', async (node?: unknown) => {
-    const sql = await objectDdl(connectionManager, node);
-    if (sql) {
-      await openSqlScript(`${objectName(node) ?? 'Object'} DDL`, `${sql}\n`, schemaFromNode(node).connection);
+    try {
+      const sql = await objectDdl(connectionManager, node);
+      if (sql) {
+        await openSqlScript(`${objectName(node) ?? 'Object'} DDL`, `${sql}\n`, schemaFromNode(node).connection);
+      }
+    } catch (error) {
+      void vscode.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
   });
 
   register('database.generateSelect', async (node?: unknown) => {
     const target = tableLikeTarget(node);
     if (target) {
-      await openSqlScript(`SELECT ${target.name}`, `select *\nfrom ${qualifiedName(target.schema, target.name)}\nlimit 100;\n`, target.connection);
+      try {
+        await openSqlScript(`SELECT ${target.name}`, selectTableSql(target.connection.type, target.schema, target.name, 100), target.connection);
+      } catch (error) {
+        void vscode.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+      }
     }
   });
 
@@ -1229,11 +1262,11 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     const columns = await connectionManager.getDriver(target.connection.type).getColumns(target.connection.id, target.schema, target.name);
-    const writable = columns.filter((column) => !column.defaultValue).map((column) => quoteIdentifier(column.name));
-    const sql = writable.length
-      ? `insert into ${qualifiedName(target.schema, target.name)} (${writable.join(', ')})\nvalues (${writable.map(() => 'null').join(', ')});\n`
-      : `insert into ${qualifiedName(target.schema, target.name)}\ndefault values;\n`;
-    await openSqlScript(`INSERT ${target.name}`, sql, target.connection);
+    try {
+      await openSqlScript(`INSERT ${target.name}`, insertTemplateSql(target.connection.type, target.schema, target.name, columns), target.connection);
+    } catch (error) {
+      void vscode.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+    }
   });
 
   register('database.generateUpdate', async (node?: unknown) => {
@@ -1241,34 +1274,54 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!target) {
       return;
     }
-    await openSqlScript(`UPDATE ${target.name}`, `update ${qualifiedName(target.schema, target.name)}\nset ${quoteIdentifier('column_name')} = null\nwhere ${quoteIdentifier('id')} = '<id>';\n`, target.connection);
+    try {
+      await openSqlScript(`UPDATE ${target.name}`, updateTemplateSql(target.connection.type, target.schema, target.name), target.connection);
+    } catch (error) {
+      void vscode.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+    }
   });
 
   register('database.generateDelete', async (node?: unknown) => {
     const target = tableLikeTarget(node);
     if (target) {
-      await openSqlScript(`DELETE ${target.name}`, `delete from ${qualifiedName(target.schema, target.name)}\nwhere ${quoteIdentifier('id')} = '<id>';\n`, target.connection);
+      try {
+        await openSqlScript(`DELETE ${target.name}`, deleteTemplateSql(target.connection.type, target.schema, target.name), target.connection);
+      } catch (error) {
+        void vscode.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+      }
     }
   });
 
   register('database.modifyTable', async (node?: unknown) => {
     const target = tableLikeTarget(node);
     if (target) {
-      await openSqlScript(`ALTER ${target.name}`, `alter table ${qualifiedName(target.schema, target.name)}\n  add column ${quoteIdentifier('new_column')} text;\n`, target.connection);
+      try {
+        await openSqlScript(`ALTER ${target.name}`, addColumnSql(target.connection.type, target.schema, target.name), target.connection);
+      } catch (error) {
+        void vscode.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+      }
     }
   });
 
   register('database.renameObject', async (node?: unknown) => {
-    const sql = renameTemplate(node);
-    if (sql) {
-      await openSqlScript(`Rename ${objectName(node)}`, sql, schemaFromNode(node).connection);
+    try {
+      const sql = renameTemplate(node);
+      if (sql) {
+        await openSqlScript(`Rename ${objectName(node)}`, sql, schemaFromNode(node).connection);
+      }
+    } catch (error) {
+      void vscode.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
   });
 
   register('database.dropObject', async (node?: unknown) => {
-    const sql = dropTemplate(node);
-    if (sql) {
-      await openSqlScript(`Drop ${objectName(node)}`, sql, schemaFromNode(node).connection);
+    try {
+      const sql = dropTemplate(node);
+      if (sql) {
+        await openSqlScript(`Drop ${objectName(node)}`, sql, schemaFromNode(node).connection);
+      }
+    } catch (error) {
+      void vscode.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
   });
 
@@ -1292,16 +1345,16 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
-  register('database.newTable', async (node?: unknown) => openSqlScript('New Table', newObjectTemplate(node, 'table'), schemaFromNode(node).connection));
-  register('database.newView', async (node?: unknown) => openSqlScript('New View', newObjectTemplate(node, 'view'), schemaFromNode(node).connection));
-  register('database.newMaterializedView', async (node?: unknown) => openSqlScript('New Materialized View', newObjectTemplate(node, 'materialized_view'), schemaFromNode(node).connection));
-  register('database.newColumn', async (node?: unknown) => openSqlScript('New Column', newObjectTemplate(node, 'column'), schemaFromNode(node).connection));
-  register('database.newIndex', async (node?: unknown) => openSqlScript('New Index', newObjectTemplate(node, 'index'), schemaFromNode(node).connection));
-  register('database.newUniqueKey', async (node?: unknown) => openSqlScript('New Unique Key', newObjectTemplate(node, 'unique_key'), schemaFromNode(node).connection));
-  register('database.newForeignKey', async (node?: unknown) => openSqlScript('New Foreign Key', newObjectTemplate(node, 'foreign_key'), schemaFromNode(node).connection));
-  register('database.newCheck', async (node?: unknown) => openSqlScript('New Check', newObjectTemplate(node, 'check'), schemaFromNode(node).connection));
-  register('database.newSchema', async (node?: unknown) => openSqlScript('New Schema', newObjectTemplate(node, 'schema'), schemaFromNode(node).connection));
-  register('database.newSequence', async (node?: unknown) => openSqlScript('New Sequence', newObjectTemplate(node, 'sequence'), schemaFromNode(node).connection));
+  register('database.newTable', async (node?: unknown) => openGeneratedObjectScript('New Table', node, 'table'));
+  register('database.newView', async (node?: unknown) => openGeneratedObjectScript('New View', node, 'view'));
+  register('database.newMaterializedView', async (node?: unknown) => openGeneratedObjectScript('New Materialized View', node, 'materialized_view'));
+  register('database.newColumn', async (node?: unknown) => openGeneratedObjectScript('New Column', node, 'column'));
+  register('database.newIndex', async (node?: unknown) => openGeneratedObjectScript('New Index', node, 'index'));
+  register('database.newUniqueKey', async (node?: unknown) => openGeneratedObjectScript('New Unique Key', node, 'unique_key'));
+  register('database.newForeignKey', async (node?: unknown) => openGeneratedObjectScript('New Foreign Key', node, 'foreign_key'));
+  register('database.newCheck', async (node?: unknown) => openGeneratedObjectScript('New Check', node, 'check'));
+  register('database.newSchema', async (node?: unknown) => openGeneratedObjectScript('New Schema', node, 'schema'));
+  register('database.newSequence', async (node?: unknown) => openGeneratedObjectScript('New Sequence', node, 'sequence'));
 
   register('database.quickDocumentation', async (node?: unknown) => {
     const docs = await quickDocumentation(connectionManager, node);
@@ -2310,30 +2363,38 @@ function objectName(node: unknown): string | undefined {
 
 function qualifiedObjectName(node: unknown): string | undefined {
   if (node instanceof SchemaNode) {
-    return quoteIdentifier(node.schema.name);
+    return logicalIdentifier(node.connection, node.schema.name);
   }
   if (node instanceof FolderNode && node.tableName) {
-    return qualifiedName(node.schema, node.tableName);
+    return logicalQualifiedName(node.connection, node.schema, node.tableName);
   }
   if (node instanceof TableNode) {
-    return qualifiedName(node.table.schema, node.table.name);
+    return logicalQualifiedName(node.connection, node.table.schema, node.table.name);
   }
   if (node instanceof ViewNode) {
-    return qualifiedName(node.view.schema, node.view.name);
+    return logicalQualifiedName(node.connection, node.view.schema, node.view.name);
   }
   if (node instanceof RoutineNode) {
-    return qualifiedName(node.routine.schema, node.routine.name);
+    return logicalQualifiedName(node.connection, node.routine.schema, node.routine.name);
   }
   if (node instanceof TriggerNode) {
-    return qualifiedName(node.trigger.schema, node.trigger.table) + '.' + quoteIdentifier(node.trigger.name);
+    return `${logicalQualifiedName(node.connection, node.trigger.schema, node.trigger.table)}.${logicalIdentifier(node.connection, node.trigger.name)}`;
   }
   if (node instanceof ColumnNode) {
-    return `${qualifiedName(node.column.schema, node.column.table)}.${quoteIdentifier(node.column.name)}`;
+    return `${logicalQualifiedName(node.connection, node.column.schema, node.column.table)}.${logicalIdentifier(node.connection, node.column.name)}`;
   }
   if (node instanceof CatalogNode || node instanceof ConnectionNode) {
     return node.connection.database;
   }
   return objectName(node);
+}
+
+function logicalIdentifier(connection: ConnectionConfig, identifier: string): string {
+  return connection.type === 'redis' ? identifier : quoteSqlIdentifier(connection.type, identifier);
+}
+
+function logicalQualifiedName(connection: ConnectionConfig, schema: string, name: string): string {
+  return connection.type === 'redis' ? `${schema}.${name}` : qualifiedSqlName(connection.type, schema, name);
 }
 
 function tableLikeTarget(node: unknown): { connection: import('./types').ConnectionConfig; schema: string; name: string; kind: 'table' | 'view' } | undefined {
@@ -2398,6 +2459,14 @@ function emptyWorkload(): TableWorkloadSummary {
   };
 }
 
+function canGenerateSqlScript(connection: ConnectionConfig, feature: string): boolean {
+  if (connection.type !== 'redis') {
+    return true;
+  }
+  void vscode.window.showWarningMessage(`${feature} is not available for Redis connections because Redis uses commands instead of SQL scripts.`);
+  return false;
+}
+
 async function objectDdl(connectionManager: ConnectionManager, node: unknown): Promise<string | undefined> {
   if (node instanceof TableNode) {
     if (!connectionManager.isConnected(node.connection.id)) {
@@ -2406,7 +2475,7 @@ async function objectDdl(connectionManager: ConnectionManager, node: unknown): P
     return connectionManager.getDriver(node.connection.type).getTableDDL(node.connection.id, node.table.schema, node.table.name);
   }
   if (node instanceof SchemaNode) {
-    return `create schema if not exists ${quoteIdentifier(node.schema.name)};\n`;
+    return createSchemaSql(node.connection.type, node.schema.name, { ifNotExists: true });
   }
   return undefined;
 }
@@ -2474,75 +2543,43 @@ function snapshotFromSchemaEntry(entry: SchemaCacheEntry) {
   };
 }
 
-function newObjectTemplate(node: unknown, type: string): string {
-  const { schema } = schemaFromNode(node);
+function newObjectTemplate(node: unknown, type: NewObjectKind): string {
+  const { schema, connection } = schemaFromNode(node);
+  if (!connection) {
+    return '';
+  }
   const table = tableLikeTarget(node);
-  if (type === 'table') {
-    return `create table ${qualifiedName(schema, 'new_table')} (\n  id bigserial primary key,\n  created_at timestamp not null default now()\n);\n`;
-  }
-  if (type === 'view') {
-    return `create or replace view ${qualifiedName(schema, 'new_view')} as\nselect *\nfrom ${qualifiedName(schema, 'source_table')};\n`;
-  }
-  if (type === 'materialized_view') {
-    return `create materialized view ${qualifiedName(schema, 'new_materialized_view')} as\nselect *\nfrom ${qualifiedName(schema, 'source_table')};\n`;
-  }
-  if (type === 'column') {
-    const target = table ?? { schema, name: 'table_name' };
-    return `alter table ${qualifiedName(target.schema, target.name)}\n  add column ${quoteIdentifier('new_column')} text;\n`;
-  }
-  if (type === 'index') {
-    const target = table ?? { schema, name: 'table_name' };
-    return `create index ${quoteIdentifier(`idx_${target.name}_column`)}\non ${qualifiedName(target.schema, target.name)} (${quoteIdentifier('column_name')});\n`;
-  }
-  if (type === 'unique_key') {
-    const target = table ?? { schema, name: 'table_name' };
-    return `alter table ${qualifiedName(target.schema, target.name)}\n  add constraint ${quoteIdentifier(`${target.name}_column_key`)} unique (${quoteIdentifier('column_name')});\n`;
-  }
-  if (type === 'foreign_key') {
-    const target = table ?? { schema, name: 'table_name' };
-    return `alter table ${qualifiedName(target.schema, target.name)}\n  add constraint ${quoteIdentifier(`${target.name}_fk`)} foreign key (${quoteIdentifier('column_name')})\n  references ${qualifiedName(schema, 'referenced_table')} (${quoteIdentifier('id')});\n`;
-  }
-  if (type === 'check') {
-    const target = table ?? { schema, name: 'table_name' };
-    return `alter table ${qualifiedName(target.schema, target.name)}\n  add constraint ${quoteIdentifier(`${target.name}_check`)} check (${quoteIdentifier('column_name')} is not null);\n`;
-  }
-  if (type === 'schema') {
-    return `create schema ${quoteIdentifier('new_schema')};\n`;
-  }
-  if (type === 'sequence') {
-    return `create sequence ${qualifiedName(schema, 'new_sequence')}\n  start with 1\n  increment by 1;\n`;
-  }
-  return '';
+  return newObjectSql(connection.type, type, schema, table ? { schema: table.schema, name: table.name } : undefined);
 }
 
 function renameTemplate(node: unknown): string | undefined {
   if (node instanceof TableNode) {
-    return `alter table ${qualifiedName(node.table.schema, node.table.name)}\n  rename to ${quoteIdentifier(`${node.table.name}_new`)};\n`;
+    return renameObjectSql(node.connection.type, { kind: 'table', schema: node.table.schema, name: node.table.name });
   }
   if (node instanceof ViewNode) {
-    return `alter view ${qualifiedName(node.view.schema, node.view.name)}\n  rename to ${quoteIdentifier(`${node.view.name}_new`)};\n`;
+    return renameObjectSql(node.connection.type, { kind: 'view', schema: node.view.schema, name: node.view.name });
   }
   if (node instanceof SchemaNode) {
-    return `alter schema ${quoteIdentifier(node.schema.name)}\n  rename to ${quoteIdentifier(`${node.schema.name}_new`)};\n`;
+    return renameObjectSql(node.connection.type, { kind: 'schema', schema: node.schema.name, name: node.schema.name });
   }
   if (node instanceof ColumnNode) {
-    return `alter table ${qualifiedName(node.column.schema, node.column.table)}\n  rename column ${quoteIdentifier(node.column.name)} to ${quoteIdentifier(`${node.column.name}_new`)};\n`;
+    return renameObjectSql(node.connection.type, { kind: 'column', schema: node.column.schema, name: node.column.table, column: node.column.name });
   }
   return undefined;
 }
 
 function dropTemplate(node: unknown): string | undefined {
   if (node instanceof TableNode) {
-    return `drop table ${qualifiedName(node.table.schema, node.table.name)};\n`;
+    return dropObjectSql(node.connection.type, { kind: 'table', schema: node.table.schema, name: node.table.name });
   }
   if (node instanceof ViewNode) {
-    return `drop view ${qualifiedName(node.view.schema, node.view.name)};\n`;
+    return dropObjectSql(node.connection.type, { kind: 'view', schema: node.view.schema, name: node.view.name });
   }
   if (node instanceof SchemaNode) {
-    return `drop schema ${quoteIdentifier(node.schema.name)};\n`;
+    return dropObjectSql(node.connection.type, { kind: 'schema', schema: node.schema.name, name: node.schema.name });
   }
   if (node instanceof ColumnNode) {
-    return `alter table ${qualifiedName(node.column.schema, node.column.table)}\n  drop column ${quoteIdentifier(node.column.name)};\n`;
+    return dropObjectSql(node.connection.type, { kind: 'column', schema: node.column.schema, name: node.column.table, column: node.column.name });
   }
   return undefined;
 }

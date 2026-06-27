@@ -7,6 +7,7 @@ describe('schema diff service', () => {
     const report = compareSchemas({
       sourceConnectionName: 'source',
       targetConnectionName: 'target',
+      targetDatabaseType: 'postgres',
       sourceSchema: {
         schemaName: 'public',
         tables: [{ schema: 'public', name: 'orders', type: 'table' }, { schema: 'public', name: 'new_table', type: 'table' }],
@@ -45,12 +46,44 @@ describe('schema diff service', () => {
     expect(report.migrationSql).toContain('add column');
     expect(formatSchemaDiffMarkdown(report)).toContain('Schema Diff');
   });
+
+  it('uses target database syntax for migration SQL', () => {
+    const report = compareSchemas({
+      sourceConnectionName: 'source',
+      targetConnectionName: 'target',
+      targetDatabaseType: 'sqlserver',
+      sourceSchema: {
+        schemaName: 'dbo',
+        tables: [{ schema: 'dbo', name: 'orders', type: 'table' }],
+        views: [],
+        columns: {
+          'dbo.orders': columns([
+            { name: 'id', dataType: 'int', nullable: false },
+            { name: 'status', dataType: 'nvarchar(255)', nullable: true }
+          ], 'dbo', 'orders')
+        }
+      },
+      targetSchema: {
+        schemaName: 'dbo',
+        tables: [{ schema: 'dbo', name: 'orders', type: 'table' }],
+        views: [],
+        columns: {
+          'dbo.orders': columns([
+            { name: 'id', dataType: 'int', nullable: false }
+          ], 'dbo', 'orders')
+        }
+      }
+    });
+
+    expect(report.migrationSql).toContain('alter table [dbo].[orders]');
+    expect(report.migrationSql).toContain('add [status] nvarchar(255);');
+  });
 });
 
-function columns(values: Array<Pick<ColumnInfo, 'name' | 'dataType' | 'nullable'>>): ColumnInfo[] {
+function columns(values: Array<Pick<ColumnInfo, 'name' | 'dataType' | 'nullable'>>, schema = 'public', table = 'orders'): ColumnInfo[] {
   return values.map((value, index) => ({
-    schema: 'public',
-    table: 'orders',
+    schema,
+    table,
     name: value.name,
     ordinal: index + 1,
     dataType: value.dataType,

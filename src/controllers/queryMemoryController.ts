@@ -84,7 +84,7 @@ export class QueryMemoryController {
         await this.openAiResult('Modified Query', await this.ai.send({ action: 'generate', selectedSql: item.sql, lastError: instruction, relevantSchema: { tables: [] } }));
       }
     } else if (picked.action === 'preview') {
-      const preview = this.safety.previewSql(item.sql);
+      const preview = this.safety.previewSql(item.sql, item.databaseType);
       if (preview) {
         await this.openSql(preview, 'Query Safety Preview');
       }

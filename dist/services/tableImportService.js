@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildTableImportPreview = buildTableImportPreview;
 exports.buildTableImportData = buildTableImportData;
 exports.buildTableImportStatements = buildTableImportStatements;
+const sqlDialect_1 = require("./sqlDialect");
 function buildTableImportPreview(_databaseType, _schema, _table, tableColumns, fileName, text) {
     const kind = fileName.toLowerCase().endsWith('.json') ? 'json' : 'csv';
     const source = kind === 'json' ? parseJsonSource(text) : parseCsvSource(text);
@@ -13,6 +14,10 @@ function buildTableImportPreview(_databaseType, _schema, _table, tableColumns, f
     if (!mapping.some((item) => item.source)) {
         throw new Error('Could not map any source fields to table columns.');
     }
+    const warnings = [
+        ...source.warnings,
+        ...mappingWarnings(source.columns, tableColumns, mapping)
+    ];
     return {
         kind,
         fileName,
@@ -26,10 +31,7 @@ function buildTableImportPreview(_databaseType, _schema, _table, tableColumns, f
         })),
         mapping,
         sampleRows: source.rows.slice(0, 50),
-        warnings: [
-            ...source.warnings,
-            ...mappingWarnings(source.columns, tableColumns, mapping)
-        ]
+        warnings
     };
 }
 function buildTableImportData(fileName, text, mapping) {
@@ -69,7 +71,7 @@ function buildTableImportStatements(databaseType, schema, table, data, batchSize
         throw new Error('No import rows were found.');
     }
     const safeBatchSize = Number.isFinite(batchSize) && batchSize > 0 ? Math.floor(batchSize) : 100;
-    return chunk(data.rows, safeBatchSize).map((batch) => buildInsertBatch(databaseType, schema, table, data.columns, batch));
+    return chunk(data.rows, safeBatchSize).map((batch) => (0, sqlDialect_1.insertBatchSql)(databaseType, schema, table, data.columns, batch));
 }
 function parseJsonSource(text) {
     const parsed = JSON.parse(text);
@@ -204,36 +206,6 @@ function mappingWarnings(sourceColumns, targetColumns, mapping) {
         warnings.push(`Target columns left unmapped: ${unusedTargets.join(', ')}.`);
     }
     return warnings;
-}
-function buildInsertBatch(databaseType, schema, table, columns, rows) {
-    return `insert into ${qualifiedSqlName(databaseType, schema, table)} (${columns.map((column) => quoteSqlIdentifier(databaseType, column)).join(', ')})\nvalues\n${rows.map((row) => `  (${columns.map((column) => sqlLiteral(databaseType, row[column])).join(', ')})`).join(',\n')};`;
-}
-function qualifiedSqlName(databaseType, schema, table) {
-    return `${quoteSqlIdentifier(databaseType, schema)}.${quoteSqlIdentifier(databaseType, table)}`;
-}
-function quoteSqlIdentifier(databaseType, identifier) {
-    if (databaseType === 'mysql') {
-        return `\`${identifier.replace(/`/g, '``')}\``;
-    }
-    return `"${identifier.replace(/"/g, '""')}"`;
-}
-function sqlLiteral(_databaseType, value) {
-    if (value === null || value === undefined) {
-        return 'null';
-    }
-    if (typeof value === 'number' || typeof value === 'bigint') {
-        return String(value);
-    }
-    if (typeof value === 'boolean') {
-        return value ? 'true' : 'false';
-    }
-    if (value instanceof Date) {
-        return `'${value.toISOString().replace(/'/g, "''")}'`;
-    }
-    if (typeof value === 'object') {
-        return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
-    }
-    return `'${String(value).replace(/'/g, "''")}'`;
 }
 function normalizeName(value) {
     return value.toLowerCase().replace(/[^a-z0-9]/g, '');

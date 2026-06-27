@@ -27,6 +27,36 @@ const runtimes: RuntimeContract[] = [
     sourcePath: 'src/database/drivers/mysqlDriver.ts'
   },
   {
+    chunk: 'mssqlRuntime',
+    exportName: 'ConnectionPool',
+    fallbackImport: "import('mssql')",
+    sourcePath: 'src/database/drivers/sqlServerDriver.ts'
+  },
+  {
+    chunk: 'oracleRuntime',
+    exportName: 'createPool',
+    fallbackImport: "import('oracledb')",
+    sourcePath: 'src/database/drivers/oracleDriver.ts'
+  },
+  {
+    chunk: 'redisRuntime',
+    exportName: 'createClient',
+    fallbackImport: "import('redis')",
+    sourcePath: 'src/database/drivers/redisDriver.ts'
+  },
+  {
+    chunk: 'snowflakeRuntime',
+    exportName: 'createConnection',
+    fallbackImport: "import('snowflake-sdk')",
+    sourcePath: 'src/database/drivers/snowflakeDriver.ts'
+  },
+  {
+    chunk: 'sqliteRuntime',
+    exportName: 'Database',
+    fallbackImport: "import('sqlite3')",
+    sourcePath: 'src/database/drivers/sqliteDriver.ts'
+  },
+  {
     chunk: 'sqlFormatterRuntime',
     exportName: 'format',
     fallbackImport: "import('sql-formatter')",

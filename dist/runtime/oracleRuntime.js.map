@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../../src/runtime/oracleRuntime.ts"],
+  "sourcesContent": ["import oracledb = require('oracledb');\n\nexport = oracledb;\n"],
+  "mappings": ";;;AAAA,IAAO,WAAW,QAAQ;AAE1B,iBAAS;",
+  "names": []
+}

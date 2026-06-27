@@ -48,11 +48,11 @@ describe('tableImportService', () => {
   });
 
   it('uses destination database syntax for direct import batches', () => {
-    const preview = buildTableImportPreview('mysql', 'app', 'users', columns, 'users.csv', 'id,name,active\n1,Ada,true\n');
+    const preview = buildTableImportPreview('sqlserver', 'dbo', 'users', columns, 'users.csv', 'id,name,active\n1,Ada,true\n');
     const data = buildTableImportData('users.csv', 'id,name,active\n1,Ada,true\n', preview.mapping);
-    const [sql] = buildTableImportStatements('mysql', 'app', 'users', data);
+    const [sql] = buildTableImportStatements('sqlserver', 'dbo', 'users', data);
 
-    expect(sql).toContain('insert into `app`.`users` (`id`, `name`, `active`)');
-    expect(sql).toContain("(1, 'Ada', true)");
+    expect(sql).toContain('insert into [dbo].[users] ([id], [name], [active])');
+    expect(sql).toContain('(1, \'Ada\', 1)');
   });
 });

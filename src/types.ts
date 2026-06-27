@@ -1,4 +1,4 @@
-export type DatabaseType = 'postgres' | 'redshift' | 'mysql';
+export type DatabaseType = 'postgres' | 'redshift' | 'mysql' | 'sqlite' | 'sqlserver' | 'oracle' | 'redis' | 'snowflake';
 
 export type ConnectionColor = 'red' | 'yellow' | 'green' | 'blue' | 'purple' | 'gray';
 

@@ -23,6 +23,41 @@ exports.DEFAULTS_BY_DATABASE_TYPE = {
         database: 'mysql',
         sslMode: 'disable',
         color: 'blue'
+    },
+    sqlite: {
+        name: 'SQLite',
+        port: '0',
+        database: ':memory:',
+        sslMode: 'disable',
+        color: 'gray'
+    },
+    sqlserver: {
+        name: 'SQL Server',
+        port: '1433',
+        database: 'master',
+        sslMode: 'prefer',
+        color: 'yellow'
+    },
+    oracle: {
+        name: 'Oracle',
+        port: '1521',
+        database: 'ORCLPDB1',
+        sslMode: 'disable',
+        color: 'red'
+    },
+    redis: {
+        name: 'Redis',
+        port: '6379',
+        database: '0',
+        sslMode: 'disable',
+        color: 'red'
+    },
+    snowflake: {
+        name: 'Snowflake',
+        port: '443',
+        database: 'SNOWFLAKE',
+        sslMode: 'require',
+        color: 'purple'
     }
 };
 function connectionDefaultsForType(type) {

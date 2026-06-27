@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TablePerformanceAdvisorService = void 0;
 exports.buildTablePerformancePrepassFlags = buildTablePerformancePrepassFlags;
-const identifiers_1 = require("../utils/identifiers");
+const sqlDialect_1 = require("./sqlDialect");
 class TablePerformanceAdvisorService {
     connectionManager;
     memory;
@@ -51,7 +51,11 @@ class TablePerformanceAdvisorService {
 exports.TablePerformanceAdvisorService = TablePerformanceAdvisorService;
 function buildTablePerformancePrepassFlags(stats, workload) {
     const flags = [];
-    const table = (0, identifiers_1.qualifiedName)(stats.schema, stats.table);
+    const databaseType = stats.databaseType;
+    if (databaseType === 'redis') {
+        return flags;
+    }
+    const table = (0, sqlDialect_1.qualifiedSqlName)(databaseType, stats.schema, stats.table);
     const redshift = stats.redshift;
     if (redshift) {
         const joinColumn = topWorkloadColumn(workload, 'join');
@@ -63,7 +67,7 @@ function buildTablePerformancePrepassFlags(stats, workload) {
                 message: 'Distribution skew is high for this Redshift table.',
                 evidence: `skew_rows=${redshift.skewRows}`,
                 recommendationKind: 'distkey',
-                ddl: joinColumn ? `alter table ${table} alter distkey ${(0, identifiers_1.quoteIdentifier)(joinColumn)};` : undefined
+                ddl: joinColumn ? `alter table ${table} alter distkey ${(0, sqlDialect_1.quoteSqlIdentifier)(databaseType, joinColumn)};` : undefined
             });
         }
         if ((redshift.unsortedPct ?? 0) > 20) {
@@ -93,9 +97,12 @@ function buildTablePerformancePrepassFlags(stats, workload) {
                 message: 'The workload repeatedly filters or orders this table without a leading sort key.',
                 evidence: workloadEvidence(workload, filterColumn),
                 recommendationKind: 'sortkey',
-                ddl: `alter table ${table} alter sortkey (${(0, identifiers_1.quoteIdentifier)(filterColumn)});`
+                ddl: `alter table ${table} alter sortkey (${(0, sqlDialect_1.quoteSqlIdentifier)(databaseType, filterColumn)});`
             });
         }
+        return flags;
+    }
+    if (databaseType !== 'postgres') {
         return flags;
     }
     const rowCount = stats.liveRows ?? stats.rowEstimate ?? 0;
@@ -110,7 +117,7 @@ function buildTablePerformancePrepassFlags(stats, workload) {
             evidence: `seq_scan=${seqScan}, idx_scan=${idxScan}, rows=${rowCount}`,
             recommendationKind: 'index',
             ddl: filterColumn
-                ? `create index concurrently if not exists ${(0, identifiers_1.quoteIdentifier)(`${stats.table}_${filterColumn}_idx`)} on ${table} (${(0, identifiers_1.quoteIdentifier)(filterColumn)});`
+                ? `create index concurrently if not exists ${(0, sqlDialect_1.quoteSqlIdentifier)(databaseType, `${stats.table}_${filterColumn}_idx`)} on ${table} (${(0, sqlDialect_1.quoteSqlIdentifier)(databaseType, filterColumn)});`
                 : undefined
         });
     }

@@ -43,6 +43,18 @@ function sqlFormatterDialect(connection) {
     if (connection?.type === 'mysql') {
         return 'mysql';
     }
+    if (connection?.type === 'sqlite') {
+        return 'sqlite';
+    }
+    if (connection?.type === 'sqlserver') {
+        return 'transactsql';
+    }
+    if (connection?.type === 'oracle') {
+        return 'plsql';
+    }
+    if (connection?.type === 'snowflake') {
+        return 'snowflake';
+    }
     return 'postgresql';
 }
 async function formatSqlText(sql, dialect) {
