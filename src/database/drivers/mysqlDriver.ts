@@ -240,7 +240,7 @@ export class MySQLDriver implements DatabaseDriver {
 
   async getTables(connectionId: string, schema: string): Promise<TableInfo[]> {
     const [rows] = await this.requirePool(connectionId).query<RowDataPacket[]>(
-      `select table_schema as schema,
+      `select table_schema as \`schema\`,
               table_name as name,
               'table' as type,
               table_rows as "rowEstimate",
@@ -255,7 +255,7 @@ export class MySQLDriver implements DatabaseDriver {
 
   async getViews(connectionId: string, schema: string): Promise<ViewInfo[]> {
     const [rows] = await this.requirePool(connectionId).query<RowDataPacket[]>(
-      `select table_schema as schema, table_name as name, 'view' as type
+      `select table_schema as \`schema\`, table_name as name, 'view' as type
        from information_schema.views
        where table_schema = ?
        order by table_name`,
@@ -274,7 +274,7 @@ export class MySQLDriver implements DatabaseDriver {
 
   async getTriggers(connectionId: string, schema: string): Promise<TriggerInfo[]> {
     const [rows] = await this.requirePool(connectionId).query<RowDataPacket[]>(
-      `select trigger_schema as schema,
+      `select trigger_schema as \`schema\`,
               event_object_table as "table",
               trigger_name as name,
               action_timing as timing,
@@ -332,8 +332,8 @@ export class MySQLDriver implements DatabaseDriver {
 
   async getColumns(connectionId: string, schema: string, table: string): Promise<ColumnInfo[]> {
     const [rows] = await this.requirePool(connectionId).query<RowDataPacket[]>(
-      `select table_schema as schema,
-              table_name as table,
+      `select table_schema as \`schema\`,
+              table_name as \`table\`,
               column_name as name,
               ordinal_position as ordinal,
               column_type as "dataType",
@@ -545,7 +545,7 @@ export class MySQLDriver implements DatabaseDriver {
 
   private async getRoutines(connectionId: string, schema: string, type: 'FUNCTION' | 'PROCEDURE'): Promise<RoutineInfo[]> {
     const [rows] = await this.requirePool(connectionId).query<RowDataPacket[]>(
-      `select routine_schema as schema,
+      `select routine_schema as \`schema\`,
               routine_name as name,
               routine_type as kind,
               dtd_identifier as "returnType",
