@@ -5,9 +5,9 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
+var __export = (target, all2) => {
+  for (var name in all2)
+    __defProp(target, name, { get: all2[name], enumerable: true });
 };
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
@@ -166,6 +166,376 @@ function loadBundledRuntime(moduleName) {
     return void 0;
   }
   return require((0, import_path.join)(__dirname, "runtime", moduleName));
+}
+
+// src/services/sqlDialect.ts
+function assertSqlGeneratingType(type, feature) {
+  if (type === "redis") {
+    throw new Error(`${feature} is not available for Redis connections. Use Redis commands instead.`);
+  }
+  return type;
+}
+function quoteSqlIdentifier(type, identifier) {
+  if (type === "mysql") {
+    return `\`${identifier.replace(/`/g, "``")}\``;
+  }
+  if (type === "sqlserver") {
+    return `[${identifier.replace(/]/g, "]]")}]`;
+  }
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+function qualifiedSqlName(type, schema, name) {
+  return `${quoteSqlIdentifier(type, schema)}.${quoteSqlIdentifier(type, name)}`;
+}
+function sqlLiteral(type, value) {
+  if (value === null || value === void 0) {
+    return "null";
+  }
+  if (typeof value === "number" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return type === "sqlserver" || type === "oracle" ? value ? "1" : "0" : value ? "true" : "false";
+  }
+  if (value instanceof Date) {
+    return `'${value.toISOString().replace(/'/g, "''")}'`;
+  }
+  if (typeof value === "object") {
+    return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
+  }
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+function createTableSql(type, schema, table, columns) {
+  const sqlType = assertSqlGeneratingType(type, "CREATE TABLE generation");
+  const ddlColumns = columns.length ? columns.map((column) => columnDefinitionSql(sqlType, column)) : [`  ${quoteSqlIdentifier(sqlType, "id")} ${defaultIdType(sqlType)}`];
+  return `create table ${qualifiedSqlName(sqlType, schema, table)} (
+${ddlColumns.join(",\n")}
+);`;
+}
+function insertBatchSql(type, schema, table, columns, rows) {
+  const sqlType = assertSqlGeneratingType(type, "INSERT generation");
+  return `insert into ${qualifiedSqlName(sqlType, schema, table)} (${columns.map((column) => quoteSqlIdentifier(sqlType, column)).join(", ")})
+values
+${rows.map((row) => `  (${columns.map((column) => sqlLiteral(sqlType, row[column])).join(", ")})`).join(",\n")};`;
+}
+function selectTableSql(type, schema, table, limit = 100) {
+  const sqlType = assertSqlGeneratingType(type, "SELECT generation");
+  const tableName = qualifiedSqlName(sqlType, schema, table);
+  if (sqlType === "sqlserver") {
+    return `select top (${limit}) *
+from ${tableName};
+`;
+  }
+  if (sqlType === "oracle") {
+    return `select *
+from ${tableName}
+fetch first ${limit} rows only;
+`;
+  }
+  return `select *
+from ${tableName}
+limit ${limit};
+`;
+}
+function selectAllTableSql(type, schema, table) {
+  const sqlType = assertSqlGeneratingType(type, "SELECT generation");
+  return `select *
+from ${qualifiedSqlName(sqlType, schema, table)};
+`;
+}
+function insertTemplateSql(type, schema, table, columns) {
+  const sqlType = assertSqlGeneratingType(type, "INSERT generation");
+  const writable = columns.filter((column) => !column.defaultValue).map((column) => column.name);
+  const tableName = qualifiedSqlName(sqlType, schema, table);
+  if (!writable.length) {
+    return defaultValuesInsertSql(sqlType, tableName);
+  }
+  return `insert into ${tableName} (${writable.map((column) => quoteSqlIdentifier(sqlType, column)).join(", ")})
+values (${writable.map(() => "null").join(", ")});
+`;
+}
+function updateTemplateSql(type, schema, table) {
+  const sqlType = assertSqlGeneratingType(type, "UPDATE generation");
+  return `update ${qualifiedSqlName(sqlType, schema, table)}
+set ${quoteSqlIdentifier(sqlType, "column_name")} = null
+where ${quoteSqlIdentifier(sqlType, "id")} = '<id>';
+`;
+}
+function deleteTemplateSql(type, schema, table) {
+  const sqlType = assertSqlGeneratingType(type, "DELETE generation");
+  return `delete from ${qualifiedSqlName(sqlType, schema, table)}
+where ${quoteSqlIdentifier(sqlType, "id")} = '<id>';
+`;
+}
+function addColumnSql(type, schema, table, column = "new_column") {
+  const sqlType = assertSqlGeneratingType(type, "ADD COLUMN generation");
+  const addKeyword = addColumnKeyword(sqlType);
+  return `alter table ${qualifiedSqlName(sqlType, schema, table)}
+  ${addKeyword} ${quoteSqlIdentifier(sqlType, column)} ${defaultTextType(sqlType)};
+`;
+}
+function newObjectSql(type, kind, schema, table) {
+  const sqlType = assertSqlGeneratingType(type, `${kind} generation`);
+  const target = table ?? { schema, name: "table_name" };
+  if (kind === "table") {
+    return `create table ${qualifiedSqlName(sqlType, schema, "new_table")} (
+  ${quoteSqlIdentifier(sqlType, "id")} ${defaultIdType(sqlType)},
+  ${quoteSqlIdentifier(sqlType, "created_at")} ${timestampColumnSql(sqlType)}
+);
+`;
+  }
+  if (kind === "view") {
+    return createViewSql(sqlType, schema, "new_view", "source_table");
+  }
+  if (kind === "materialized_view") {
+    return materializedViewSql(sqlType, schema, "new_materialized_view", "source_table");
+  }
+  if (kind === "column") {
+    return addColumnSql(sqlType, target.schema, target.name);
+  }
+  if (kind === "index") {
+    return `create index ${quoteSqlIdentifier(sqlType, `idx_${target.name}_column`)}
+on ${qualifiedSqlName(sqlType, target.schema, target.name)} (${quoteSqlIdentifier(sqlType, "column_name")});
+`;
+  }
+  if (kind === "unique_key") {
+    return `alter table ${qualifiedSqlName(sqlType, target.schema, target.name)}
+  add constraint ${quoteSqlIdentifier(sqlType, `${target.name}_column_key`)} unique (${quoteSqlIdentifier(sqlType, "column_name")});
+`;
+  }
+  if (kind === "foreign_key") {
+    return `alter table ${qualifiedSqlName(sqlType, target.schema, target.name)}
+  add constraint ${quoteSqlIdentifier(sqlType, `${target.name}_fk`)} foreign key (${quoteSqlIdentifier(sqlType, "column_name")})
+  references ${qualifiedSqlName(sqlType, schema, "referenced_table")} (${quoteSqlIdentifier(sqlType, "id")});
+`;
+  }
+  if (kind === "check") {
+    return `alter table ${qualifiedSqlName(sqlType, target.schema, target.name)}
+  add constraint ${quoteSqlIdentifier(sqlType, `${target.name}_check`)} check (${quoteSqlIdentifier(sqlType, "column_name")} is not null);
+`;
+  }
+  if (kind === "schema") {
+    return createSchemaSql(sqlType, "new_schema");
+  }
+  if (kind === "sequence") {
+    return createSequenceSql(sqlType, schema, "new_sequence");
+  }
+  return "";
+}
+function renameObjectSql(type, target) {
+  const sqlType = assertSqlGeneratingType(type, "Rename generation");
+  if (target.kind === "table") {
+    if (sqlType === "mysql") {
+      return `rename table ${qualifiedSqlName(sqlType, target.schema, target.name)} to ${qualifiedSqlName(sqlType, target.schema, `${target.name}_new`)};
+`;
+    }
+    if (sqlType === "sqlserver") {
+      return `exec sp_rename '${target.schema}.${target.name}', '${target.name}_new';
+`;
+    }
+    return `alter table ${qualifiedSqlName(sqlType, target.schema, target.name)}
+  rename to ${quoteSqlIdentifier(sqlType, `${target.name}_new`)};
+`;
+  }
+  if (target.kind === "view") {
+    if (sqlType === "mysql") {
+      return `rename table ${qualifiedSqlName(sqlType, target.schema, target.name)} to ${qualifiedSqlName(sqlType, target.schema, `${target.name}_new`)};
+`;
+    }
+    if (sqlType === "sqlserver") {
+      return `exec sp_rename '${target.schema}.${target.name}', '${target.name}_new';
+`;
+    }
+    return `alter view ${qualifiedSqlName(sqlType, target.schema, target.name)}
+  rename to ${quoteSqlIdentifier(sqlType, `${target.name}_new`)};
+`;
+  }
+  if (target.kind === "schema") {
+    return unsupportedSql(sqlType, "Renaming schemas");
+  }
+  if (target.kind === "column" && target.column) {
+    if (sqlType === "sqlserver") {
+      return `exec sp_rename '${target.schema}.${target.name}.${target.column}', '${target.column}_new', 'COLUMN';
+`;
+    }
+    return `alter table ${qualifiedSqlName(sqlType, target.schema, target.name)}
+  rename column ${quoteSqlIdentifier(sqlType, target.column)} to ${quoteSqlIdentifier(sqlType, `${target.column}_new`)};
+`;
+  }
+  return unsupportedSql(sqlType, "Rename generation");
+}
+function dropObjectSql(type, target) {
+  const sqlType = assertSqlGeneratingType(type, "DROP generation");
+  if (target.kind === "table") {
+    return `drop table ${qualifiedSqlName(sqlType, target.schema, target.name)};
+`;
+  }
+  if (target.kind === "view") {
+    return `drop view ${qualifiedSqlName(sqlType, target.schema, target.name)};
+`;
+  }
+  if (target.kind === "schema") {
+    return sqlType === "oracle" ? unsupportedSql(sqlType, "Dropping schemas") : `drop schema ${quoteSqlIdentifier(sqlType, target.schema)};
+`;
+  }
+  if (target.kind === "column" && target.column) {
+    return `alter table ${qualifiedSqlName(sqlType, target.schema, target.name)}
+  drop column ${quoteSqlIdentifier(sqlType, target.column)};
+`;
+  }
+  return unsupportedSql(sqlType, "DROP generation");
+}
+function createSchemaSql(type, schema, options = {}) {
+  const sqlType = assertSqlGeneratingType(type, "CREATE SCHEMA generation");
+  if (sqlType === "sqlite" || sqlType === "oracle") {
+    return unsupportedSql(sqlType, "CREATE SCHEMA");
+  }
+  const guard = options.ifNotExists && supportsIfNotExists(sqlType) ? " if not exists" : "";
+  return `create schema${guard} ${quoteSqlIdentifier(sqlType, schema)};
+`;
+}
+function dropTableIfExistsSql(type, schema, table) {
+  const sqlType = assertSqlGeneratingType(type, "DROP TABLE generation");
+  if (sqlType === "oracle") {
+    return `drop table ${qualifiedSqlName(sqlType, schema, table)};
+`;
+  }
+  return `drop table if exists ${qualifiedSqlName(sqlType, schema, table)};
+`;
+}
+function dropViewIfExistsSql(type, schema, view) {
+  const sqlType = assertSqlGeneratingType(type, "DROP VIEW generation");
+  if (sqlType === "oracle") {
+    return `drop view ${qualifiedSqlName(sqlType, schema, view)};
+`;
+  }
+  return `drop view if exists ${qualifiedSqlName(sqlType, schema, view)};
+`;
+}
+function createPlaceholderViewSql(type, schema, view) {
+  const sqlType = assertSqlGeneratingType(type, "CREATE VIEW generation");
+  return `create view ${qualifiedSqlName(sqlType, schema, view)} as
+select 1 as ${quoteSqlIdentifier(sqlType, "placeholder")};
+`;
+}
+function columnDefinitionSql(type, column) {
+  const dataType = column.dataType?.trim();
+  if (!dataType) {
+    throw new Error(`Missing data type for ${column.schema}.${column.table}.${column.name}.`);
+  }
+  const nullable = column.nullable ? "" : " not null";
+  const defaultValue = column.defaultValue ? ` default ${column.defaultValue}` : "";
+  return `  ${quoteSqlIdentifier(type, column.name)} ${dataType}${defaultValue}${nullable}`;
+}
+function defaultTextType(type) {
+  if (type === "mysql") {
+    return "varchar(255)";
+  }
+  if (type === "sqlserver") {
+    return "nvarchar(max)";
+  }
+  if (type === "oracle") {
+    return "varchar2(255)";
+  }
+  return "text";
+}
+function defaultIdType(type) {
+  if (type === "postgres") {
+    return "bigserial primary key";
+  }
+  if (type === "redshift") {
+    return "bigint identity(1,1) primary key";
+  }
+  if (type === "mysql") {
+    return "bigint auto_increment primary key";
+  }
+  if (type === "sqlite") {
+    return "integer primary key";
+  }
+  if (type === "sqlserver") {
+    return "bigint identity(1,1) primary key";
+  }
+  if (type === "oracle") {
+    return "number generated by default as identity primary key";
+  }
+  return "number autoincrement primary key";
+}
+function timestampColumnSql(type) {
+  if (type === "sqlserver") {
+    return "datetime2 not null default sysdatetime()";
+  }
+  if (type === "oracle") {
+    return "timestamp default systimestamp not null";
+  }
+  if (type === "mysql") {
+    return "timestamp not null default current_timestamp";
+  }
+  if (type === "sqlite") {
+    return "text not null default current_timestamp";
+  }
+  if (type === "snowflake") {
+    return "timestamp_ntz not null default current_timestamp()";
+  }
+  return "timestamp not null default current_timestamp";
+}
+function defaultValuesInsertSql(type, tableName) {
+  if (type === "mysql") {
+    return `insert into ${tableName} () values ();
+`;
+  }
+  if (type === "oracle") {
+    return `-- No writable columns were found. Oracle does not support a portable DEFAULT VALUES template for this table.
+`;
+  }
+  return `insert into ${tableName}
+default values;
+`;
+}
+function addColumnKeyword(type) {
+  return type === "sqlserver" || type === "oracle" ? "add" : "add column";
+}
+function createViewSql(type, schema, view, sourceTable) {
+  if (type === "sqlserver") {
+    return `create or alter view ${qualifiedSqlName(type, schema, view)} as
+select *
+from ${qualifiedSqlName(type, schema, sourceTable)};
+`;
+  }
+  if (type === "sqlite") {
+    return `create view ${qualifiedSqlName(type, schema, view)} as
+select *
+from ${qualifiedSqlName(type, schema, sourceTable)};
+`;
+  }
+  return `create or replace view ${qualifiedSqlName(type, schema, view)} as
+select *
+from ${qualifiedSqlName(type, schema, sourceTable)};
+`;
+}
+function materializedViewSql(type, schema, view, sourceTable) {
+  if (type === "mysql" || type === "sqlite" || type === "sqlserver") {
+    return unsupportedSql(type, "Materialized views");
+  }
+  return `create materialized view ${qualifiedSqlName(type, schema, view)} as
+select *
+from ${qualifiedSqlName(type, schema, sourceTable)};
+`;
+}
+function createSequenceSql(type, schema, sequence) {
+  if (type === "mysql" || type === "sqlite" || type === "redshift") {
+    return unsupportedSql(type, "Sequences");
+  }
+  return `create sequence ${qualifiedSqlName(type, schema, sequence)}
+  start with 1
+  increment by 1;
+`;
+}
+function supportsIfNotExists(type) {
+  return type !== "oracle" && type !== "sqlserver";
+}
+function unsupportedSql(type, feature) {
+  return `-- ${feature} is not supported by the ${type} SQL generator.
+`;
 }
 
 // src/database/drivers/postgresDriver.ts
@@ -566,14 +936,7 @@ where ${where}` : ""}${orderBy}${paging}`;
   }
   async getTableDDL(connectionId, schema, table) {
     const columns = await this.getColumns(connectionId, schema, table);
-    const lines = columns.map((column) => {
-      const nullable = column.nullable ? "" : " not null";
-      const defaultValue = column.defaultValue ? ` default ${column.defaultValue}` : "";
-      return `  ${quoteIdentifier(column.name)} ${column.dataType}${defaultValue}${nullable}`;
-    });
-    return `create table ${qualifiedName(schema, table)} (
-${lines.join(",\n")}
-);`;
+    return createTableSql(this.id, schema, table, columns);
   }
   async getTableStats(connectionId, schema, table) {
     const pool = this.requirePool(connectionId);
@@ -884,7 +1247,22 @@ var RedshiftDriver = class extends PostgresDriver {
        order by ordinal_position`,
       [schema, table]
     );
-    return result.rows;
+    return result.rows.map((row) => {
+      const name = String(row.name ?? row.column_name);
+      const dataType = optionalString2(row.dataType ?? row.datatype ?? row.data_type);
+      if (!dataType) {
+        throw new Error(`Redshift column metadata for ${qualifiedName(schema, table)}.${name} did not include a data type.`);
+      }
+      return {
+        schema: String(row.schema ?? schema),
+        table: String(row.table ?? table),
+        name,
+        ordinal: Number(row.ordinal ?? row.ordinal_position),
+        dataType,
+        nullable: booleanFromDb(row.nullable),
+        defaultValue: optionalString2(row.defaultValue ?? row.defaultvalue ?? row.column_default)
+      };
+    });
   }
   async getTableStats(connectionId, schema, table) {
     const pool = this.requirePool(connectionId);
@@ -959,6 +1337,16 @@ function optionalString2(value) {
   }
   const next = String(value).trim();
   return next || void 0;
+}
+function booleanFromDb(value) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  const normalized = optionalString2(value)?.toLowerCase();
+  return normalized === "true" || normalized === "t" || normalized === "yes" || normalized === "y" || normalized === "1";
 }
 
 // src/database/drivers/mysqlDriver.ts
@@ -1130,8 +1518,8 @@ var MySQLDriver = class {
     if (!sql || !this.canExplain(sql)) {
       throw new Error("Only SELECT, WITH, INSERT, UPDATE, DELETE, and MERGE statements can be explained.");
     }
-    const explainSql = options.analyze ? `explain analyze ${sql}` : `explain format=json ${sql}`;
-    const [rows] = await pool.query(explainSql);
+    const explainSql2 = options.analyze ? `explain analyze ${sql}` : `explain format=json ${sql}`;
+    const [rows] = await pool.query(explainSql2);
     return textExplainPlan(JSON.stringify(rows, null, 2), options.analyze === true);
   }
   async cancelQuery(executionId) {
@@ -1328,14 +1716,7 @@ where ${where}` : ""}${orderBy}${paging}`;
   }
   async getTableDDL(connectionId, schema, table) {
     const columns = await this.getColumns(connectionId, schema, table);
-    const lines = columns.map((column) => {
-      const nullable = column.nullable ? "" : " not null";
-      const defaultValue = column.defaultValue ? ` default ${column.defaultValue}` : "";
-      return `  ${quoteIdentifier(column.name, "`")} ${column.dataType}${defaultValue}${nullable}`;
-    });
-    return `create table ${qualifiedName(schema, table, "`")} (
-${lines.join(",\n")}
-);`;
+    return createTableSql(this.id, schema, table, columns);
   }
   async getTableStats(connectionId, schema, table) {
     const [rows] = await this.requirePool(connectionId).query(
@@ -1537,6 +1918,1020 @@ function optionalString3(value) {
   return next || void 0;
 }
 
+// src/database/drivers/driverUtils.ts
+var import_crypto3 = require("crypto");
+var BasicDatabaseDriver = class {
+  async testConnection(config) {
+    try {
+      const connection = await this.connect(config);
+      await this.disconnect(connection.id);
+      return { ok: true, message: "Connection successful" };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  async beginTransaction(connectionId) {
+    await this.executeQuery({ connectionId, sql: "begin" });
+  }
+  async commitTransaction(connectionId) {
+    await this.executeQuery({ connectionId, sql: "commit" });
+  }
+  async rollbackTransaction(connectionId) {
+    await this.executeQuery({ connectionId, sql: "rollback" });
+  }
+  isTransactionOpen(_connectionId) {
+    return false;
+  }
+  async validateQuery(_params) {
+    return { ok: true };
+  }
+  async explainQuery(params) {
+    return {
+      format: "text",
+      analyze: false,
+      rawText: params.sql,
+      annotations: [{ severity: "low", message: `${this.displayName} explain output is not available in this driver yet.` }]
+    };
+  }
+  async cancelQuery(_executionId) {
+  }
+  async getViews(_connectionId, _schema) {
+    return [];
+  }
+  async getFunctions(_connectionId, _schema) {
+    return [];
+  }
+  async getProcedures(_connectionId, _schema) {
+    return [];
+  }
+  async getTriggers(_connectionId, _schema) {
+    return [];
+  }
+  async getActiveSessions(_connectionId) {
+    return [];
+  }
+  async cancelSession(_connectionId, _pid) {
+  }
+  async terminateSession(_connectionId, _pid) {
+  }
+  async getIndexes(_connectionId, _schema, _table) {
+    return [];
+  }
+  async getPrimaryKeys(_connectionId, _schema, _table) {
+    return [];
+  }
+  async getForeignKeys(_connectionId, _schema, _table) {
+    return [];
+  }
+  async getTableDDL(connectionId, schema, table) {
+    const columns = await this.getColumns(connectionId, schema, table);
+    return createTableSql(this.id, schema, table, columns);
+  }
+  async getTableStats(_connectionId, schema, table) {
+    return { schema, table, databaseType: this.id, columns: [] };
+  }
+};
+function executionResultFromRows(rows, started, sql, dataTypes = {}) {
+  const fields = rows[0] ? Object.keys(rows[0]).map((name) => ({ name, dataTypeName: dataTypes[name] })) : Object.keys(dataTypes).map((name) => ({ name, dataTypeName: dataTypes[name] }));
+  return {
+    executionId: (0, import_crypto3.randomUUID)(),
+    fields,
+    rows,
+    rowCount: rows.length,
+    command: sql.trim().match(/^\w+/)?.[0]?.toUpperCase(),
+    durationMs: Date.now() - started
+  };
+}
+function emptyExecutionResult(started, sql, rowCount = 0) {
+  return {
+    executionId: (0, import_crypto3.randomUUID)(),
+    fields: [],
+    rows: [],
+    rowCount,
+    command: sql.trim().match(/^\w+/)?.[0]?.toUpperCase(),
+    durationMs: Date.now() - started
+  };
+}
+function optionalString4(value) {
+  if (value === null || value === void 0) {
+    return void 0;
+  }
+  const next = String(value).trim();
+  return next || void 0;
+}
+function numberFromDb2(value) {
+  if (value === null || value === void 0) {
+    return void 0;
+  }
+  const next = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(next) ? next : void 0;
+}
+function toQueryError(error) {
+  const record = error;
+  return {
+    message: record.message ?? String(error),
+    code: record.code,
+    detail: record.detail,
+    hint: record.hint,
+    position: record.position,
+    where: record.where
+  };
+}
+function clientLimit(sql, maxRows, offset, quote = '"') {
+  const limit = Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : void 0;
+  const nextOffset = Number.isFinite(offset) && offset && offset > 0 ? Math.floor(offset) : 0;
+  const pageLimit = limit ? limit + 1 : void 0;
+  return pageLimit && /^(select|with)\b/i.test(sql.trim()) ? `select * from (${sql.replace(/;+\s*$/, "")}) ${quote}__dg_query${quote} limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ""}` : sql;
+}
+function safeFilterClause(where) {
+  const trimmed = where?.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (/;|--|\/\*/.test(trimmed)) {
+    throw new Error("WHERE must be a single SQL expression without comments or semicolons.");
+  }
+  return `
+where ${trimmed}`;
+}
+
+// src/database/drivers/sqliteDriver.ts
+var SQLiteDriver = class extends BasicDatabaseDriver {
+  id = "sqlite";
+  displayName = "SQLite";
+  connections = /* @__PURE__ */ new Map();
+  async connect(config) {
+    await this.disconnect(config.id);
+    const sqlite = await loadSqlite();
+    const database = new sqlite.Database(config.database);
+    await run(database, "select 1");
+    this.connections.set(config.id, database);
+    return { id: config.id, config, connectedAt: Date.now() };
+  }
+  async disconnect(connectionId) {
+    const database = this.connections.get(connectionId);
+    if (!database) {
+      return;
+    }
+    this.connections.delete(connectionId);
+    await close(database);
+  }
+  async executeQuery(params) {
+    const [result] = await this.executeStatements(params, [params.sql]);
+    return result;
+  }
+  async executeStatements(params, statements) {
+    const database = this.requireDatabase(params.connectionId);
+    const results = [];
+    for (const sql of statements) {
+      const started = Date.now();
+      const executable = clientLimit(sql, params.maxRows, params.offset);
+      if (/^\s*(select|with|pragma)\b/i.test(executable)) {
+        const rows = await all(database, executable);
+        results.push(executionResultFromRows(rows, started, sql));
+      } else {
+        const changes = await run(database, executable);
+        results.push(emptyExecutionResult(started, sql, changes));
+      }
+    }
+    return results;
+  }
+  async getSchemas(connectionId) {
+    const rows = await all(this.requireDatabase(connectionId), "pragma database_list");
+    return rows.map((row) => ({ name: String(row.name) }));
+  }
+  async getTables(connectionId, schema) {
+    const rows = await all(this.requireDatabase(connectionId), `select name, type from ${quoteIdentifier(schema)}.sqlite_master where type = 'table' and name not like 'sqlite_%' order by name`);
+    return rows.map((row) => ({ schema, name: String(row.name), type: "table" }));
+  }
+  async getViews(connectionId, schema) {
+    const rows = await all(this.requireDatabase(connectionId), `select name from ${quoteIdentifier(schema)}.sqlite_master where type = 'view' order by name`);
+    return rows.map((row) => ({ schema, name: String(row.name), type: "view" }));
+  }
+  async getColumns(connectionId, schema, table) {
+    const rows = await all(this.requireDatabase(connectionId), `pragma ${quoteIdentifier(schema)}.table_info(${quoteIdentifier(table)})`);
+    return rows.map((row) => ({
+      schema,
+      table,
+      name: String(row.name),
+      ordinal: (numberFromDb2(row.cid) ?? 0) + 1,
+      dataType: optionalString4(row.type) ?? "text",
+      nullable: !Boolean(row.notnull),
+      defaultValue: optionalString4(row.dflt_value)
+    }));
+  }
+  async getIndexes(connectionId, schema, table) {
+    const database = this.requireDatabase(connectionId);
+    const indexes = await all(database, `pragma ${quoteIdentifier(schema)}.index_list(${quoteIdentifier(table)})`);
+    const result = [];
+    for (const index of indexes) {
+      const name = String(index.name);
+      const columns = await all(database, `pragma ${quoteIdentifier(schema)}.index_info(${quoteIdentifier(name)})`);
+      result.push({
+        name,
+        unique: Boolean(index.unique),
+        columns: columns.map((column) => String(column.name))
+      });
+    }
+    return result;
+  }
+  async getPrimaryKeys(connectionId, schema, table) {
+    const columns = await all(this.requireDatabase(connectionId), `pragma ${quoteIdentifier(schema)}.table_info(${quoteIdentifier(table)})`);
+    const primaryColumns = columns.filter((column) => Number(column.pk) > 0).sort((left, right) => Number(left.pk) - Number(right.pk));
+    return primaryColumns.length ? [{ name: `${table}_pk`, columns: primaryColumns.map((column) => String(column.name)) }] : [];
+  }
+  async getForeignKeys(connectionId, schema, table) {
+    const rows = await all(this.requireDatabase(connectionId), `pragma ${quoteIdentifier(schema)}.foreign_key_list(${quoteIdentifier(table)})`);
+    const grouped = /* @__PURE__ */ new Map();
+    for (const row of rows) {
+      const name = `${table}_fk_${row.id}`;
+      const entry = grouped.get(name) ?? { name, columns: [], foreignSchema: schema, foreignTable: String(row.table), foreignColumns: [] };
+      entry.columns.push(String(row.from));
+      entry.foreignColumns.push(String(row.to));
+      grouped.set(name, entry);
+    }
+    return [...grouped.values()];
+  }
+  async getTablePreview(connectionId, schema, table, limit, options) {
+    const orderBy = options?.orderBy?.length ? `
+order by ${options.orderBy.map((item) => `${quoteIdentifier(item.column)} ${item.direction === "desc" ? "desc" : "asc"}`).join(", ")}` : options?.orderBySql?.trim() ? `
+order by ${options.orderBySql.trim()}` : "";
+    const offset = Number.isFinite(options?.offset) && options?.offset && options.offset > 0 ? Math.floor(options.offset) : 0;
+    const pageLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) + 1 : 0;
+    const sql = `select * from ${qualifiedName(schema, table)}${safeFilterClause(options?.where)}${orderBy}${pageLimit ? `
+limit ${pageLimit}${offset ? ` offset ${offset}` : ""}` : ""}`;
+    return this.executeQuery({ connectionId, sql, maxRows: 0 });
+  }
+  async getTableDDL(connectionId, schema, table) {
+    const rows = await all(this.requireDatabase(connectionId), `select sql from ${quoteIdentifier(schema)}.sqlite_master where name = ? and type in ('table', 'view')`, [table]);
+    const ddl = optionalString4(rows[0]?.sql);
+    return ddl ? `${ddl};` : super.getTableDDL(connectionId, schema, table);
+  }
+  requireDatabase(connectionId) {
+    const database = this.connections.get(connectionId);
+    if (!database) {
+      throw new Error("Connection is not active. Connect first.");
+    }
+    return database;
+  }
+};
+async function loadSqlite() {
+  const bundled = loadBundledRuntime("sqliteRuntime");
+  if (bundled) {
+    return bundled;
+  }
+  return import("sqlite3").then((module2) => {
+    const candidate = module2;
+    return "Database" in candidate ? candidate : candidate.default;
+  });
+}
+function all(database, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    database.all(sql, params, (error, rows) => error ? reject(error) : resolve(rows ?? []));
+  });
+}
+function run(database, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    database.run(sql, params, function callback(error) {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(this.changes ?? 0);
+      }
+    });
+  });
+}
+function close(database) {
+  return new Promise((resolve, reject) => {
+    database.close((error) => error ? reject(error) : resolve());
+  });
+}
+
+// src/database/drivers/sqlServerDriver.ts
+var SqlServerDriver = class extends BasicDatabaseDriver {
+  id = "sqlserver";
+  displayName = "Microsoft SQL Server";
+  pools = /* @__PURE__ */ new Map();
+  async connect(config) {
+    await this.disconnect(config.id);
+    const mssql = await loadMssql();
+    const pool = new mssql.ConnectionPool({
+      server: config.host,
+      port: config.port,
+      database: config.database,
+      user: config.username,
+      password: config.password,
+      connectionTimeout: config.connectTimeoutMs ?? 1e4,
+      requestTimeout: config.queryTimeoutMs ?? 3e5,
+      options: {
+        encrypt: config.sslMode !== "disable",
+        trustServerCertificate: config.sslMode !== "require"
+      }
+    });
+    await pool.connect();
+    this.pools.set(config.id, pool);
+    return { id: config.id, config, connectedAt: Date.now() };
+  }
+  async disconnect(connectionId) {
+    const pool = this.pools.get(connectionId);
+    if (!pool) {
+      return;
+    }
+    this.pools.delete(connectionId);
+    await pool.close();
+  }
+  async testConnection(config) {
+    let connection;
+    try {
+      connection = await this.connect(config);
+      const result = await this.executeQuery({ connectionId: connection.id, sql: "select @@version as version" });
+      return { ok: true, message: "Connection successful", serverVersion: optionalString4(result.rows[0]?.version) };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (connection) {
+        await this.disconnect(connection.id).catch(() => void 0);
+      }
+    }
+  }
+  async executeQuery(params) {
+    const [result] = await this.executeStatements(params, [params.sql]);
+    return result;
+  }
+  async executeStatements(params, statements) {
+    const pool = this.requirePool(params.connectionId);
+    const results = [];
+    for (const sql of statements) {
+      const started = Date.now();
+      try {
+        const result = await pool.request().query(sql);
+        const rows = result.recordset ?? [];
+        results.push(rows.length ? executionResultFromRows(rows, started, sql) : emptyExecutionResult(started, sql, result.rowsAffected?.[0] ?? 0));
+      } catch (error) {
+        throw toQueryError(error);
+      }
+    }
+    return results;
+  }
+  async getSchemas(connectionId) {
+    const result = await this.query(connectionId, `select name from sys.schemas where name not in ('sys', 'INFORMATION_SCHEMA') order by name`);
+    return result.map((row) => ({ name: String(row.name) }));
+  }
+  async getTables(connectionId, schema) {
+    const result = await this.query(connectionId, `select table_schema as schema, table_name as name, 'table' as type from information_schema.tables where table_schema = '${escapeSql(schema)}' and table_type = 'BASE TABLE' order by table_name`);
+    return result.map((row) => ({ schema: String(row.schema), name: String(row.name), type: "table" }));
+  }
+  async getViews(connectionId, schema) {
+    const result = await this.query(connectionId, `select table_schema as schema, table_name as name, 'view' as type from information_schema.views where table_schema = '${escapeSql(schema)}' order by table_name`);
+    return result.map((row) => ({ schema: String(row.schema), name: String(row.name), type: "view" }));
+  }
+  async getFunctions(connectionId, schema) {
+    return this.getRoutines(connectionId, schema, "FUNCTION");
+  }
+  async getProcedures(connectionId, schema) {
+    return this.getRoutines(connectionId, schema, "PROCEDURE");
+  }
+  async getColumns(connectionId, schema, table) {
+    const rows = await this.query(connectionId, `select table_schema as schema, table_name as [table], column_name as name, ordinal_position as ordinal, data_type as dataType, is_nullable as nullable, column_default as defaultValue from information_schema.columns where table_schema = '${escapeSql(schema)}' and table_name = '${escapeSql(table)}' order by ordinal_position`);
+    return rows.map((row) => ({
+      schema: String(row.schema),
+      table: String(row.table),
+      name: String(row.name),
+      ordinal: Number(row.ordinal),
+      dataType: String(row.dataType),
+      nullable: String(row.nullable).toUpperCase() === "YES",
+      defaultValue: optionalString4(row.defaultValue)
+    }));
+  }
+  async getTablePreview(connectionId, schema, table, limit, options) {
+    const pageLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) + 1 : 0;
+    const offset = Number.isFinite(options?.offset) && options?.offset && options.offset > 0 ? Math.floor(options.offset) : 0;
+    const orderBy = options?.orderBy?.length ? ` order by ${options.orderBy.map((item) => `${quoteSqlIdentifier(this.id, item.column)} ${item.direction === "desc" ? "desc" : "asc"}`).join(", ")}` : options?.orderBySql?.trim() ? ` order by ${options.orderBySql.trim()}` : offset ? " order by (select null)" : "";
+    const sql = `select ${pageLimit && !offset ? `top (${pageLimit}) ` : ""}* from ${qualifiedSqlName(this.id, schema, table)}${safeFilterClause(options?.where)}${orderBy}${pageLimit && offset ? ` offset ${offset} rows fetch next ${pageLimit} rows only` : ""}`;
+    return this.executeQuery({ connectionId, sql, maxRows: 0 });
+  }
+  async getRoutines(connectionId, schema, type) {
+    const rows = await this.query(connectionId, `select routine_schema as schema, routine_name as name, routine_type as kind, data_type as returnType from information_schema.routines where routine_schema = '${escapeSql(schema)}' and routine_type = '${type}' order by routine_name`);
+    return rows.map((row) => ({
+      schema: String(row.schema),
+      name: String(row.name),
+      kind: type === "PROCEDURE" ? "procedure" : "function",
+      returnType: optionalString4(row.returnType)
+    }));
+  }
+  async query(connectionId, sql) {
+    const result = await this.requirePool(connectionId).request().query(sql);
+    return result.recordset ?? [];
+  }
+  requirePool(connectionId) {
+    const pool = this.pools.get(connectionId);
+    if (!pool) {
+      throw new Error("Connection is not active. Connect first.");
+    }
+    return pool;
+  }
+};
+async function loadMssql() {
+  const bundled = loadBundledRuntime("mssqlRuntime");
+  if (bundled) {
+    return bundled;
+  }
+  return import("mssql").then((module2) => {
+    const candidate = module2;
+    return "ConnectionPool" in candidate ? candidate : candidate.default;
+  });
+}
+function escapeSql(value) {
+  return value.replace(/'/g, "''");
+}
+
+// src/database/drivers/oracleDriver.ts
+var OracleDriver = class extends BasicDatabaseDriver {
+  id = "oracle";
+  displayName = "Oracle";
+  pools = /* @__PURE__ */ new Map();
+  async connect(config) {
+    await this.disconnect(config.id);
+    const oracle = await loadOracle();
+    const pool = await oracle.createPool({
+      user: config.username,
+      password: config.password,
+      connectString: `${config.host}:${config.port}/${config.database}`,
+      poolMin: 0,
+      poolMax: 8,
+      connectTimeout: Math.ceil((config.connectTimeoutMs ?? 1e4) / 1e3)
+    });
+    this.pools.set(config.id, pool);
+    const connection = await pool.getConnection();
+    try {
+      await connection.execute("select 1 from dual");
+    } finally {
+      await connection.close();
+    }
+    return { id: config.id, config, connectedAt: Date.now() };
+  }
+  async disconnect(connectionId) {
+    const pool = this.pools.get(connectionId);
+    if (!pool) {
+      return;
+    }
+    this.pools.delete(connectionId);
+    await pool.close(0);
+  }
+  async testConnection(config) {
+    let connection;
+    try {
+      connection = await this.connect(config);
+      const result = await this.executeQuery({ connectionId: connection.id, sql: "select banner as version from v$version where rownum = 1" });
+      return { ok: true, message: "Connection successful", serverVersion: optionalString4(result.rows[0]?.VERSION ?? result.rows[0]?.version) };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (connection) {
+        await this.disconnect(connection.id).catch(() => void 0);
+      }
+    }
+  }
+  async executeQuery(params) {
+    const [result] = await this.executeStatements(params, [params.sql]);
+    return result;
+  }
+  async executeStatements(params, statements) {
+    const oracle = await loadOracle();
+    const connection = await this.requirePool(params.connectionId).getConnection();
+    const results = [];
+    try {
+      for (const sql of statements) {
+        const started = Date.now();
+        try {
+          const result = await connection.execute(sql, [], { outFormat: oracle.OUT_FORMAT_OBJECT, autoCommit: true });
+          const rows = result.rows ?? [];
+          const dataTypes = Object.fromEntries((result.metaData ?? []).map((field) => [field.name, field.dbTypeName ?? ""]));
+          results.push(rows.length ? executionResultFromRows(rows, started, sql, dataTypes) : emptyExecutionResult(started, sql, result.rowsAffected ?? 0));
+        } catch (error) {
+          throw toQueryError(error);
+        }
+      }
+      return results;
+    } finally {
+      await connection.close();
+    }
+  }
+  async getSchemas(connectionId) {
+    const rows = await this.query(connectionId, `select username as "name" from all_users order by username`);
+    return rows.map((row) => ({ name: String(row.name ?? row.NAME) }));
+  }
+  async getTables(connectionId, schema) {
+    const rows = await this.query(connectionId, `select owner as "schema", table_name as "name", 'table' as "type", num_rows as "rowEstimate" from all_tables where owner = upper('${escapeSql2(schema)}') order by table_name`);
+    return rows.map((row) => ({ schema: String(row.schema ?? row.SCHEMA), name: String(row.name ?? row.NAME), type: "table", rowEstimate: Number(row.rowEstimate ?? row.ROWESTIMATE) || void 0 }));
+  }
+  async getViews(connectionId, schema) {
+    const rows = await this.query(connectionId, `select owner as "schema", view_name as "name", 'view' as "type" from all_views where owner = upper('${escapeSql2(schema)}') order by view_name`);
+    return rows.map((row) => ({ schema: String(row.schema ?? row.SCHEMA), name: String(row.name ?? row.NAME), type: "view" }));
+  }
+  async getFunctions(connectionId, schema) {
+    return this.getRoutines(connectionId, schema, "FUNCTION");
+  }
+  async getProcedures(connectionId, schema) {
+    return this.getRoutines(connectionId, schema, "PROCEDURE");
+  }
+  async getColumns(connectionId, schema, table) {
+    const rows = await this.query(connectionId, `select owner as "schema", table_name as "table", column_name as "name", column_id as "ordinal", data_type as "dataType", nullable as "nullable", data_default as "defaultValue" from all_tab_columns where owner = upper('${escapeSql2(schema)}') and table_name = upper('${escapeSql2(table)}') order by column_id`);
+    return rows.map((row) => ({
+      schema: String(row.schema ?? row.SCHEMA),
+      table: String(row.table ?? row.TABLE),
+      name: String(row.name ?? row.NAME),
+      ordinal: Number(row.ordinal ?? row.ORDINAL),
+      dataType: String(row.dataType ?? row.DATATYPE),
+      nullable: String(row.nullable ?? row.NULLABLE).toUpperCase() === "Y",
+      defaultValue: optionalString4(row.defaultValue ?? row.DEFAULTVALUE)
+    }));
+  }
+  async getTablePreview(connectionId, schema, table, limit, options) {
+    const offset = Number.isFinite(options?.offset) && options?.offset && options.offset > 0 ? Math.floor(options.offset) : 0;
+    const pageLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) + 1 : 0;
+    const orderBy = options?.orderBy?.length ? `
+order by ${options.orderBy.map((item) => `${quoteIdentifier(item.column)} ${item.direction === "desc" ? "desc" : "asc"}`).join(", ")}` : options?.orderBySql?.trim() ? `
+order by ${options.orderBySql.trim()}` : "";
+    const paging = pageLimit ? `
+offset ${offset} rows fetch next ${pageLimit} rows only` : "";
+    const sql = `select * from ${qualifiedName(schema, table)}${safeFilterClause(options?.where)}${orderBy}${paging}`;
+    return this.executeQuery({ connectionId, sql, maxRows: 0 });
+  }
+  async getRoutines(connectionId, schema, kind) {
+    const rows = await this.query(connectionId, `select owner as "schema", object_name as "name" from all_objects where owner = upper('${escapeSql2(schema)}') and object_type = '${kind}' order by object_name`);
+    return rows.map((row) => ({ schema: String(row.schema ?? row.SCHEMA), name: String(row.name ?? row.NAME), kind: kind === "PROCEDURE" ? "procedure" : "function" }));
+  }
+  async query(connectionId, sql) {
+    const result = await this.executeQuery({ connectionId, sql });
+    return result.rows;
+  }
+  requirePool(connectionId) {
+    const pool = this.pools.get(connectionId);
+    if (!pool) {
+      throw new Error("Connection is not active. Connect first.");
+    }
+    return pool;
+  }
+};
+async function loadOracle() {
+  const bundled = loadBundledRuntime("oracleRuntime");
+  if (bundled) {
+    return bundled;
+  }
+  return import("oracledb").then((module2) => {
+    const candidate = module2;
+    return "createPool" in candidate ? candidate : candidate.default;
+  });
+}
+function escapeSql2(value) {
+  return value.replace(/'/g, "''");
+}
+
+// src/database/drivers/redisDriver.ts
+var REDIS_TABLES = [
+  { name: "strings", redisType: "string" },
+  { name: "hashes", redisType: "hash" },
+  { name: "lists", redisType: "list" },
+  { name: "sets", redisType: "set" },
+  { name: "sorted_sets", redisType: "zset" },
+  { name: "streams", redisType: "stream" },
+  { name: "keys", redisType: "" }
+];
+var RedisDriver = class extends BasicDatabaseDriver {
+  id = "redis";
+  displayName = "Redis";
+  clients = /* @__PURE__ */ new Map();
+  configs = /* @__PURE__ */ new Map();
+  async beginTransaction(_connectionId) {
+  }
+  async commitTransaction(_connectionId) {
+  }
+  async rollbackTransaction(_connectionId) {
+  }
+  async connect(config) {
+    await this.disconnect(config.id);
+    const redis = await loadRedis();
+    const client = redis.createClient({
+      username: config.username || void 0,
+      password: config.password || void 0,
+      database: parseRedisDatabase(config.database),
+      socket: {
+        host: config.host,
+        port: config.port,
+        tls: config.sslMode !== "disable",
+        connectTimeout: config.connectTimeoutMs ?? 1e4
+      }
+    });
+    await client.connect();
+    await client.sendCommand(["PING"]);
+    this.clients.set(config.id, client);
+    this.configs.set(config.id, config);
+    return { id: config.id, config, connectedAt: Date.now() };
+  }
+  async disconnect(connectionId) {
+    const client = this.clients.get(connectionId);
+    if (!client) {
+      return;
+    }
+    this.clients.delete(connectionId);
+    this.configs.delete(connectionId);
+    await client.disconnect();
+  }
+  async testConnection(config) {
+    let connection;
+    try {
+      connection = await this.connect(config);
+      const version = await this.executeQuery({ connectionId: connection.id, sql: "INFO server" });
+      return { ok: true, message: "Connection successful", serverVersion: optionalString4(version.rows.find((row) => row.key === "redis_version")?.value) };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (connection) {
+        await this.disconnect(connection.id).catch(() => void 0);
+      }
+    }
+  }
+  async executeQuery(params) {
+    const [result] = await this.executeStatements(params, [params.sql]);
+    return result;
+  }
+  async executeStatements(params, statements) {
+    const client = this.requireClient(params.connectionId);
+    const results = [];
+    for (const sql of statements) {
+      const started = Date.now();
+      const args = parseRedisCommand(sql);
+      if (args.length === 0) {
+        results.push(emptyExecutionResult(started, sql));
+        continue;
+      }
+      try {
+        const reply = await client.sendCommand(args);
+        const rows = redisReplyRows(args[0], reply);
+        results.push(executionResultFromRows(rows, started, sql));
+      } catch (error) {
+        throw toQueryError(error);
+      }
+    }
+    return results;
+  }
+  async getSchemas(connectionId) {
+    const connection = this.requireConnectionConfig(connectionId);
+    return [{ name: `db${parseRedisDatabase(connection.database)}` }];
+  }
+  async getTables(connectionId, schema) {
+    this.requireClient(connectionId);
+    return REDIS_TABLES.map((item) => ({ schema, name: item.name, type: "table" }));
+  }
+  async getColumns(_connectionId, schema, table) {
+    const fields = ["key", "type", "ttl", "size", "value"];
+    return fields.map((name, index) => ({
+      schema,
+      table,
+      name,
+      ordinal: index + 1,
+      dataType: name === "ttl" || name === "size" ? "integer" : "text",
+      nullable: name !== "key" && name !== "type"
+    }));
+  }
+  async getTablePreview(connectionId, _schema, table, limit, options) {
+    const started = Date.now();
+    const client = this.requireClient(connectionId);
+    const redisType = REDIS_TABLES.find((item) => item.name === table)?.redisType ?? "";
+    const pageLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) + 1 : 501;
+    const offset = Number.isFinite(options?.offset) && options?.offset && options.offset > 0 ? Math.floor(options.offset) : 0;
+    const pattern = redisKeyPattern(options?.where);
+    const keys = await scanKeys(client, pattern, offset + pageLimit);
+    const page = keys.slice(offset, offset + pageLimit);
+    const rows = [];
+    for (const key of page) {
+      const type = String(await client.sendCommand(["TYPE", key]));
+      if (redisType && type !== redisType) {
+        continue;
+      }
+      const ttl = numberFromDb2(await client.sendCommand(["TTL", key]));
+      rows.push({
+        key,
+        type,
+        ttl,
+        size: await redisValueSize(client, key, type),
+        value: await redisPreviewValue(client, key, type)
+      });
+    }
+    return {
+      ...executionResultFromRows(rows, started, `SCAN ${pattern}`),
+      hasMore: rows.length > limit
+    };
+  }
+  async getTableDDL(_connectionId, schema, table) {
+    return [
+      `-- Redis logical view: ${schema}.${table}`,
+      "-- Redis is a key-value store; inspect data with commands such as:",
+      `-- SCAN 0 MATCH * COUNT 100`,
+      `-- TYPE <key>`,
+      `-- GET <key> / HGETALL <key> / LRANGE <key> 0 99`
+    ].join("\n");
+  }
+  requireClient(connectionId) {
+    const client = this.clients.get(connectionId);
+    if (!client) {
+      throw new Error("Connection is not active. Connect first.");
+    }
+    return client;
+  }
+  requireConnectionConfig(connectionId) {
+    const config = this.configs.get(connectionId);
+    if (!config) {
+      throw new Error("Connection is not active. Connect first.");
+    }
+    return config;
+  }
+};
+var redisRuntime;
+function loadRedis() {
+  redisRuntime ??= loadRedisRuntime();
+  return redisRuntime;
+}
+async function loadRedisRuntime() {
+  const bundled = loadBundledRuntime("redisRuntime");
+  if (bundled) {
+    return bundled;
+  }
+  return import("redis").then((module2) => {
+    const candidate = module2;
+    return "createClient" in candidate ? candidate : candidate.default;
+  });
+}
+function parseRedisDatabase(value) {
+  const next = Number(value || 0);
+  return Number.isInteger(next) && next >= 0 ? next : 0;
+}
+function parseRedisCommand(sql) {
+  const text = sql.trim().replace(/;+\s*$/, "");
+  const args = [];
+  const pattern = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|`([^`\\]*(?:\\.[^`\\]*)*)`|(\S+)/g;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    args.push((match[1] ?? match[2] ?? match[3] ?? match[4]).replace(/\\(["'`\\])/g, "$1"));
+  }
+  return args;
+}
+function redisReplyRows(command, reply) {
+  if (command.toUpperCase() === "INFO" && typeof reply === "string") {
+    return reply.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")).map((line) => {
+      const index = line.indexOf(":");
+      return index >= 0 ? { key: line.slice(0, index), value: line.slice(index + 1) } : { value: line };
+    });
+  }
+  if (Array.isArray(reply)) {
+    return reply.map((value, index) => ({ index, value: stringifyRedisValue(value) }));
+  }
+  if (reply && typeof reply === "object" && !(reply instanceof Buffer)) {
+    return Object.entries(reply).map(([key, value]) => ({ key, value: stringifyRedisValue(value) }));
+  }
+  return [{ value: stringifyRedisValue(reply) }];
+}
+function stringifyRedisValue(value) {
+  if (value === null || value === void 0 || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value ?? null;
+  }
+  if (value instanceof Buffer) {
+    return value.toString("utf8");
+  }
+  return JSON.stringify(value);
+}
+function redisKeyPattern(where) {
+  const trimmed = where?.trim();
+  if (!trimmed) {
+    return "*";
+  }
+  const match = trimmed.match(/^(?:key\s+(?:like|=)\s*)?['"]?([^'";]+)['"]?$/i);
+  if (!match) {
+    throw new Error("Redis preview filter must be a key pattern, for example: user:*");
+  }
+  return match[1].replace(/%/g, "*");
+}
+async function scanKeys(client, pattern, limit) {
+  const keys = [];
+  let cursor = "0";
+  do {
+    const reply = await client.sendCommand(["SCAN", cursor, "MATCH", pattern, "COUNT", "100"]);
+    if (!Array.isArray(reply) || reply.length < 2) {
+      break;
+    }
+    cursor = String(reply[0]);
+    const batch = Array.isArray(reply[1]) ? reply[1] : [];
+    keys.push(...batch.map((key) => String(key)));
+  } while (cursor !== "0" && keys.length < limit);
+  return keys;
+}
+async function redisValueSize(client, key, type) {
+  const command = {
+    string: ["STRLEN", key],
+    hash: ["HLEN", key],
+    list: ["LLEN", key],
+    set: ["SCARD", key],
+    zset: ["ZCARD", key],
+    stream: ["XLEN", key]
+  };
+  const args = command[type];
+  return args ? numberFromDb2(await client.sendCommand(args)) : void 0;
+}
+async function redisPreviewValue(client, key, type) {
+  const commands5 = {
+    string: ["GET", key],
+    hash: ["HGETALL", key],
+    list: ["LRANGE", key, "0", "9"],
+    set: ["SMEMBERS", key],
+    zset: ["ZRANGE", key, "0", "9", "WITHSCORES"],
+    stream: ["XRANGE", key, "-", "+", "COUNT", "10"]
+  };
+  const args = commands5[type];
+  if (!args) {
+    return void 0;
+  }
+  const value = await client.sendCommand(args);
+  return optionalString4(stringifyRedisValue(value));
+}
+
+// src/database/drivers/snowflakeDriver.ts
+var SnowflakeDriver = class extends BasicDatabaseDriver {
+  id = "snowflake";
+  displayName = "Snowflake";
+  connections = /* @__PURE__ */ new Map();
+  async connect(config) {
+    await this.disconnect(config.id);
+    const snowflake = await loadSnowflake();
+    const connection = snowflake.createConnection({
+      account: snowflakeAccount(config.host),
+      username: config.username,
+      password: config.password,
+      database: optionalString4(config.database),
+      schema: optionalString4(config.defaultSchema),
+      timeout: config.connectTimeoutMs ?? 1e4,
+      application: "VSCodeDataGrip",
+      rowMode: "object"
+    });
+    await connection.connectAsync();
+    this.connections.set(config.id, connection);
+    return { id: config.id, config, connectedAt: Date.now() };
+  }
+  async disconnect(connectionId) {
+    const connection = this.connections.get(connectionId);
+    if (!connection) {
+      return;
+    }
+    this.connections.delete(connectionId);
+    await new Promise((resolve, reject) => {
+      connection.destroy((error) => error ? reject(error) : resolve());
+    });
+  }
+  async testConnection(config) {
+    let connection;
+    try {
+      connection = await this.connect(config);
+      const result = await this.executeQuery({ connectionId: connection.id, sql: "select current_version() as version" });
+      return { ok: true, message: "Connection successful", serverVersion: optionalString4(result.rows[0]?.VERSION ?? result.rows[0]?.version) };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (connection) {
+        await this.disconnect(connection.id).catch(() => void 0);
+      }
+    }
+  }
+  async executeQuery(params) {
+    const [result] = await this.executeStatements(params, [params.sql]);
+    return result;
+  }
+  async executeStatements(params, statements) {
+    const connection = this.requireConnection(params.connectionId);
+    const results = [];
+    for (const sql of statements) {
+      const started = Date.now();
+      try {
+        const result = await executeSnowflake(connection, sqlWithLimit(sql, params.maxRows, params.offset));
+        results.push(result.rows.length ? executionResultFromRows(result.rows, started, sql, result.dataTypes) : emptyExecutionResult(started, sql, result.rowCount));
+      } catch (error) {
+        throw toQueryError(error);
+      }
+    }
+    return results;
+  }
+  async getSchemas(connectionId) {
+    const rows = await this.query(connectionId, 'select schema_name as "name" from information_schema.schemata order by schema_name');
+    return rows.map((row) => ({ name: String(row.name ?? row.NAME) }));
+  }
+  async getTables(connectionId, schema) {
+    const rows = await this.query(connectionId, `select table_schema as "schema", table_name as "name", row_count as "rowEstimate" from information_schema.tables where table_schema = upper('${escapeSql3(schema)}') and table_type = 'BASE TABLE' order by table_name`);
+    return rows.map((row) => ({
+      schema: String(row.schema ?? row.SCHEMA),
+      name: String(row.name ?? row.NAME),
+      type: "table",
+      rowEstimate: numberFromDb2(row.rowEstimate ?? row.ROWESTIMATE)
+    }));
+  }
+  async getViews(connectionId, schema) {
+    const rows = await this.query(connectionId, `select table_schema as "schema", table_name as "name" from information_schema.views where table_schema = upper('${escapeSql3(schema)}') order by table_name`);
+    return rows.map((row) => ({ schema: String(row.schema ?? row.SCHEMA), name: String(row.name ?? row.NAME), type: "view" }));
+  }
+  async getFunctions(connectionId, schema) {
+    return this.getRoutines(connectionId, schema, "FUNCTION");
+  }
+  async getProcedures(connectionId, schema) {
+    return this.getRoutines(connectionId, schema, "PROCEDURE");
+  }
+  async getColumns(connectionId, schema, table) {
+    const rows = await this.query(connectionId, `select table_schema as "schema", table_name as "table", column_name as "name", ordinal_position as "ordinal", data_type as "dataType", is_nullable as "nullable", column_default as "defaultValue" from information_schema.columns where table_schema = upper('${escapeSql3(schema)}') and table_name = upper('${escapeSql3(table)}') order by ordinal_position`);
+    return rows.map((row) => ({
+      schema: String(row.schema ?? row.SCHEMA),
+      table: String(row.table ?? row.TABLE),
+      name: String(row.name ?? row.NAME),
+      ordinal: Number(row.ordinal ?? row.ORDINAL),
+      dataType: String(row.dataType ?? row.DATATYPE),
+      nullable: String(row.nullable ?? row.NULLABLE).toUpperCase() === "YES",
+      defaultValue: optionalString4(row.defaultValue ?? row.DEFAULTVALUE)
+    }));
+  }
+  async getTablePreview(connectionId, schema, table, limit, options) {
+    const offset = Number.isFinite(options?.offset) && options?.offset && options.offset > 0 ? Math.floor(options.offset) : 0;
+    const pageLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) + 1 : 0;
+    const orderBy = options?.orderBy?.length ? `
+order by ${options.orderBy.map((item) => `${quoteIdentifier(item.column)} ${item.direction === "desc" ? "desc" : "asc"}`).join(", ")}` : options?.orderBySql?.trim() ? `
+order by ${options.orderBySql.trim()}` : "";
+    const sql = `select * from ${qualifiedName(schema, table)}${safeFilterClause(options?.where)}${orderBy}${pageLimit ? `
+limit ${pageLimit}${offset ? ` offset ${offset}` : ""}` : ""}`;
+    return this.executeQuery({ connectionId, sql, maxRows: 0 });
+  }
+  async getRoutines(connectionId, schema, kind) {
+    const rows = await this.query(connectionId, `select routine_schema as "schema", routine_name as "name", data_type as "returnType" from information_schema.routines where routine_schema = upper('${escapeSql3(schema)}') and routine_type = '${kind}' order by routine_name`);
+    return rows.map((row) => ({
+      schema: String(row.schema ?? row.SCHEMA),
+      name: String(row.name ?? row.NAME),
+      kind: kind === "PROCEDURE" ? "procedure" : "function",
+      returnType: optionalString4(row.returnType ?? row.RETURNTYPE)
+    }));
+  }
+  async query(connectionId, sql) {
+    const result = await this.executeQuery({ connectionId, sql });
+    return result.rows;
+  }
+  requireConnection(connectionId) {
+    const connection = this.connections.get(connectionId);
+    if (!connection) {
+      throw new Error("Connection is not active. Connect first.");
+    }
+    return connection;
+  }
+};
+var snowflakeRuntime;
+function loadSnowflake() {
+  snowflakeRuntime ??= loadSnowflakeRuntime();
+  return snowflakeRuntime;
+}
+async function loadSnowflakeRuntime() {
+  const bundled = loadBundledRuntime("snowflakeRuntime");
+  if (bundled) {
+    return bundled;
+  }
+  return import("snowflake-sdk").then((module2) => {
+    const candidate = module2;
+    return "createConnection" in candidate ? candidate : candidate.default;
+  });
+}
+function executeSnowflake(connection, sql) {
+  return new Promise((resolve, reject) => {
+    connection.execute({
+      sqlText: sql,
+      complete: (error, statement, rows = []) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        const dataTypes = Object.fromEntries((statement.getColumns() ?? []).map((column) => [column.getName(), column.getType()]));
+        resolve({
+          rows,
+          rowCount: statement.getNumUpdatedRows() ?? statement.getNumRows() ?? rows.length,
+          dataTypes
+        });
+      }
+    });
+  });
+}
+function sqlWithLimit(sql, maxRows, offset) {
+  const limit = Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : void 0;
+  const nextOffset = Number.isFinite(offset) && offset && offset > 0 ? Math.floor(offset) : 0;
+  const pageLimit = limit ? limit + 1 : void 0;
+  return pageLimit && /^(select|with)\b/i.test(sql.trim()) ? `select * from (${sql.replace(/;+\s*$/, "")}) "__dg_query" limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ""}` : sql;
+}
+function snowflakeAccount(host) {
+  return host.replace(/^https?:\/\//i, "").replace(/\.snowflakecomputing\.com$/i, "").replace(/\/.*$/, "");
+}
+function escapeSql3(value) {
+  return value.replace(/'/g, "''");
+}
+
 // src/utils/id.ts
 function createId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -1564,6 +2959,41 @@ var DEFAULTS_BY_DATABASE_TYPE = {
     database: "mysql",
     sslMode: "disable",
     color: "blue"
+  },
+  sqlite: {
+    name: "SQLite",
+    port: "0",
+    database: ":memory:",
+    sslMode: "disable",
+    color: "gray"
+  },
+  sqlserver: {
+    name: "SQL Server",
+    port: "1433",
+    database: "master",
+    sslMode: "prefer",
+    color: "yellow"
+  },
+  oracle: {
+    name: "Oracle",
+    port: "1521",
+    database: "ORCLPDB1",
+    sslMode: "disable",
+    color: "red"
+  },
+  redis: {
+    name: "Redis",
+    port: "6379",
+    database: "0",
+    sslMode: "disable",
+    color: "red"
+  },
+  snowflake: {
+    name: "Snowflake",
+    port: "443",
+    database: "SNOWFLAKE",
+    sslMode: "require",
+    color: "purple"
   }
 };
 function connectionDefaultsForType(type) {
@@ -1699,6 +3129,11 @@ var ConnectionManager = class {
     this.drivers.set("postgres", new PostgresDriver());
     this.drivers.set("redshift", new RedshiftDriver());
     this.drivers.set("mysql", new MySQLDriver());
+    this.drivers.set("sqlite", new SQLiteDriver());
+    this.drivers.set("sqlserver", new SqlServerDriver());
+    this.drivers.set("oracle", new OracleDriver());
+    this.drivers.set("redis", new RedisDriver());
+    this.drivers.set("snowflake", new SnowflakeDriver());
   }
   drivers = /* @__PURE__ */ new Map();
   active = /* @__PURE__ */ new Map();
@@ -1867,7 +3302,12 @@ var ConnectionManager = class {
     const typePick = await vscode.window.showQuickPick([
       { label: "PostgreSQL", type: "postgres" },
       { label: "Amazon Redshift", type: "redshift" },
-      { label: "MySQL", type: "mysql" }
+      { label: "MySQL", type: "mysql" },
+      { label: "SQLite", type: "sqlite" },
+      { label: "Microsoft SQL Server", type: "sqlserver" },
+      { label: "Oracle", type: "oracle" },
+      { label: "Redis", type: "redis" },
+      { label: "Snowflake", type: "snowflake" }
     ], { placeHolder: "Database type" });
     if (!typePick) {
       return void 0;
@@ -1878,8 +3318,8 @@ var ConnectionManager = class {
     if (!name) {
       return void 0;
     }
-    const host = await vscode.window.showInputBox({ prompt: "Host", value: existing?.host ?? "localhost" });
-    if (!host) {
+    const host = await vscode.window.showInputBox({ prompt: type === "snowflake" ? "Account / host" : "Host", value: existing?.host ?? "localhost" });
+    if (type !== "sqlite" && !host) {
       return void 0;
     }
     const port = Number(await vscode.window.showInputBox({ prompt: "Port", value: String(existing?.port ?? defaults.port) }));
@@ -1888,7 +3328,7 @@ var ConnectionManager = class {
       return void 0;
     }
     const username = await vscode.window.showInputBox({ prompt: "Username", value: existing?.username });
-    if (!username) {
+    if (type !== "sqlite" && type !== "redis" && !username) {
       return void 0;
     }
     const password = await vscode.window.showInputBox({ prompt: "Password", password: true });
@@ -1897,10 +3337,10 @@ var ConnectionManager = class {
       id: existing?.id ?? createId("conn"),
       name,
       type,
-      host,
-      port,
+      host: host || "localhost",
+      port: type === "sqlite" ? 0 : port,
       database,
-      username,
+      username: username ?? "",
       password,
       sslMode: ssl ?? defaults.sslMode,
       color: existing?.color ?? defaults.color,
@@ -2068,6 +3508,7 @@ function stripQuotes(value) {
 // src/services/sqlSafetyClassifier.ts
 var DESTRUCTIVE_RE = /\b(drop|truncate|alter)\b/i;
 var WRITE_RE = /\b(insert\s+into|update|delete\s+from|create\s+(?:unique\s+)?index|create\s+table|create\s+schema)\b/i;
+var TABLE_NAME_RE = '((?:"[^"]+"|`[^`]+`|\\[[^\\]]+\\]|\\w+)(?:\\.(?:"[^"]+"|`[^`]+`|\\[[^\\]]+\\]|\\w+))?)';
 var SqlSafetyClassifier = class {
   classify(sql, options = {}) {
     const statements = splitSqlStatements(sql).map((statement) => statement.sql);
@@ -2122,36 +3563,68 @@ var SqlSafetyClassifier = class {
       previewAvailable: previewAvailable || risk === "destructive" || risk === "production"
     };
   }
-  previewSql(sql) {
+  previewSql(sql, databaseType = "postgres") {
     const first = splitSqlStatements(sql)[0]?.sql ?? sql.trim();
     if (!first) {
       return void 0;
     }
     if (/^\s*(select|with)\b/i.test(first)) {
-      return `explain ${first}`;
+      return explainSql(databaseType, first);
     }
-    const deleteMatch = first.match(/\bdelete\s+from\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)([\s\S]*)/i);
+    const deleteMatch = first.match(new RegExp(`\\bdelete\\s+from\\s+${TABLE_NAME_RE}([\\s\\S]*)`, "i"));
     if (deleteMatch) {
       const where = deleteMatch[2].match(/\bwhere\b[\s\S]*/i)?.[0] ?? "";
-      return `select *
-from ${deleteMatch[1]}
-${where}
-limit 100;`.trim();
+      return limitedSelect(databaseType, deleteMatch[1], where);
     }
-    const updateMatch = first.match(/\bupdate\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)[\s\S]*?\bwhere\b([\s\S]*)/i);
+    const updateMatch = first.match(new RegExp(`\\bupdate\\s+${TABLE_NAME_RE}[\\s\\S]*?\\bwhere\\b([\\s\\S]*)`, "i"));
     if (updateMatch) {
-      return `select *
-from ${updateMatch[1]}
-where ${updateMatch[2].trim()}
-limit 100;`;
+      return limitedSelect(databaseType, updateMatch[1], `where ${updateMatch[2].trim()}`);
     }
-    return `explain ${first}`;
+    return explainSql(databaseType, first);
   }
   maxRisk(current, next) {
     const order = ["safe", "write", "destructive", "production"];
     return order.indexOf(next) > order.indexOf(current) ? next : current;
   }
 };
+function limitedSelect(databaseType, tableName, whereClause) {
+  const where = whereClause.trim();
+  if (databaseType === "redis") {
+    return "-- Safety preview is not available for Redis commands.";
+  }
+  if (databaseType === "sqlserver") {
+    return `select top (100) *
+from ${tableName}${where ? `
+${where}` : ""};`;
+  }
+  if (databaseType === "oracle") {
+    return `select *
+from ${tableName}${where ? `
+${where}` : ""}
+fetch first 100 rows only;`;
+  }
+  return `select *
+from ${tableName}${where ? `
+${where}` : ""}
+limit 100;`;
+}
+function explainSql(databaseType, sql) {
+  const statement = sql.trim().replace(/;+\s*$/, "");
+  if (databaseType === "redis") {
+    return "-- Safety preview is not available for Redis commands.";
+  }
+  if (databaseType === "sqlserver") {
+    return `set showplan_text on;
+${statement};
+set showplan_text off;`;
+  }
+  if (databaseType === "oracle") {
+    return `explain plan for
+${statement};
+select * from table(dbms_xplan.display);`;
+  }
+  return `explain ${statement};`;
+}
 
 // src/database/queryExecutor.ts
 var QueryExecutor = class {
@@ -2428,7 +3901,11 @@ var TablePerformanceAdvisorService = class {
 };
 function buildTablePerformancePrepassFlags(stats, workload) {
   const flags = [];
-  const table = qualifiedName(stats.schema, stats.table);
+  const databaseType = stats.databaseType;
+  if (databaseType === "redis") {
+    return flags;
+  }
+  const table = qualifiedSqlName(databaseType, stats.schema, stats.table);
   const redshift = stats.redshift;
   if (redshift) {
     const joinColumn = topWorkloadColumn(workload, "join");
@@ -2440,7 +3917,7 @@ function buildTablePerformancePrepassFlags(stats, workload) {
         message: "Distribution skew is high for this Redshift table.",
         evidence: `skew_rows=${redshift.skewRows}`,
         recommendationKind: "distkey",
-        ddl: joinColumn ? `alter table ${table} alter distkey ${quoteIdentifier(joinColumn)};` : void 0
+        ddl: joinColumn ? `alter table ${table} alter distkey ${quoteSqlIdentifier(databaseType, joinColumn)};` : void 0
       });
     }
     if ((redshift.unsortedPct ?? 0) > 20) {
@@ -2470,9 +3947,12 @@ function buildTablePerformancePrepassFlags(stats, workload) {
         message: "The workload repeatedly filters or orders this table without a leading sort key.",
         evidence: workloadEvidence(workload, filterColumn2),
         recommendationKind: "sortkey",
-        ddl: `alter table ${table} alter sortkey (${quoteIdentifier(filterColumn2)});`
+        ddl: `alter table ${table} alter sortkey (${quoteSqlIdentifier(databaseType, filterColumn2)});`
       });
     }
+    return flags;
+  }
+  if (databaseType !== "postgres") {
     return flags;
   }
   const rowCount = stats.liveRows ?? stats.rowEstimate ?? 0;
@@ -2486,7 +3966,7 @@ function buildTablePerformancePrepassFlags(stats, workload) {
       message: "Sequential scans dominate index scans on a large table.",
       evidence: `seq_scan=${seqScan}, idx_scan=${idxScan}, rows=${rowCount}`,
       recommendationKind: "index",
-      ddl: filterColumn ? `create index concurrently if not exists ${quoteIdentifier(`${stats.table}_${filterColumn}_idx`)} on ${table} (${quoteIdentifier(filterColumn)});` : void 0
+      ddl: filterColumn ? `create index concurrently if not exists ${quoteSqlIdentifier(databaseType, `${stats.table}_${filterColumn}_idx`)} on ${table} (${quoteSqlIdentifier(databaseType, filterColumn)});` : void 0
     });
   }
   return flags;
@@ -5831,9 +7311,9 @@ var SqlQueryTreeService = class {
         }
       }
       if (char === "(") {
-        const close = this.findMatchingParen(text, i);
-        if (close > i) {
-          const inner = text.slice(i + 1, close);
+        const close2 = this.findMatchingParen(text, i);
+        if (close2 > i) {
+          const inner = text.slice(i + 1, close2);
           const trimmed = this.trimBounds(inner, 0, inner.length);
           if (trimmed) {
             const innerSql = inner.slice(trimmed.start, trimmed.end);
@@ -5858,7 +7338,7 @@ var SqlQueryTreeService = class {
           const nestedBaseOffset = baseOffset + i + 1;
           const nestedChildren = this.parseChildren(document, inner, nestedBaseOffset, counter).filter((child) => !children.some((existing) => existing.start === child.start && existing.end === child.end));
           children.push(...nestedChildren);
-          i = close + 1;
+          i = close2 + 1;
           continue;
         }
       }
@@ -5900,12 +7380,12 @@ var SqlQueryTreeService = class {
         break;
       }
       const open = i;
-      const close = this.findMatchingParen(text, open);
-      if (close <= open) {
+      const close2 = this.findMatchingParen(text, open);
+      if (close2 <= open) {
         break;
       }
       const nodeStart = nameStart;
-      const nodeEnd = close + 1;
+      const nodeEnd = close2 + 1;
       const sql = text.slice(nodeStart, nodeEnd);
       const start = baseOffset + nodeStart;
       const end = baseOffset + nodeEnd;
@@ -5921,10 +7401,10 @@ var SqlQueryTreeService = class {
         children: [],
         aliasNames: this.extractAliases(sql)
       };
-      const body = text.slice(open + 1, close);
+      const body = text.slice(open + 1, close2);
       node.children = this.parseChildren(document, body, baseOffset + open + 1, counter);
       nodes.push(node);
-      i = close + 1;
+      i = close2 + 1;
       i = this.skipWhitespace(text, i);
       if (text[i] === ",") {
         i += 1;
@@ -6241,8 +7721,8 @@ var SqlQueryTreeService = class {
         if (match) {
           const tokenStart = i;
           const tag = match[0];
-          const close = text.indexOf(tag, i + tag.length);
-          i = close >= 0 ? close + tag.length : end;
+          const close2 = text.indexOf(tag, i + tag.length);
+          i = close2 >= 0 ? close2 + tag.length : end;
           if (options.includeQuotedValues) {
             tokens.push({ word: text.slice(tokenStart, i), start: tokenStart, end: i });
           }
@@ -6768,7 +8248,7 @@ var QueryMemoryController = class {
         await this.openAiResult("Modified Query", await this.ai.send({ action: "generate", selectedSql: item.sql, lastError: instruction, relevantSchema: { tables: [] } }));
       }
     } else if (picked.action === "preview") {
-      const preview = this.safety.previewSql(item.sql);
+      const preview = this.safety.previewSql(item.sql, item.databaseType);
       if (preview) {
         await this.openSql(preview, "Query Safety Preview");
       }
@@ -7342,6 +8822,7 @@ function formatValue(value) {
 
 // src/services/schemaDiffService.ts
 function compareSchemas(request) {
+  const targetDatabaseType = assertSqlGeneratingType(request.targetDatabaseType ?? "postgres", "Schema diff migration SQL");
   const sourceTables = tableMap(request.sourceSchema.tables);
   const targetTables = tableMap(request.targetSchema.tables);
   const sourceViews = viewMap(request.sourceSchema.views);
@@ -7349,25 +8830,27 @@ function compareSchemas(request) {
   const createTables = [...sourceTables.values()].filter((table) => !targetTables.has(tableKey2(table.schema, table.name))).map((table) => ({
     schema: table.schema,
     name: table.name,
-    ddl: buildCreateTableSql(table.schema, table.name, request.sourceSchema.columns[tableKey2(table.schema, table.name)] ?? [])
+    ddl: createTableSql(targetDatabaseType, table.schema, table.name, request.sourceSchema.columns[tableKey2(table.schema, table.name)] ?? [])
   }));
   const dropTables = [...targetTables.values()].filter((table) => !sourceTables.has(tableKey2(table.schema, table.name))).map((table) => ({ schema: table.schema, name: table.name }));
   const createViews = [...sourceViews.values()].filter((view) => !targetViews.has(viewKey(view.schema, view.name))).map((view) => ({
     schema: view.schema,
     name: view.name,
-    ddl: buildCreateViewSql(view.schema, view.name)
+    ddl: createPlaceholderViewSql(targetDatabaseType, view.schema, view.name)
   }));
   const dropViews = [...targetViews.values()].filter((view) => !sourceViews.has(viewKey(view.schema, view.name))).map((view) => ({ schema: view.schema, name: view.name }));
   const alterTables = [...sourceTables.values()].filter((table) => targetTables.has(tableKey2(table.schema, table.name))).map((table) => compareTableColumns(
     table.schema,
     table.name,
+    targetDatabaseType,
     request.sourceSchema.columns[tableKey2(table.schema, table.name)] ?? [],
     request.targetSchema.columns[tableKey2(table.schema, table.name)] ?? []
   )).filter((change) => change.addedColumns.length || change.removedColumns.length || change.typeChanges.length || change.nullableChanges.length);
-  const migrationSql = buildMigrationSql({ createTables, dropTables, createViews, dropViews, alterTables });
+  const migrationSql = buildMigrationSql(targetDatabaseType, { createTables, dropTables, createViews, dropViews, alterTables });
   return {
     sourceConnectionName: request.sourceConnectionName,
     targetConnectionName: request.targetConnectionName,
+    targetDatabaseType,
     sourceSchema: request.sourceSchema.schemaName,
     targetSchema: request.targetSchema.schemaName,
     createTables,
@@ -7391,22 +8874,22 @@ function formatSchemaDiffMarkdown(report) {
     `- Views to drop: ${report.dropViews.length}`,
     `- Tables to alter: ${report.alterTables.length}`
   ];
-  appendObjects(lines, "## Create Tables", report.createTables.map((item) => `${qualifiedName(item.schema, item.name)}
+  appendObjects(lines, "## Create Tables", report.createTables.map((item) => `${qualifiedSqlName(report.targetDatabaseType, item.schema, item.name)}
 \`\`\`sql
 ${item.ddl}
 \`\`\``));
-  appendSimple(lines, "## Drop Tables", report.dropTables.map((item) => qualifiedName(item.schema, item.name)));
-  appendObjects(lines, "## Create Views", report.createViews.map((item) => `${qualifiedName(item.schema, item.name)}
+  appendSimple(lines, "## Drop Tables", report.dropTables.map((item) => qualifiedSqlName(report.targetDatabaseType, item.schema, item.name)));
+  appendObjects(lines, "## Create Views", report.createViews.map((item) => `${qualifiedSqlName(report.targetDatabaseType, item.schema, item.name)}
 \`\`\`sql
 ${item.ddl}
 \`\`\``));
-  appendSimple(lines, "## Drop Views", report.dropViews.map((item) => qualifiedName(item.schema, item.name)));
+  appendSimple(lines, "## Drop Views", report.dropViews.map((item) => qualifiedSqlName(report.targetDatabaseType, item.schema, item.name)));
   if (report.alterTables.length) {
     lines.push("");
     lines.push("## Table Changes");
     for (const table of report.alterTables) {
       lines.push("");
-      lines.push(`### ${qualifiedName(table.schema, table.name)}`);
+      lines.push(`### ${qualifiedSqlName(report.targetDatabaseType, table.schema, table.name)}`);
       if (table.addedColumns.length) {
         lines.push(`- Added columns: ${table.addedColumns.map((item) => `${item.name}`).join(", ")}`);
       }
@@ -7428,12 +8911,12 @@ ${item.ddl}
   lines.push("```");
   return lines.join("\n");
 }
-function compareTableColumns(schema, name, sourceColumns, targetColumns) {
+function compareTableColumns(schema, name, targetDatabaseType, sourceColumns, targetColumns) {
   const targetByName = new Map(targetColumns.map((column) => [column.name, column]));
   const sourceByName = new Map(sourceColumns.map((column) => [column.name, column]));
   const addedColumns = sourceColumns.filter((column) => !targetByName.has(column.name)).map((column) => ({
     name: column.name,
-    ddl: `alter table ${qualifiedName(schema, name)} add column ${quoteIdentifier(column.name)} ${column.dataType}${column.defaultValue ? ` default ${column.defaultValue}` : ""}${column.nullable ? "" : " not null"};`
+    ddl: addColumnMigrationSql(targetDatabaseType, schema, name, column)
   }));
   const removedColumns = targetColumns.filter((column) => !sourceByName.has(column.name)).map((column) => ({ name: column.name }));
   const typeChanges = sourceColumns.filter((column) => {
@@ -7454,7 +8937,7 @@ function compareTableColumns(schema, name, sourceColumns, targetColumns) {
   }));
   return { schema, name, addedColumns, removedColumns, typeChanges, nullableChanges };
 }
-function buildMigrationSql(report) {
+function buildMigrationSql(targetDatabaseType, report) {
   const statements = [];
   for (const item of report.createTables) {
     statements.push(item.ddl);
@@ -7468,23 +8951,23 @@ function buildMigrationSql(report) {
     }
   }
   for (const item of report.dropViews) {
-    statements.push(`drop view if exists ${qualifiedName(item.schema, item.name)};`);
+    statements.push(dropViewIfExistsSql(targetDatabaseType, item.schema, item.name));
   }
   for (const item of report.dropTables) {
-    statements.push(`drop table if exists ${qualifiedName(item.schema, item.name)};`);
+    statements.push(dropTableIfExistsSql(targetDatabaseType, item.schema, item.name));
   }
   return statements.join("\n");
 }
-function buildCreateTableSql(schema, table, columns) {
-  const ddlColumns = columns.length ? columns.map((column) => `  ${quoteIdentifier(column.name)} ${column.dataType}${column.defaultValue ? ` default ${column.defaultValue}` : ""}${column.nullable ? "" : " not null"}`) : ["  id integer"];
-  return `create table ${qualifiedName(schema, table)} (
-${ddlColumns.join(",\n")}
-);`;
-}
-function buildCreateViewSql(schema, view) {
-  return `create view ${qualifiedName(schema, view)} as
-select 1 as placeholder;
-`;
+function addColumnMigrationSql(type, schema, table, column) {
+  const dataType = column.dataType?.trim();
+  if (!dataType) {
+    throw new Error(`Missing data type for ${column.schema}.${column.table}.${column.name}.`);
+  }
+  const addKeyword = type === "sqlserver" || type === "oracle" ? "add" : "add column";
+  const defaultValue = column.defaultValue ? ` default ${column.defaultValue}` : "";
+  const nullable = column.nullable ? "" : " not null";
+  return `alter table ${qualifiedSqlName(type, schema, table)}
+  ${addKeyword} ${quoteSqlIdentifier(type, column.name)} ${dataType}${defaultValue}${nullable};`;
 }
 function tableMap(items) {
   return new Map(items.map((item) => [tableKey2(item.schema, item.name), item]));
@@ -7607,6 +9090,18 @@ function sqlFormatterDialect(connection) {
   if (connection?.type === "mysql") {
     return "mysql";
   }
+  if (connection?.type === "sqlite") {
+    return "sqlite";
+  }
+  if (connection?.type === "sqlserver") {
+    return "transactsql";
+  }
+  if (connection?.type === "oracle") {
+    return "plsql";
+  }
+  if (connection?.type === "snowflake") {
+    return "snowflake";
+  }
   return "postgresql";
 }
 async function formatSqlText(sql, dialect) {
@@ -7636,7 +9131,7 @@ async function loadSqlFormatterRuntime() {
 }
 
 // src/services/tableCopyService.ts
-function buildTableCopyPreview(sourceSchema, sourceTable, targetSchema, targetTable, columns, rows, sourceLabel, targetLabel) {
+function buildTableCopyPreview(sourceSchema, sourceTable, targetSchema, targetTable, columns, rows, sourceLabel, targetLabel, targetDatabaseType = "postgres") {
   if (!columns.length) {
     throw new Error("No table columns were found to copy.");
   }
@@ -7647,15 +9142,15 @@ function buildTableCopyPreview(sourceSchema, sourceTable, targetSchema, targetTa
     rows.length === 0 ? "No data rows were found; only the table structure will be copied." : void 0,
     rows.length > 5e3 ? `Copy preview includes ${rows.length.toLocaleString()} rows.` : void 0
   ].filter(Boolean);
-  const ddl = buildCreateTableSql2(targetSchema, targetTable, columns);
-  const inserts = chunk(rows, 100).map((batch) => buildInsertBatch(targetSchema, targetTable, columnNames, batch));
+  const ddl = createTableSql(targetDatabaseType, targetSchema, targetTable, columns);
+  const inserts = chunk(rows, 100).map((batch) => insertBatchSql(targetDatabaseType, targetSchema, targetTable, columnNames, batch));
   return {
     sourceRowCount: rows.length,
     targetSchema,
     targetTable,
     sql: [
-      `-- Source table: ${qualifiedName(sourceSchema, sourceTable)}`,
-      `-- Target table: ${qualifiedName(targetSchema, targetTable)}`,
+      `-- Source table: ${qualifiedSqlName(targetDatabaseType, sourceSchema, sourceTable)}`,
+      `-- Target table: ${qualifiedSqlName(targetDatabaseType, targetSchema, targetTable)}`,
       ...warnings.map((warning) => `-- ${warning}`),
       "",
       ddl,
@@ -7664,39 +9159,6 @@ function buildTableCopyPreview(sourceSchema, sourceTable, targetSchema, targetTa
     ].join("\n"),
     warnings
   };
-}
-function buildCreateTableSql2(schema, table, columns) {
-  const lines = columns.map((column) => {
-    const nullable = column.nullable ? "" : " not null";
-    const defaultValue = column.defaultValue ? ` default ${column.defaultValue}` : "";
-    return `  ${quoteIdentifier(column.name)} ${column.dataType}${defaultValue}${nullable}`;
-  });
-  return `create table ${qualifiedName(schema, table)} (
-${lines.join(",\n")}
-);`;
-}
-function buildInsertBatch(schema, table, columns, rows) {
-  return `insert into ${qualifiedName(schema, table)} (${columns.map(quoteIdentifier).join(", ")})
-values
-${rows.map((row) => `  (${columns.map((column) => formatLiteral(row[column])).join(", ")})`).join(",\n")};`;
-}
-function formatLiteral(value) {
-  if (value === null || value === void 0) {
-    return "null";
-  }
-  if (typeof value === "number" || typeof value === "bigint") {
-    return String(value);
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (value instanceof Date) {
-    return `'${value.toISOString().replace(/'/g, "''")}'`;
-  }
-  if (typeof value === "object") {
-    return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
-  }
-  return `'${String(value).replace(/'/g, "''")}'`;
 }
 function chunk(items, size) {
   const result = [];
@@ -7717,6 +9179,10 @@ function buildTableImportPreview(_databaseType, _schema, _table, tableColumns, f
   if (!mapping.some((item) => item.source)) {
     throw new Error("Could not map any source fields to table columns.");
   }
+  const warnings = [
+    ...source.warnings,
+    ...mappingWarnings(source.columns, tableColumns, mapping)
+  ];
   return {
     kind,
     fileName,
@@ -7730,10 +9196,7 @@ function buildTableImportPreview(_databaseType, _schema, _table, tableColumns, f
     })),
     mapping,
     sampleRows: source.rows.slice(0, 50),
-    warnings: [
-      ...source.warnings,
-      ...mappingWarnings(source.columns, tableColumns, mapping)
-    ]
+    warnings
   };
 }
 function buildTableImportData(fileName, text, mapping) {
@@ -7773,7 +9236,7 @@ function buildTableImportStatements(databaseType, schema, table, data, batchSize
     throw new Error("No import rows were found.");
   }
   const safeBatchSize = Number.isFinite(batchSize) && batchSize > 0 ? Math.floor(batchSize) : 100;
-  return chunk2(data.rows, safeBatchSize).map((batch) => buildInsertBatch2(databaseType, schema, table, data.columns, batch));
+  return chunk2(data.rows, safeBatchSize).map((batch) => insertBatchSql(databaseType, schema, table, data.columns, batch));
 }
 function parseJsonSource(text) {
   const parsed = JSON.parse(text);
@@ -7901,38 +9364,6 @@ function mappingWarnings(sourceColumns, targetColumns, mapping) {
     warnings.push(`Target columns left unmapped: ${unusedTargets.join(", ")}.`);
   }
   return warnings;
-}
-function buildInsertBatch2(databaseType, schema, table, columns, rows) {
-  return `insert into ${qualifiedSqlName(databaseType, schema, table)} (${columns.map((column) => quoteSqlIdentifier(databaseType, column)).join(", ")})
-values
-${rows.map((row) => `  (${columns.map((column) => sqlLiteral(databaseType, row[column])).join(", ")})`).join(",\n")};`;
-}
-function qualifiedSqlName(databaseType, schema, table) {
-  return `${quoteSqlIdentifier(databaseType, schema)}.${quoteSqlIdentifier(databaseType, table)}`;
-}
-function quoteSqlIdentifier(databaseType, identifier) {
-  if (databaseType === "mysql") {
-    return `\`${identifier.replace(/`/g, "``")}\``;
-  }
-  return `"${identifier.replace(/"/g, '""')}"`;
-}
-function sqlLiteral(_databaseType, value) {
-  if (value === null || value === void 0) {
-    return "null";
-  }
-  if (typeof value === "number" || typeof value === "bigint") {
-    return String(value);
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (value instanceof Date) {
-    return `'${value.toISOString().replace(/'/g, "''")}'`;
-  }
-  if (typeof value === "object") {
-    return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
-  }
-  return `'${String(value).replace(/'/g, "''")}'`;
 }
 function normalizeName(value) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -8608,18 +10039,20 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
   }
   fromForm(form) {
     const port = Number(form.port);
-    if (!form.name.trim() || !form.host.trim() || !form.database.trim() || !form.username.trim()) {
-      throw new Error("Name, host, database, and username are required.");
+    const hostRequired = form.type !== "sqlite";
+    const usernameRequired = form.type !== "sqlite" && form.type !== "redis";
+    if (!form.name.trim() || !form.database.trim() || hostRequired && !form.host.trim() || usernameRequired && !form.username.trim()) {
+      throw new Error("Name, database, host, and username are required where the selected database type needs them.");
     }
-    if (!Number.isInteger(port) || port <= 0) {
+    if (form.type !== "sqlite" && (!Number.isInteger(port) || port <= 0)) {
       throw new Error("Port must be a positive number.");
     }
     return {
       id: form.id ?? this.existing?.id ?? createId("conn"),
       name: form.name.trim(),
       type: form.type,
-      host: form.host.trim(),
-      port,
+      host: form.host.trim() || "localhost",
+      port: form.type === "sqlite" ? 0 : port,
       database: form.database.trim(),
       username: form.username.trim(),
       password: form.password === "" ? void 0 : form.password,
@@ -9207,6 +10640,11 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
               <option value="postgres">PostgreSQL</option>
               <option value="redshift">Amazon Redshift</option>
               <option value="mysql">MySQL</option>
+              <option value="sqlite">SQLite</option>
+              <option value="sqlserver">Microsoft SQL Server</option>
+              <option value="oracle">Oracle</option>
+              <option value="redis">Redis</option>
+              <option value="snowflake">Snowflake</option>
             </select>
             <span class="field-label">Color:</span>
             <select name="color" aria-label="Connection color">
@@ -9231,6 +10669,11 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
                 <button type="button" data-db-type="postgres">default</button>
                 <button type="button" data-db-type="redshift">IAM cluster/region</button>
                 <button type="button" data-db-type="mysql">MySQL</button>
+                <button type="button" data-db-type="sqlite">SQLite</button>
+                <button type="button" data-db-type="sqlserver">SQL Server</button>
+                <button type="button" data-db-type="oracle">Oracle</button>
+                <button type="button" data-db-type="redis">Redis</button>
+                <button type="button" data-db-type="snowflake">Snowflake</button>
               </div>
               <span class="field-label">Host:</span>
               <div class="inline-row full-row">
@@ -9427,7 +10870,19 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       const port = form.elements.namedItem('port').value || '';
       const database = form.elements.namedItem('database').value || 'database';
       sourceName.textContent = name;
-      urlPreview.value = 'jdbc:' + (type === 'redshift' ? 'redshift' : type === 'mysql' ? 'mysql' : 'postgresql') + '://' + host + (port ? ':' + port : '') + '/' + database;
+      const scheme = {
+        postgres: 'postgresql',
+        redshift: 'redshift',
+        mysql: 'mysql',
+        sqlite: 'sqlite',
+        sqlserver: 'sqlserver',
+        oracle: 'oracle',
+        redis: 'redis',
+        snowflake: 'snowflake'
+      }[type] || type;
+      urlPreview.value = type === 'sqlite'
+        ? 'sqlite:' + database
+        : scheme + '://' + host + (port ? ':' + port : '') + '/' + database;
       typeButtons.forEach((button) => button.classList.toggle('active', button.dataset.dbType === type));
       renderSourceList();
     }
@@ -11188,7 +12643,12 @@ var TableDataPanel = class {
   }
   static html(webview, extensionUri, node, rows, columns, durationMs, maxRows, hasMore, initialLoading = false) {
     const nonce = Date.now().toString();
-    const safeTable = escapeHtml2(qualifiedName(node.table.schema, node.table.name));
+    const tableSqlName = qualifiedSqlName(node.connection.type, node.table.schema, node.table.name);
+    const safeTable = escapeHtml2(tableSqlName);
+    const insertTargetJson = JSON.stringify(tableSqlName).replace(/</g, "\\u003c");
+    const identifierDialectJson = JSON.stringify(node.connection.type).replace(/</g, "\\u003c");
+    const canGenerateSqlJson = JSON.stringify(node.connection.type !== "redis");
+    const booleanLiteralModeJson = JSON.stringify(node.connection.type === "sqlserver" || node.connection.type === "oracle" ? "numeric" : "keyword");
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -12006,10 +13466,18 @@ var TableDataPanel = class {
     function markdownValue(value) {
       return cell(value).replaceAll('|', '\\|').replaceAll('\\r', ' ').replaceAll('\\n', ' ');
     }
+    const insertTarget = ${insertTargetJson};
+    const identifierDialect = ${identifierDialectJson};
+    const canGenerateSql = ${canGenerateSqlJson};
+    const booleanLiteralMode = ${booleanLiteralModeJson};
     function sqlLiteral(value) {
       if (value === null || value === undefined) return 'null';
       if (typeof value === 'number' || typeof value === 'bigint') return String(value);
-      if (typeof value === 'boolean') return value ? 'true' : 'false';
+      if (typeof value === 'boolean') {
+        return booleanLiteralMode === 'numeric'
+          ? (value ? '1' : '0')
+          : (value ? 'true' : 'false');
+      }
       if (value instanceof Date) return "'" + value.toISOString().replace(/'/g, "''") + "'";
       if (typeof value === 'object') return "'" + JSON.stringify(value).replace(/'/g, "''") + "'";
       return "'" + String(value).replace(/'/g, "''") + "'";
@@ -12024,9 +13492,14 @@ var TableDataPanel = class {
       return next === '' ? '(empty)' : next;
     }
     function sqlIdentifier(column) {
-      return /^[A-Za-z_][A-Za-z0-9_]*$/.test(column)
-        ? column
-        : '"' + column.replaceAll('"', '""') + '"';
+      if (identifierDialect === 'mysql') {
+        const tick = String.fromCharCode(96);
+        return tick + column.replaceAll(tick, tick + tick) + tick;
+      }
+      if (identifierDialect === 'sqlserver') {
+        return '[' + column.replaceAll(']', ']]') + ']';
+      }
+      return '"' + column.replaceAll('"', '""') + '"';
     }
     function suggestColumnContext(input) {
       const cursor = input.selectionStart ?? input.value.length;
@@ -12176,7 +13649,10 @@ var TableDataPanel = class {
         if (!visibleRows.length) {
           return '';
         }
-        return 'insert into ${qualifiedName(node.table.schema, node.table.name)} (' + columns.map((column) => sqlIdentifier(column)).join(', ') + ')\\nvalues\\n' + visibleRows.map((row) => '  (' + columns.map((column) => sqlLiteral(row[column])).join(', ') + ')').join(',\\n') + ';';
+        if (!canGenerateSql) {
+          return '-- INSERT export is not available for Redis connections. Use Redis commands instead.\\n';
+        }
+        return 'insert into ' + insertTarget + ' (' + columns.map((column) => sqlIdentifier(column)).join(', ') + ')\\nvalues\\n' + visibleRows.map((row) => '  (' + columns.map((column) => sqlLiteral(row[column])).join(', ') + ')').join(',\\n') + ';';
       }
       if (format === 'xlsx') {
         return '';
@@ -14467,6 +15943,7 @@ function activate(context) {
     const report = compareSchemas({
       sourceConnectionName: source.connection.name,
       targetConnectionName: targetConnection.name,
+      targetDatabaseType: targetConnection.type,
       sourceSchema: snapshotFromSchemaEntry(sourceSchema),
       targetSchema: snapshotFromSchemaEntry(targetSchema)
     });
@@ -14575,8 +16052,14 @@ function activate(context) {
       return;
     }
     const sourceConnection = node.connection;
+    if (!canGenerateSqlScript(sourceConnection, "Copy table")) {
+      return;
+    }
     const destination = await pickDestinationConnection(connectionManager, sourceConnection.id);
     if (!destination) {
+      return;
+    }
+    if (!canGenerateSqlScript(destination, "Copy table")) {
       return;
     }
     const targetSchema = await vscode27.window.showInputBox({
@@ -14600,38 +16083,43 @@ function activate(context) {
     if (!connectionManager.isConnected(sourceConnection.id)) {
       await connectionManager.connect(sourceConnection.id);
     }
-    const [columns, sourceRows, sourceDdl] = await vscode27.window.withProgress({
-      location: vscode27.ProgressLocation.Notification,
-      title: `Copying ${qualifiedName(node.table.schema, node.table.name)}`,
-      cancellable: false
-    }, async () => Promise.all([
-      schemaContext.getColumns(sourceConnection, node.table.schema, node.table.name),
-      connectionManager.getDriver(sourceConnection.type).executeQuery({
-        connectionId: sourceConnection.id,
-        sql: `select * from ${qualifiedName(node.table.schema, node.table.name)}`
-      }),
-      connectionManager.getDriver(sourceConnection.type).getTableDDL(sourceConnection.id, node.table.schema, node.table.name)
-    ]));
-    const preview = buildTableCopyPreview(
-      node.table.schema,
-      node.table.name,
-      targetSchema.trim(),
-      targetTable.trim(),
-      columns,
-      sourceRows.rows,
-      sourceConnection.name,
-      destination.name
-    );
-    const header = [
-      `-- Source connection: ${sourceConnection.name}`,
-      `-- Destination connection: ${destination.name}`,
-      `-- Source table: ${qualifiedName(node.table.schema, node.table.name)}`,
-      `-- Source DDL:`,
-      ...sourceDdl.trim().split("\n").map((line) => `-- ${line}`),
-      ""
-    ].join("\n");
-    await openSqlScript(`Copy ${node.table.name} to ${destination.name}`, `${header}${preview.sql}
+    try {
+      const [columns, sourceRows, sourceDdl] = await vscode27.window.withProgress({
+        location: vscode27.ProgressLocation.Notification,
+        title: `Copying ${qualifiedName(node.table.schema, node.table.name)}`,
+        cancellable: false
+      }, async () => Promise.all([
+        schemaContext.getColumns(sourceConnection, node.table.schema, node.table.name),
+        connectionManager.getDriver(sourceConnection.type).executeQuery({
+          connectionId: sourceConnection.id,
+          sql: selectAllTableSql(sourceConnection.type, node.table.schema, node.table.name)
+        }),
+        connectionManager.getDriver(sourceConnection.type).getTableDDL(sourceConnection.id, node.table.schema, node.table.name)
+      ]));
+      const preview = buildTableCopyPreview(
+        node.table.schema,
+        node.table.name,
+        targetSchema.trim(),
+        targetTable.trim(),
+        columns,
+        sourceRows.rows,
+        sourceConnection.name,
+        destination.name,
+        destination.type
+      );
+      const header = [
+        `-- Source connection: ${sourceConnection.name}`,
+        `-- Destination connection: ${destination.name}`,
+        `-- Source table: ${qualifiedName(node.table.schema, node.table.name)}`,
+        `-- Source DDL:`,
+        ...sourceDdl.trim().split("\n").map((line) => `-- ${line}`),
+        ""
+      ].join("\n");
+      await openSqlScript(`Copy ${node.table.name} to ${destination.name}`, `${header}${preview.sql}
 `, destination);
+    } catch (error) {
+      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+    }
   });
   async function openSqlScript(title, content, connection) {
     const doc = await openSqlEditor(connectionManager, title, content, connection);
@@ -14645,20 +16133,36 @@ function activate(context) {
     refreshQueryMap();
     sqlCodeLensRefresh.fire();
   }
+  async function openGeneratedObjectScript(title, node, kind) {
+    const target = schemaFromNode(node);
+    if (!target.connection) {
+      return;
+    }
+    try {
+      await openSqlScript(title, newObjectTemplate(node, kind), target.connection);
+    } catch (error) {
+      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
   register("database.showObjectDdl", async (node) => {
-    const sql = await objectDdl(connectionManager, node);
-    if (sql) {
-      await openSqlScript(`${objectName(node) ?? "Object"} DDL`, `${sql}
+    try {
+      const sql = await objectDdl(connectionManager, node);
+      if (sql) {
+        await openSqlScript(`${objectName(node) ?? "Object"} DDL`, `${sql}
 `, schemaFromNode(node).connection);
+      }
+    } catch (error) {
+      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
   });
   register("database.generateSelect", async (node) => {
     const target = tableLikeTarget(node);
     if (target) {
-      await openSqlScript(`SELECT ${target.name}`, `select *
-from ${qualifiedName(target.schema, target.name)}
-limit 100;
-`, target.connection);
+      try {
+        await openSqlScript(`SELECT ${target.name}`, selectTableSql(target.connection.type, target.schema, target.name, 100), target.connection);
+      } catch (error) {
+        void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+      }
     }
   });
   register("database.generateInsert", async (node) => {
@@ -14667,50 +16171,61 @@ limit 100;
       return;
     }
     const columns = await connectionManager.getDriver(target.connection.type).getColumns(target.connection.id, target.schema, target.name);
-    const writable = columns.filter((column) => !column.defaultValue).map((column) => quoteIdentifier(column.name));
-    const sql = writable.length ? `insert into ${qualifiedName(target.schema, target.name)} (${writable.join(", ")})
-values (${writable.map(() => "null").join(", ")});
-` : `insert into ${qualifiedName(target.schema, target.name)}
-default values;
-`;
-    await openSqlScript(`INSERT ${target.name}`, sql, target.connection);
+    try {
+      await openSqlScript(`INSERT ${target.name}`, insertTemplateSql(target.connection.type, target.schema, target.name, columns), target.connection);
+    } catch (error) {
+      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+    }
   });
   register("database.generateUpdate", async (node) => {
     const target = tableLikeTarget(node);
     if (!target) {
       return;
     }
-    await openSqlScript(`UPDATE ${target.name}`, `update ${qualifiedName(target.schema, target.name)}
-set ${quoteIdentifier("column_name")} = null
-where ${quoteIdentifier("id")} = '<id>';
-`, target.connection);
+    try {
+      await openSqlScript(`UPDATE ${target.name}`, updateTemplateSql(target.connection.type, target.schema, target.name), target.connection);
+    } catch (error) {
+      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+    }
   });
   register("database.generateDelete", async (node) => {
     const target = tableLikeTarget(node);
     if (target) {
-      await openSqlScript(`DELETE ${target.name}`, `delete from ${qualifiedName(target.schema, target.name)}
-where ${quoteIdentifier("id")} = '<id>';
-`, target.connection);
+      try {
+        await openSqlScript(`DELETE ${target.name}`, deleteTemplateSql(target.connection.type, target.schema, target.name), target.connection);
+      } catch (error) {
+        void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+      }
     }
   });
   register("database.modifyTable", async (node) => {
     const target = tableLikeTarget(node);
     if (target) {
-      await openSqlScript(`ALTER ${target.name}`, `alter table ${qualifiedName(target.schema, target.name)}
-  add column ${quoteIdentifier("new_column")} text;
-`, target.connection);
+      try {
+        await openSqlScript(`ALTER ${target.name}`, addColumnSql(target.connection.type, target.schema, target.name), target.connection);
+      } catch (error) {
+        void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+      }
     }
   });
   register("database.renameObject", async (node) => {
-    const sql = renameTemplate(node);
-    if (sql) {
-      await openSqlScript(`Rename ${objectName(node)}`, sql, schemaFromNode(node).connection);
+    try {
+      const sql = renameTemplate(node);
+      if (sql) {
+        await openSqlScript(`Rename ${objectName(node)}`, sql, schemaFromNode(node).connection);
+      }
+    } catch (error) {
+      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
   });
   register("database.dropObject", async (node) => {
-    const sql = dropTemplate(node);
-    if (sql) {
-      await openSqlScript(`Drop ${objectName(node)}`, sql, schemaFromNode(node).connection);
+    try {
+      const sql = dropTemplate(node);
+      if (sql) {
+        await openSqlScript(`Drop ${objectName(node)}`, sql, schemaFromNode(node).connection);
+      }
+    } catch (error) {
+      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
   });
   register("database.newObject", async (node) => {
@@ -14732,16 +16247,16 @@ where ${quoteIdentifier("id")} = '<id>';
       await vscode27.commands.executeCommand(picked.command, node);
     }
   });
-  register("database.newTable", async (node) => openSqlScript("New Table", newObjectTemplate(node, "table"), schemaFromNode(node).connection));
-  register("database.newView", async (node) => openSqlScript("New View", newObjectTemplate(node, "view"), schemaFromNode(node).connection));
-  register("database.newMaterializedView", async (node) => openSqlScript("New Materialized View", newObjectTemplate(node, "materialized_view"), schemaFromNode(node).connection));
-  register("database.newColumn", async (node) => openSqlScript("New Column", newObjectTemplate(node, "column"), schemaFromNode(node).connection));
-  register("database.newIndex", async (node) => openSqlScript("New Index", newObjectTemplate(node, "index"), schemaFromNode(node).connection));
-  register("database.newUniqueKey", async (node) => openSqlScript("New Unique Key", newObjectTemplate(node, "unique_key"), schemaFromNode(node).connection));
-  register("database.newForeignKey", async (node) => openSqlScript("New Foreign Key", newObjectTemplate(node, "foreign_key"), schemaFromNode(node).connection));
-  register("database.newCheck", async (node) => openSqlScript("New Check", newObjectTemplate(node, "check"), schemaFromNode(node).connection));
-  register("database.newSchema", async (node) => openSqlScript("New Schema", newObjectTemplate(node, "schema"), schemaFromNode(node).connection));
-  register("database.newSequence", async (node) => openSqlScript("New Sequence", newObjectTemplate(node, "sequence"), schemaFromNode(node).connection));
+  register("database.newTable", async (node) => openGeneratedObjectScript("New Table", node, "table"));
+  register("database.newView", async (node) => openGeneratedObjectScript("New View", node, "view"));
+  register("database.newMaterializedView", async (node) => openGeneratedObjectScript("New Materialized View", node, "materialized_view"));
+  register("database.newColumn", async (node) => openGeneratedObjectScript("New Column", node, "column"));
+  register("database.newIndex", async (node) => openGeneratedObjectScript("New Index", node, "index"));
+  register("database.newUniqueKey", async (node) => openGeneratedObjectScript("New Unique Key", node, "unique_key"));
+  register("database.newForeignKey", async (node) => openGeneratedObjectScript("New Foreign Key", node, "foreign_key"));
+  register("database.newCheck", async (node) => openGeneratedObjectScript("New Check", node, "check"));
+  register("database.newSchema", async (node) => openGeneratedObjectScript("New Schema", node, "schema"));
+  register("database.newSequence", async (node) => openGeneratedObjectScript("New Sequence", node, "sequence"));
   register("database.quickDocumentation", async (node) => {
     const docs = await quickDocumentation(connectionManager, node);
     if (docs) {
@@ -15624,30 +17139,36 @@ function objectName(node) {
 }
 function qualifiedObjectName(node) {
   if (node instanceof SchemaNode) {
-    return quoteIdentifier(node.schema.name);
+    return logicalIdentifier(node.connection, node.schema.name);
   }
   if (node instanceof FolderNode && node.tableName) {
-    return qualifiedName(node.schema, node.tableName);
+    return logicalQualifiedName(node.connection, node.schema, node.tableName);
   }
   if (node instanceof TableNode) {
-    return qualifiedName(node.table.schema, node.table.name);
+    return logicalQualifiedName(node.connection, node.table.schema, node.table.name);
   }
   if (node instanceof ViewNode) {
-    return qualifiedName(node.view.schema, node.view.name);
+    return logicalQualifiedName(node.connection, node.view.schema, node.view.name);
   }
   if (node instanceof RoutineNode) {
-    return qualifiedName(node.routine.schema, node.routine.name);
+    return logicalQualifiedName(node.connection, node.routine.schema, node.routine.name);
   }
   if (node instanceof TriggerNode) {
-    return qualifiedName(node.trigger.schema, node.trigger.table) + "." + quoteIdentifier(node.trigger.name);
+    return `${logicalQualifiedName(node.connection, node.trigger.schema, node.trigger.table)}.${logicalIdentifier(node.connection, node.trigger.name)}`;
   }
   if (node instanceof ColumnNode) {
-    return `${qualifiedName(node.column.schema, node.column.table)}.${quoteIdentifier(node.column.name)}`;
+    return `${logicalQualifiedName(node.connection, node.column.schema, node.column.table)}.${logicalIdentifier(node.connection, node.column.name)}`;
   }
   if (node instanceof CatalogNode || node instanceof ConnectionNode) {
     return node.connection.database;
   }
   return objectName(node);
+}
+function logicalIdentifier(connection, identifier) {
+  return connection.type === "redis" ? identifier : quoteSqlIdentifier(connection.type, identifier);
+}
+function logicalQualifiedName(connection, schema, name) {
+  return connection.type === "redis" ? `${schema}.${name}` : qualifiedSqlName(connection.type, schema, name);
 }
 function tableLikeTarget(node) {
   if (node instanceof TableNode) {
@@ -15707,6 +17228,13 @@ function emptyWorkload() {
     columns: []
   };
 }
+function canGenerateSqlScript(connection, feature) {
+  if (connection.type !== "redis") {
+    return true;
+  }
+  void vscode27.window.showWarningMessage(`${feature} is not available for Redis connections because Redis uses commands instead of SQL scripts.`);
+  return false;
+}
 async function objectDdl(connectionManager, node) {
   if (node instanceof TableNode) {
     if (!connectionManager.isConnected(node.connection.id)) {
@@ -15715,8 +17243,7 @@ async function objectDdl(connectionManager, node) {
     return connectionManager.getDriver(node.connection.type).getTableDDL(node.connection.id, node.table.schema, node.table.name);
   }
   if (node instanceof SchemaNode) {
-    return `create schema if not exists ${quoteIdentifier(node.schema.name)};
-`;
+    return createSchemaSql(node.connection.type, node.schema.name, { ifNotExists: true });
   }
   return void 0;
 }
@@ -15781,110 +17308,40 @@ function snapshotFromSchemaEntry(entry) {
   };
 }
 function newObjectTemplate(node, type) {
-  const { schema } = schemaFromNode(node);
+  const { schema, connection } = schemaFromNode(node);
+  if (!connection) {
+    return "";
+  }
   const table = tableLikeTarget(node);
-  if (type === "table") {
-    return `create table ${qualifiedName(schema, "new_table")} (
-  id bigserial primary key,
-  created_at timestamp not null default now()
-);
-`;
-  }
-  if (type === "view") {
-    return `create or replace view ${qualifiedName(schema, "new_view")} as
-select *
-from ${qualifiedName(schema, "source_table")};
-`;
-  }
-  if (type === "materialized_view") {
-    return `create materialized view ${qualifiedName(schema, "new_materialized_view")} as
-select *
-from ${qualifiedName(schema, "source_table")};
-`;
-  }
-  if (type === "column") {
-    const target = table ?? { schema, name: "table_name" };
-    return `alter table ${qualifiedName(target.schema, target.name)}
-  add column ${quoteIdentifier("new_column")} text;
-`;
-  }
-  if (type === "index") {
-    const target = table ?? { schema, name: "table_name" };
-    return `create index ${quoteIdentifier(`idx_${target.name}_column`)}
-on ${qualifiedName(target.schema, target.name)} (${quoteIdentifier("column_name")});
-`;
-  }
-  if (type === "unique_key") {
-    const target = table ?? { schema, name: "table_name" };
-    return `alter table ${qualifiedName(target.schema, target.name)}
-  add constraint ${quoteIdentifier(`${target.name}_column_key`)} unique (${quoteIdentifier("column_name")});
-`;
-  }
-  if (type === "foreign_key") {
-    const target = table ?? { schema, name: "table_name" };
-    return `alter table ${qualifiedName(target.schema, target.name)}
-  add constraint ${quoteIdentifier(`${target.name}_fk`)} foreign key (${quoteIdentifier("column_name")})
-  references ${qualifiedName(schema, "referenced_table")} (${quoteIdentifier("id")});
-`;
-  }
-  if (type === "check") {
-    const target = table ?? { schema, name: "table_name" };
-    return `alter table ${qualifiedName(target.schema, target.name)}
-  add constraint ${quoteIdentifier(`${target.name}_check`)} check (${quoteIdentifier("column_name")} is not null);
-`;
-  }
-  if (type === "schema") {
-    return `create schema ${quoteIdentifier("new_schema")};
-`;
-  }
-  if (type === "sequence") {
-    return `create sequence ${qualifiedName(schema, "new_sequence")}
-  start with 1
-  increment by 1;
-`;
-  }
-  return "";
+  return newObjectSql(connection.type, type, schema, table ? { schema: table.schema, name: table.name } : void 0);
 }
 function renameTemplate(node) {
   if (node instanceof TableNode) {
-    return `alter table ${qualifiedName(node.table.schema, node.table.name)}
-  rename to ${quoteIdentifier(`${node.table.name}_new`)};
-`;
+    return renameObjectSql(node.connection.type, { kind: "table", schema: node.table.schema, name: node.table.name });
   }
   if (node instanceof ViewNode) {
-    return `alter view ${qualifiedName(node.view.schema, node.view.name)}
-  rename to ${quoteIdentifier(`${node.view.name}_new`)};
-`;
+    return renameObjectSql(node.connection.type, { kind: "view", schema: node.view.schema, name: node.view.name });
   }
   if (node instanceof SchemaNode) {
-    return `alter schema ${quoteIdentifier(node.schema.name)}
-  rename to ${quoteIdentifier(`${node.schema.name}_new`)};
-`;
+    return renameObjectSql(node.connection.type, { kind: "schema", schema: node.schema.name, name: node.schema.name });
   }
   if (node instanceof ColumnNode) {
-    return `alter table ${qualifiedName(node.column.schema, node.column.table)}
-  rename column ${quoteIdentifier(node.column.name)} to ${quoteIdentifier(`${node.column.name}_new`)};
-`;
+    return renameObjectSql(node.connection.type, { kind: "column", schema: node.column.schema, name: node.column.table, column: node.column.name });
   }
   return void 0;
 }
 function dropTemplate(node) {
   if (node instanceof TableNode) {
-    return `drop table ${qualifiedName(node.table.schema, node.table.name)};
-`;
+    return dropObjectSql(node.connection.type, { kind: "table", schema: node.table.schema, name: node.table.name });
   }
   if (node instanceof ViewNode) {
-    return `drop view ${qualifiedName(node.view.schema, node.view.name)};
-`;
+    return dropObjectSql(node.connection.type, { kind: "view", schema: node.view.schema, name: node.view.name });
   }
   if (node instanceof SchemaNode) {
-    return `drop schema ${quoteIdentifier(node.schema.name)};
-`;
+    return dropObjectSql(node.connection.type, { kind: "schema", schema: node.schema.name, name: node.schema.name });
   }
   if (node instanceof ColumnNode) {
-    return `alter table ${qualifiedName(node.column.schema, node.column.table)}
-  drop column ${quoteIdentifier(node.column.name)};
-`;
+    return dropObjectSql(node.connection.type, { kind: "column", schema: node.column.schema, name: node.column.table, column: node.column.name });
   }
   return void 0;
 }

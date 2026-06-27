@@ -1,8 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildTableCopyPreview = buildTableCopyPreview;
-const identifiers_1 = require("../utils/identifiers");
-function buildTableCopyPreview(sourceSchema, sourceTable, targetSchema, targetTable, columns, rows, sourceLabel, targetLabel) {
+const sqlDialect_1 = require("./sqlDialect");
+function buildTableCopyPreview(sourceSchema, sourceTable, targetSchema, targetTable, columns, rows, sourceLabel, targetLabel, targetDatabaseType = 'postgres') {
     if (!columns.length) {
         throw new Error('No table columns were found to copy.');
     }
@@ -13,15 +13,15 @@ function buildTableCopyPreview(sourceSchema, sourceTable, targetSchema, targetTa
         rows.length === 0 ? 'No data rows were found; only the table structure will be copied.' : undefined,
         rows.length > 5000 ? `Copy preview includes ${rows.length.toLocaleString()} rows.` : undefined
     ].filter(Boolean);
-    const ddl = buildCreateTableSql(targetSchema, targetTable, columns);
-    const inserts = chunk(rows, 100).map((batch) => buildInsertBatch(targetSchema, targetTable, columnNames, batch));
+    const ddl = (0, sqlDialect_1.createTableSql)(targetDatabaseType, targetSchema, targetTable, columns);
+    const inserts = chunk(rows, 100).map((batch) => (0, sqlDialect_1.insertBatchSql)(targetDatabaseType, targetSchema, targetTable, columnNames, batch));
     return {
         sourceRowCount: rows.length,
         targetSchema,
         targetTable,
         sql: [
-            `-- Source table: ${(0, identifiers_1.qualifiedName)(sourceSchema, sourceTable)}`,
-            `-- Target table: ${(0, identifiers_1.qualifiedName)(targetSchema, targetTable)}`,
+            `-- Source table: ${(0, sqlDialect_1.qualifiedSqlName)(targetDatabaseType, sourceSchema, sourceTable)}`,
+            `-- Target table: ${(0, sqlDialect_1.qualifiedSqlName)(targetDatabaseType, targetSchema, targetTable)}`,
             ...warnings.map((warning) => `-- ${warning}`),
             '',
             ddl,
@@ -30,35 +30,6 @@ function buildTableCopyPreview(sourceSchema, sourceTable, targetSchema, targetTa
         ].join('\n'),
         warnings
     };
-}
-function buildCreateTableSql(schema, table, columns) {
-    const lines = columns.map((column) => {
-        const nullable = column.nullable ? '' : ' not null';
-        const defaultValue = column.defaultValue ? ` default ${column.defaultValue}` : '';
-        return `  ${(0, identifiers_1.quoteIdentifier)(column.name)} ${column.dataType}${defaultValue}${nullable}`;
-    });
-    return `create table ${(0, identifiers_1.qualifiedName)(schema, table)} (\n${lines.join(',\n')}\n);`;
-}
-function buildInsertBatch(schema, table, columns, rows) {
-    return `insert into ${(0, identifiers_1.qualifiedName)(schema, table)} (${columns.map(identifiers_1.quoteIdentifier).join(', ')})\nvalues\n${rows.map((row) => `  (${columns.map((column) => formatLiteral(row[column])).join(', ')})`).join(',\n')};`;
-}
-function formatLiteral(value) {
-    if (value === null || value === undefined) {
-        return 'null';
-    }
-    if (typeof value === 'number' || typeof value === 'bigint') {
-        return String(value);
-    }
-    if (typeof value === 'boolean') {
-        return value ? 'true' : 'false';
-    }
-    if (value instanceof Date) {
-        return `'${value.toISOString().replace(/'/g, "''")}'`;
-    }
-    if (typeof value === 'object') {
-        return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
-    }
-    return `'${String(value).replace(/'/g, "''")}'`;
 }
 function chunk(items, size) {
     const result = [];

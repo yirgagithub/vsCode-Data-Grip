@@ -22,7 +22,7 @@ import {
 } from '../../types';
 
 export interface DatabaseDriver {
-  id: 'postgres' | 'redshift' | 'mysql';
+  id: 'postgres' | 'redshift' | 'mysql' | 'sqlite' | 'sqlserver' | 'oracle' | 'redis' | 'snowflake';
   displayName: string;
 
   testConnection(config: ConnectionConfigWithPassword): Promise<TestConnectionResult>;

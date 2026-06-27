@@ -7,7 +7,23 @@ interface PackageJson {
 }
 
 const root = process.cwd();
-const runtimePackages = ['pg', 'pg/*', 'mysql2', 'mysql2/*', 'sql-formatter', 'xlsx'];
+const runtimePackages = [
+  'pg',
+  'pg/*',
+  'mysql2',
+  'mysql2/*',
+  'mssql',
+  'mssql/*',
+  'oracledb',
+  'redis',
+  'redis/*',
+  'snowflake-sdk',
+  'snowflake-sdk/*',
+  'sqlite3',
+  'sqlite3/*',
+  'sql-formatter',
+  'xlsx'
+];
 
 function packageJson(): PackageJson {
   return JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as PackageJson;
@@ -27,8 +43,17 @@ describe('package scripts', () => {
     expect(runtimePackages.filter((name) => externalized.has(name))).toEqual(runtimePackages);
     expect(scripts['bundle:runtimes']).toContain('src/runtime/pgRuntime.ts');
     expect(scripts['bundle:runtimes']).toContain('src/runtime/mysqlRuntime.ts');
+    expect(scripts['bundle:runtimes']).toContain('src/runtime/mssqlRuntime.ts');
+    expect(scripts['bundle:runtimes']).toContain('src/runtime/oracleRuntime.ts');
+    expect(scripts['bundle:runtimes']).toContain('src/runtime/redisRuntime.ts');
+    expect(scripts['bundle:runtimes']).toContain('src/runtime/snowflakeRuntime.ts');
+    expect(scripts['bundle:runtimes']).toContain('src/runtime/sqliteRuntime.ts');
     expect(scripts['bundle:runtimes']).toContain('src/runtime/sqlFormatterRuntime.ts');
     expect(scripts['bundle:runtimes']).toContain('src/runtime/xlsxRuntime.ts');
+    expect(scripts['bundle:runtimes']).toContain('--external:oracledb');
+    expect(scripts['bundle:runtimes']).toContain('--external:sqlite3');
+    expect(scripts['copy:native-runtimes']).toBe('node scripts/copyNativeRuntimes.js');
+    expect(scripts.build).toContain('npm run copy:native-runtimes');
     expect(scripts.build).toContain('npm run bundle:runtimes');
     expect(scripts.package).toBe('vsce package --no-dependencies');
     expect(scripts.publish).toBe('vsce publish --no-dependencies');
