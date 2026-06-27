@@ -1,43 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Data Grip icon">
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="bg" x1="16" y1="10" x2="112" y2="118" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#202833"/>
-      <stop offset="0.52" stop-color="#151A21"/>
-      <stop offset="1" stop-color="#0E1117"/>
+    <linearGradient id="bg" x1="18" y1="15" x2="237" y2="238" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#101827"/>
+      <stop offset="1" stop-color="#070B12"/>
     </linearGradient>
-    <linearGradient id="db" x1="27" y1="28" x2="74" y2="92" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#6AB7FF"/>
-      <stop offset="1" stop-color="#2D7DDB"/>
+    <linearGradient id="data" x1="72" y1="57" x2="183" y2="182" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8BDDFF"/>
+      <stop offset=".55" stop-color="#4E9BFF"/>
+      <stop offset="1" stop-color="#2656E6"/>
     </linearGradient>
-    <linearGradient id="filter" x1="74" y1="34" x2="108" y2="86" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#82E6A5"/>
-      <stop offset="1" stop-color="#34B37E"/>
+    <linearGradient id="grip" x1="42" y1="60" x2="214" y2="194" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D9FFE7"/>
+      <stop offset=".42" stop-color="#4CEB8B"/>
+      <stop offset="1" stop-color="#18B8AA"/>
     </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#000000" flood-opacity="0.34"/>
-    </filter>
   </defs>
 
-  <rect x="8" y="8" width="112" height="112" rx="24" fill="url(#bg)"/>
-  <rect x="8.75" y="8.75" width="110.5" height="110.5" rx="23.25" fill="none" stroke="#3E4652" stroke-width="1.5"/>
+  <rect x="16" y="16" width="224" height="224" rx="46" fill="url(#bg)"/>
+  <rect x="18" y="18" width="220" height="220" rx="44" stroke="#263449" stroke-width="4"/>
 
-  <g filter="url(#shadow)">
-    <path d="M26 38c0-8.3 11.2-15 25-15s25 6.7 25 15v39c0 8.3-11.2 15-25 15S26 85.3 26 77V38Z" fill="#111820"/>
-    <ellipse cx="51" cy="38" rx="25" ry="15" fill="url(#db)"/>
-    <path d="M26 38v19c0 8.3 11.2 15 25 15s25-6.7 25-15V38" fill="none" stroke="#8FCBFF" stroke-width="5" stroke-linecap="round"/>
-    <path d="M26 57v20c0 8.3 11.2 15 25 15s25-6.7 25-15V57" fill="none" stroke="#2A6EBB" stroke-width="5" stroke-linecap="round"/>
-    <ellipse cx="51" cy="38" rx="17" ry="8.5" fill="#111820" opacity="0.26"/>
-  </g>
+  <path d="M79 85C79 68 99 57 128 57C157 57 177 68 177 85V163C177 180 157 191 128 191C99 191 79 180 79 163V85Z" fill="url(#data)"/>
+  <ellipse cx="128" cy="85" rx="49" ry="28" fill="#0A101C" stroke="#8BDDFF" stroke-width="10"/>
+  <path d="M79 123C79 139 99 150 128 150C157 150 177 139 177 123" stroke="#D7EAFF" stroke-width="8" stroke-linecap="round" opacity=".68"/>
+  <path d="M79 163C79 180 99 191 128 191C157 191 177 180 177 163" stroke="#183BBD" stroke-width="8" stroke-linecap="round" opacity=".55"/>
 
-  <g filter="url(#shadow)">
-    <rect x="53" y="48" width="52" height="43" rx="9" fill="#F3F7FB"/>
-    <rect x="60" y="56" width="12" height="9" rx="2" fill="#2D7DDB"/>
-    <rect x="76" y="56" width="22" height="9" rx="2" fill="#A9B4C0"/>
-    <rect x="60" y="70" width="12" height="9" rx="2" fill="#A9B4C0"/>
-    <rect x="76" y="70" width="22" height="9" rx="2" fill="#2D7DDB"/>
-    <rect x="60" y="84" width="38" height="2.6" rx="1.3" fill="#CBD3DB"/>
-  </g>
-
-  <path d="M78 31h36L99.5 48.2v17.7L92 70V48.2L78 31Z" fill="url(#filter)" stroke="#D4FFE1" stroke-width="4" stroke-linejoin="round" filter="url(#shadow)"/>
-  <path d="M84 37h24" stroke="#FFFFFF" stroke-opacity="0.72" stroke-width="3" stroke-linecap="round"/>
+  <path d="M65 69C50 69 43 79 43 93V108C43 119 37 124 29 127C37 130 43 136 43 147V163C43 177 50 187 65 187" stroke="url(#grip)" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M191 69C206 69 213 79 213 93V108C213 119 219 124 227 127C219 130 213 136 213 147V163C213 177 206 187 191 187" stroke="url(#grip)" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M102 207H154" stroke="#ECF6FF" stroke-width="10" stroke-linecap="round"/>
+  <path d="M170 207H187" stroke="#4CEB8B" stroke-width="10" stroke-linecap="round"/>
 </svg>

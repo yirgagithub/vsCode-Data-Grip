@@ -7,6 +7,7 @@ scripts/**
 .vscode-test/**
 .vscode-test.mjs
 e2e/**
+tmp/**
 **/*.map
 tsconfig.json
 vite.config.ts
