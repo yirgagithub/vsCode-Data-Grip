@@ -2941,58 +2941,82 @@ function createId(prefix) {
 var DEFAULTS_BY_DATABASE_TYPE = {
   postgres: {
     name: "PostgreSQL",
+    host: "localhost",
     port: "5432",
     database: "postgres",
+    username: "",
     sslMode: "disable",
+    defaultSchema: "public",
     color: "green"
   },
   redshift: {
     name: "Redshift",
+    host: "",
     port: "5439",
     database: "dev",
+    username: "",
     sslMode: "require",
+    defaultSchema: "public",
     color: "purple"
   },
   mysql: {
     name: "MySQL",
+    host: "localhost",
     port: "3306",
     database: "mysql",
+    username: "",
     sslMode: "disable",
+    defaultSchema: "",
     color: "blue"
   },
   sqlite: {
     name: "SQLite",
+    host: "",
     port: "0",
     database: ":memory:",
+    username: "",
     sslMode: "disable",
+    defaultSchema: "main",
     color: "gray"
   },
   sqlserver: {
     name: "SQL Server",
+    host: "localhost",
     port: "1433",
     database: "master",
+    username: "",
     sslMode: "prefer",
+    defaultSchema: "dbo",
     color: "yellow"
   },
   oracle: {
     name: "Oracle",
+    host: "localhost",
     port: "1521",
     database: "ORCLPDB1",
+    username: "",
     sslMode: "disable",
+    defaultSchema: "",
     color: "red"
   },
   redis: {
     name: "Redis",
+    host: "localhost",
     port: "6379",
     database: "0",
+    username: "",
     sslMode: "disable",
+    defaultSchema: "db0",
     color: "red"
   },
   snowflake: {
     name: "Snowflake",
+    host: "",
     port: "443",
     database: "SNOWFLAKE",
+    username: "",
     sslMode: "require",
+    defaultSchema: "PUBLIC",
     color: "purple"
   }
 };
@@ -3318,35 +3342,70 @@ var ConnectionManager = class {
     if (!name) {
       return void 0;
     }
-    const host = await vscode.window.showInputBox({ prompt: type === "snowflake" ? "Account / host" : "Host", value: existing?.host ?? "localhost" });
-    if (type !== "sqlite" && !host) {
+    const host = type === "sqlite" ? defaults.host : await vscode.window.showInputBox({ prompt: connectionHostPrompt(type), value: existing?.host ?? defaults.host });
+    if (!host && type !== "sqlite") {
       return void 0;
     }
-    const port = Number(await vscode.window.showInputBox({ prompt: "Port", value: String(existing?.port ?? defaults.port) }));
-    const database = await vscode.window.showInputBox({ prompt: "Database", value: existing?.database ?? defaults.database });
+    const port = type === "sqlite" ? 0 : Number(await vscode.window.showInputBox({ prompt: "Port", value: String(existing?.port ?? defaults.port) }));
+    if (type !== "sqlite" && (!Number.isInteger(port) || port <= 0)) {
+      void vscode.window.showErrorMessage(`${typePick.label} port must be a positive whole number.`);
+      return void 0;
+    }
+    const database = type === "sqlite" ? await this.pickSqliteDatabase(existing?.database ?? defaults.database) : await vscode.window.showInputBox({ prompt: connectionDatabasePrompt(type), value: existing?.database ?? defaults.database });
     if (!database) {
       return void 0;
     }
-    const username = await vscode.window.showInputBox({ prompt: "Username", value: existing?.username });
+    if (type === "redis") {
+      const databaseIndex = Number(database);
+      if (!Number.isInteger(databaseIndex) || databaseIndex < 0) {
+        void vscode.window.showErrorMessage("Redis database index must be a zero-based whole number, for example 0.");
+        return void 0;
+      }
+    }
+    const username = type === "sqlite" ? defaults.username : await vscode.window.showInputBox({ prompt: type === "redis" ? "ACL username (optional)" : "Username", value: existing?.username ?? defaults.username });
     if (type !== "sqlite" && type !== "redis" && !username) {
       return void 0;
     }
-    const password = await vscode.window.showInputBox({ prompt: "Password", password: true });
-    const ssl = await vscode.window.showQuickPick(["disable", "prefer", "require"], { placeHolder: "SSL mode" });
+    const password = type === "sqlite" ? void 0 : await vscode.window.showInputBox({ prompt: "Password", password: true });
+    const ssl = type === "sqlite" ? defaults.sslMode : await vscode.window.showQuickPick(["disable", "prefer", "require"], { placeHolder: connectionSslPrompt(type) });
     return {
       id: existing?.id ?? createId("conn"),
       name,
       type,
-      host: host || "localhost",
+      host: host || defaults.host,
       port: type === "sqlite" ? 0 : port,
       database,
       username: username ?? "",
       password,
       sslMode: ssl ?? defaults.sslMode,
       color: existing?.color ?? defaults.color,
-      defaultSchema: existing?.defaultSchema ?? "public",
+      defaultSchema: existing?.defaultSchema ?? defaults.defaultSchema,
       queryTimeoutMs: vscode.workspace.getConfiguration("database").get("query.timeoutMs", 3e5)
     };
+  }
+  async pickSqliteDatabase(current) {
+    const choice = await vscode.window.showQuickPick([
+      { label: "Choose SQLite database file", value: "file" },
+      { label: "Use in-memory database", description: ":memory:", value: "memory" }
+    ], { placeHolder: current === ":memory:" ? "SQLite database" : `SQLite database: ${current}` });
+    if (!choice) {
+      return void 0;
+    }
+    if (choice.value === "memory") {
+      return ":memory:";
+    }
+    const files = await vscode.window.showOpenDialog({
+      title: "Choose SQLite database file",
+      openLabel: "Use Database File",
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      filters: {
+        "SQLite databases": ["db", "sqlite", "sqlite3"],
+        "All files": ["*"]
+      }
+    });
+    return files?.[0]?.fsPath;
   }
 };
 function truncateMiddle(value, maxLength) {
@@ -3355,6 +3414,39 @@ function truncateMiddle(value, maxLength) {
   }
   const keep = Math.max(4, Math.floor((maxLength - 3) / 2));
   return `${value.slice(0, keep)}...${value.slice(-keep)}`;
+}
+function connectionHostPrompt(type) {
+  if (type === "snowflake") {
+    return "Snowflake account identifier";
+  }
+  if (type === "redshift") {
+    return "Redshift cluster endpoint";
+  }
+  if (type === "sqlserver") {
+    return "SQL Server host";
+  }
+  return "Host";
+}
+function connectionDatabasePrompt(type) {
+  if (type === "oracle") {
+    return "Oracle service name";
+  }
+  if (type === "redis") {
+    return "Redis database index";
+  }
+  return "Database";
+}
+function connectionSslPrompt(type) {
+  if (type === "sqlserver") {
+    return "SSL mode: prefer trusts the server certificate, require validates it";
+  }
+  if (type === "redshift" || type === "snowflake") {
+    return "SSL mode: require is recommended";
+  }
+  if (type === "redis") {
+    return "SSL mode: use require for rediss/TLS endpoints";
+  }
+  return "SSL mode";
 }
 
 // src/database/queryExecutor.ts
@@ -10005,6 +10097,24 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       });
       return;
     }
+    if (message.type === "pickSqliteFile") {
+      const files = await vscode21.window.showOpenDialog({
+        title: "Choose SQLite database file",
+        openLabel: "Use Database File",
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        filters: {
+          "SQLite databases": ["db", "sqlite", "sqlite3"],
+          "All files": ["*"]
+        }
+      });
+      const file = files?.[0];
+      if (file) {
+        await this.panel.webview.postMessage({ type: "sqliteFile", path: file.fsPath });
+      }
+      return;
+    }
     if (message.type === "test") {
       await this.postState("testing", "Testing connection...");
       try {
@@ -10014,9 +10124,9 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
           config = { ...config, password: existingWithPassword.password };
         }
         const detail = await this.connectionManager.testConfig(config);
-        await this.postState("success", `Connected: ${detail}`);
+        await this.postState("success", `Connected to ${engineDisplayName(config.type)}: ${detail}`);
       } catch (error) {
-        await this.postState("error", error instanceof Error ? error.message : String(error));
+        await this.postState("error", friendlyConnectionError(error, message.config.type));
       }
       return;
     }
@@ -10038,26 +10148,46 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
     await this.panel.webview.postMessage({ type: "state", state, message });
   }
   fromForm(form) {
+    const defaults = connectionDefaultsForType(form.type);
     const port = Number(form.port);
     const hostRequired = form.type !== "sqlite";
     const usernameRequired = form.type !== "sqlite" && form.type !== "redis";
-    if (!form.name.trim() || !form.database.trim() || hostRequired && !form.host.trim() || usernameRequired && !form.username.trim()) {
-      throw new Error("Name, database, host, and username are required where the selected database type needs them.");
+    const missing = [];
+    if (!form.name.trim()) {
+      missing.push("connection name");
+    }
+    if (!form.database.trim()) {
+      missing.push(databaseFieldLabel(form.type).toLowerCase());
+    }
+    if (hostRequired && !form.host.trim()) {
+      missing.push(hostFieldLabel(form.type).toLowerCase());
+    }
+    if (usernameRequired && !form.username.trim()) {
+      missing.push("username");
+    }
+    if (missing.length > 0) {
+      throw new Error(`Required ${missing.length === 1 ? "field is" : "fields are"} missing: ${missing.join(", ")}.`);
     }
     if (form.type !== "sqlite" && (!Number.isInteger(port) || port <= 0)) {
-      throw new Error("Port must be a positive number.");
+      throw new Error(`${engineDisplayName(form.type)} port must be a positive whole number.`);
+    }
+    if (form.type === "redis") {
+      const index = Number(form.database.trim());
+      if (!Number.isInteger(index) || index < 0) {
+        throw new Error("Redis database index must be a zero-based whole number, for example 0.");
+      }
     }
     return {
       id: form.id ?? this.existing?.id ?? createId("conn"),
       name: form.name.trim(),
       type: form.type,
-      host: form.host.trim() || "localhost",
+      host: form.host.trim() || defaults.host,
       port: form.type === "sqlite" ? 0 : port,
       database: form.database.trim(),
       username: form.username.trim(),
       password: form.password === "" ? void 0 : form.password,
-      sslMode: form.sslMode,
-      defaultSchema: form.defaultSchema?.trim() || "public",
+      sslMode: toSslMode(form.sslMode, defaults.sslMode),
+      defaultSchema: form.defaultSchema?.trim() || defaults.defaultSchema,
       color: form.color,
       connectTimeoutMs: toOptionalNumber(form.connectTimeoutMs),
       queryTimeoutMs: toOptionalNumber(form.queryTimeoutMs),
@@ -10091,13 +10221,13 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       id: connection?.id,
       name: connection?.name ?? defaults.name,
       type: connection?.type ?? "postgres",
-      host: connection?.host ?? "localhost",
+      host: connection?.host ?? defaults.host,
       port: String(connection?.port ?? defaults.port),
       database: connection?.database ?? defaults.database,
-      username: connection?.username ?? "",
+      username: connection?.username ?? defaults.username,
       password: "",
       sslMode: connection?.sslMode ?? defaults.sslMode,
-      defaultSchema: connection?.defaultSchema ?? "public",
+      defaultSchema: connection?.defaultSchema ?? defaults.defaultSchema,
       color: connection?.color ?? defaults.color,
       connectTimeoutMs: connection?.connectTimeoutMs ? String(connection.connectTimeoutMs) : "",
       queryTimeoutMs: connection?.queryTimeoutMs ? String(connection.queryTimeoutMs) : String(vscode21.workspace.getConfiguration("database").get("query.timeoutMs", 3e5)),
@@ -10341,6 +10471,10 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       color: var(--text-muted);
       white-space: nowrap;
     }
+    .field-label.required::after {
+      content: " *";
+      color: var(--danger);
+    }
     input,
     select {
       min-width: 0;
@@ -10434,6 +10568,31 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       grid-template-columns: minmax(0, 1fr) minmax(5rem, 8rem);
       gap: var(--space-sm);
       min-width: 0;
+    }
+    .field-stack {
+      display: grid;
+      gap: var(--space-xs);
+      min-width: 0;
+    }
+    .path-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: var(--space-sm);
+      align-items: center;
+      min-width: 0;
+    }
+    .path-row .icon-button {
+      border-color: var(--vscode-button-border, var(--border));
+      background: var(--bg-elevated);
+    }
+    .field-help {
+      min-height: 1.15em;
+      color: var(--text-muted);
+      font-size: .88em;
+      line-height: 1.3;
+    }
+    .field-help:empty {
+      display: none;
     }
     .password-row {
       display: grid;
@@ -10575,9 +10734,9 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       align-items: center;
       gap: var(--space-xs);
       color: var(--text-muted);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      overflow: auto;
+      white-space: normal;
+      line-height: 1.25;
     }
     #status.error { color: var(--danger); }
     #status.success { color: var(--success); }
@@ -10633,8 +10792,8 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
         </aside>
         <section class="content">
           <div class="top-fields">
-            <span class="field-label">Name:</span>
-            <input name="name" autocomplete="off" aria-label="Connection name">
+            <span class="field-label" data-field-label="name">Name:</span>
+            <input name="name" autocomplete="off" aria-label="Connection name" data-field="name">
             <span class="field-label">Driver:</span>
             <select name="type" id="typeField" aria-label="Database type">
               <option value="postgres">PostgreSQL</option>
@@ -10666,8 +10825,8 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
             <div class="form-grid">
               <span class="field-label">Connection type:</span>
               <div class="segment full-row" role="group" aria-label="Connection type">
-                <button type="button" data-db-type="postgres">default</button>
-                <button type="button" data-db-type="redshift">IAM cluster/region</button>
+                <button type="button" data-db-type="postgres">PostgreSQL</button>
+                <button type="button" data-db-type="redshift">Redshift</button>
                 <button type="button" data-db-type="mysql">MySQL</button>
                 <button type="button" data-db-type="sqlite">SQLite</button>
                 <button type="button" data-db-type="sqlserver">SQL Server</button>
@@ -10675,19 +10834,34 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
                 <button type="button" data-db-type="redis">Redis</button>
                 <button type="button" data-db-type="snowflake">Snowflake</button>
               </div>
-              <span class="field-label">Host:</span>
-              <div class="inline-row full-row">
-                <input name="host" autocomplete="off" aria-label="Host">
-                <input name="port" inputmode="numeric" aria-label="Port">
+              <span class="field-label" data-field-label="host">Host:</span>
+              <div class="field-stack full-row">
+                <div class="inline-row">
+                  <input name="host" autocomplete="off" aria-label="Host" data-field="host">
+                  <input name="port" inputmode="numeric" aria-label="Port" data-field="port">
+                </div>
+                <div class="field-help" data-help="host"></div>
               </div>
-              <span class="field-label">User:</span>
-              <input class="full-row" name="username" autocomplete="off" aria-label="Username">
-              <span class="field-label">Password:</span>
-              <div class="password-row full-row">
-                <input name="password" type="password" placeholder="${form.id ? "Leave blank to keep existing password" : ""}" aria-label="Password">
+              <span class="field-label" data-field-label="username">User:</span>
+              <div class="field-stack full-row">
+                <input name="username" autocomplete="off" aria-label="Username" data-field="username">
+                <div class="field-help" data-help="username"></div>
               </div>
-              <span class="field-label">Database:</span>
-              <input class="full-row" name="database" autocomplete="off" aria-label="Database">
+              <span class="field-label" data-field-label="password">Password:</span>
+              <div class="field-stack full-row">
+                <div class="password-row">
+                  <input name="password" type="password" placeholder="${form.id ? "Leave blank to keep existing password" : ""}" aria-label="Password" data-field="password">
+                </div>
+                <div class="field-help" data-help="auth"></div>
+              </div>
+              <span class="field-label" data-field-label="database">Database:</span>
+              <div class="field-stack full-row">
+                <div class="path-row">
+                  <input name="database" autocomplete="off" aria-label="Database" data-field="database">
+                  <button type="button" id="sqlitePick" class="icon-button" title="Choose SQLite database file" aria-label="Choose SQLite database file"><i class="codicon codicon-folder-opened"></i></button>
+                </div>
+                <div class="field-help" data-help="database"></div>
+              </div>
               <span class="field-label">URL:</span>
               <input class="full-row url-field" id="urlPreview" readonly aria-label="JDBC URL preview">
             </div>
@@ -10723,13 +10897,19 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
                 <input name="sshTunnelLocalPort" inputmode="numeric" aria-label="SSH tunnel local port">
               </div>
               <span class="field-label">SSL mode:</span>
-              <select name="sslMode" aria-label="SSL mode"><option>disable</option><option>prefer</option><option>require</option></select>
+              <div class="field-stack">
+                <select name="sslMode" aria-label="SSL mode" data-field="sslMode"><option>disable</option><option>prefer</option><option>require</option></select>
+                <div class="field-help" data-help="ssl"></div>
+              </div>
             </div>
           </div>
           <div class="tab-panel" data-panel="schemas">
             <div class="advanced-grid">
-              <span class="field-label">Default schema:</span>
-              <input name="defaultSchema" autocomplete="off" aria-label="Default schema">
+              <span class="field-label" data-field-label="defaultSchema">Default schema:</span>
+              <div class="field-stack">
+                <input name="defaultSchema" autocomplete="off" aria-label="Default schema" data-field="defaultSchema">
+                <div class="field-help" data-help="defaultSchema"></div>
+              </div>
             </div>
           </div>
         </section>
@@ -10749,6 +10929,131 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
     const formData = ${data};
     const allConnections = ${connections};
     const defaultsByType = ${defaults};
+    const engineGuidance = {
+      postgres: {
+        hostLabel: 'Host:',
+        databaseLabel: 'Database:',
+        usernameLabel: 'User:',
+        defaultSchemaLabel: 'Default schema:',
+        hostPlaceholder: 'localhost',
+        databasePlaceholder: 'postgres',
+        usernamePlaceholder: 'postgres',
+        databaseHelp: 'Database name to open after login.',
+        usernameHelp: 'Required unless the server is configured for passwordless local auth.',
+        authHelp: 'Password auth is common. Leave blank only for trust or socket-based local auth.',
+        sslHelp: 'Use require for managed cloud databases that enforce TLS; disable is fine for local Docker.',
+        defaultSchemaHelp: 'Usually public.',
+        required: { host: true, username: true, database: true }
+      },
+      redshift: {
+        hostLabel: 'Cluster endpoint:',
+        databaseLabel: 'Database:',
+        usernameLabel: 'User:',
+        defaultSchemaLabel: 'Default schema:',
+        hostPlaceholder: 'example-cluster.abc123.us-east-1.redshift.amazonaws.com',
+        databasePlaceholder: 'dev',
+        usernamePlaceholder: 'awsuser',
+        databaseHelp: 'Redshift defaults to dev unless your cluster was created with another database.',
+        usernameHelp: 'Use the database user or temporary IAM-generated user.',
+        authHelp: 'Use the generated database password/token when connecting through IAM tooling.',
+        sslHelp: 'Redshift normally requires TLS, so require is the default.',
+        defaultSchemaHelp: 'Usually public.',
+        required: { host: true, username: true, database: true }
+      },
+      mysql: {
+        hostLabel: 'Host:',
+        databaseLabel: 'Database:',
+        usernameLabel: 'User:',
+        defaultSchemaLabel: 'Default schema:',
+        hostPlaceholder: 'localhost',
+        databasePlaceholder: 'mysql',
+        usernamePlaceholder: 'root',
+        databaseHelp: 'Schema/database to use after login.',
+        usernameHelp: 'Required for MySQL accounts.',
+        authHelp: 'Password can be blank for local accounts configured without a password.',
+        sslHelp: 'Use require when your MySQL server enforces TLS.',
+        defaultSchemaHelp: 'MySQL uses the database field as the active schema.',
+        required: { host: true, username: true, database: true }
+      },
+      sqlite: {
+        hostLabel: 'Host:',
+        databaseLabel: 'SQLite file:',
+        usernameLabel: 'User:',
+        defaultSchemaLabel: 'Default schema:',
+        hostPlaceholder: '',
+        databasePlaceholder: '/path/to/app.db',
+        usernamePlaceholder: '',
+        hostHelp: 'SQLite is file-based; host and port are not used.',
+        databaseHelp: 'Choose a .db/.sqlite file, or use :memory: for a temporary database.',
+        usernameHelp: 'SQLite does not use username or password fields.',
+        authHelp: 'No network auth is used for SQLite files.',
+        sslHelp: 'SQLite is file-based, so SSL mode is ignored.',
+        defaultSchemaHelp: 'SQLite usually uses main.',
+        required: { host: false, username: false, database: true },
+        disabled: { host: true, port: true, username: true, password: true, sslMode: true }
+      },
+      sqlserver: {
+        hostLabel: 'Server:',
+        databaseLabel: 'Database:',
+        usernameLabel: 'User:',
+        defaultSchemaLabel: 'Default schema:',
+        hostPlaceholder: 'localhost',
+        databasePlaceholder: 'master',
+        usernamePlaceholder: 'sa',
+        databaseHelp: 'Initial catalog, for example master or your app database.',
+        usernameHelp: 'Required for SQL authentication.',
+        authHelp: 'Use SQL authentication credentials. Windows auth is not configured from this form yet.',
+        sslHelp: 'prefer encrypts and trusts the server certificate; require validates the certificate chain.',
+        defaultSchemaHelp: 'Usually dbo.',
+        required: { host: true, username: true, database: true }
+      },
+      oracle: {
+        hostLabel: 'Host:',
+        databaseLabel: 'Service name:',
+        usernameLabel: 'User:',
+        defaultSchemaLabel: 'Default schema:',
+        hostPlaceholder: 'localhost',
+        databasePlaceholder: 'ORCLPDB1',
+        usernamePlaceholder: 'system',
+        databaseHelp: 'Service name used in host:port/service, for example ORCLPDB1.',
+        usernameHelp: 'Oracle user/schema name.',
+        authHelp: 'Use the password for the Oracle user above.',
+        sslHelp: 'Use require only when your Oracle listener is configured for TLS.',
+        defaultSchemaHelp: 'Leave blank to use the login user, or enter another schema to browse first.',
+        required: { host: true, username: true, database: true }
+      },
+      redis: {
+        hostLabel: 'Host:',
+        databaseLabel: 'Database index:',
+        usernameLabel: 'ACL user:',
+        defaultSchemaLabel: 'Logical schema:',
+        hostPlaceholder: 'localhost',
+        databasePlaceholder: '0',
+        usernamePlaceholder: 'default',
+        databaseHelp: 'Zero-based Redis database index. Most deployments use 0.',
+        usernameHelp: 'Optional unless Redis ACL users are enabled.',
+        authHelp: 'Use the Redis password or ACL user password when authentication is enabled.',
+        sslHelp: 'Use require for rediss/TLS endpoints.',
+        defaultSchemaHelp: 'Shown as db0, db1, and so on in the explorer.',
+        required: { host: true, username: false, database: true }
+      },
+      snowflake: {
+        hostLabel: 'Account:',
+        databaseLabel: 'Database:',
+        usernameLabel: 'User:',
+        defaultSchemaLabel: 'Schema:',
+        hostPlaceholder: 'org-account or account.region',
+        databasePlaceholder: 'SNOWFLAKE',
+        usernamePlaceholder: 'user@example.com',
+        hostHelp: 'Enter the Snowflake account identifier, not a full URL.',
+        databaseHelp: 'Default Snowflake database.',
+        usernameHelp: 'Snowflake username.',
+        authHelp: 'Password authentication is used by this connection form.',
+        sslHelp: 'Snowflake requires TLS, so require is the default.',
+        defaultSchemaHelp: 'Default Snowflake schema, commonly PUBLIC.',
+        required: { host: true, username: true, database: true }
+      }
+    };
     const form = document.getElementById('form');
     const connectionList = allConnections.map((connection) => ({ ...connection }));
     let selectedId = formData.id ?? (connectionList[0]?.id || 'new');
@@ -10766,11 +11071,90 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
     const typeButtons = Array.from(document.querySelectorAll('[data-db-type]'));
     const tabs = Array.from(document.querySelectorAll('[data-tab]'));
     const panels = Array.from(document.querySelectorAll('[data-panel]'));
+    const fieldLabels = Object.fromEntries(Array.from(document.querySelectorAll('[data-field-label]')).map((label) => [label.dataset.fieldLabel, label]));
+    const fieldHelp = Object.fromEntries(Array.from(document.querySelectorAll('[data-help]')).map((help) => [help.dataset.help, help]));
+    const sqlitePickButton = document.getElementById('sqlitePick');
     const addButton = document.querySelector('.rail-toolbar button[title="Add data source"]');
     const removeButton = document.querySelector('.rail-toolbar button[title="Remove data source"]');
     const sourceRows = document.querySelector('.data-source-list');
     function connectionLabel(connection) {
       return connection.name || defaultsByType[connection.type || 'postgres'].name;
+    }
+    function guidanceFor(type) {
+      return engineGuidance[type] || engineGuidance.postgres;
+    }
+    function defaultsFor(type) {
+      return defaultsByType[type] || defaultsByType.postgres;
+    }
+    function setLabel(name, text) {
+      if (fieldLabels[name]) {
+        fieldLabels[name].textContent = text;
+      }
+    }
+    function setHelp(name, text) {
+      if (fieldHelp[name]) {
+        fieldHelp[name].textContent = text || '';
+      }
+    }
+    function setRequired(name, required) {
+      const label = fieldLabels[name];
+      const field = form.elements.namedItem(name);
+      if (label) {
+        label.classList.toggle('required', required);
+      }
+      if (field) {
+        field.toggleAttribute('required', required);
+        field.setAttribute('aria-required', required ? 'true' : 'false');
+      }
+    }
+    function setDisabled(name, disabled) {
+      const field = form.elements.namedItem(name);
+      if (field) {
+        field.disabled = disabled;
+      }
+    }
+    function applyEngineGuidance() {
+      const type = typeField.value || 'postgres';
+      const guidance = guidanceFor(type);
+      const defaults = defaultsFor(type);
+      setLabel('host', guidance.hostLabel);
+      setLabel('database', guidance.databaseLabel);
+      setLabel('username', guidance.usernameLabel);
+      setLabel('defaultSchema', guidance.defaultSchemaLabel);
+      setRequired('name', true);
+      setRequired('host', guidance.required.host === true);
+      setRequired('username', guidance.required.username === true);
+      setRequired('database', guidance.required.database === true);
+      setHelp('host', guidance.hostHelp || '');
+      setHelp('username', guidance.usernameHelp);
+      setHelp('auth', guidance.authHelp);
+      setHelp('database', guidance.databaseHelp);
+      setHelp('ssl', guidance.sslHelp);
+      setHelp('defaultSchema', guidance.defaultSchemaHelp);
+      const hostField = form.elements.namedItem('host');
+      const portField = form.elements.namedItem('port');
+      const databaseField = form.elements.namedItem('database');
+      const usernameField = form.elements.namedItem('username');
+      if (hostField) {
+        hostField.placeholder = guidance.hostPlaceholder || defaults.host || '';
+        hostField.setAttribute('aria-label', guidance.hostLabel.replace(/:$/, ''));
+      }
+      if (portField) {
+        portField.placeholder = defaults.port || '';
+      }
+      if (databaseField) {
+        databaseField.placeholder = guidance.databasePlaceholder || defaults.database || '';
+        databaseField.inputMode = type === 'redis' ? 'numeric' : 'text';
+        databaseField.setAttribute('aria-label', guidance.databaseLabel.replace(/:$/, ''));
+      }
+      if (usernameField) {
+        usernameField.placeholder = guidance.usernamePlaceholder || defaults.username || '';
+        usernameField.setAttribute('aria-label', guidance.usernameLabel.replace(/:$/, ''));
+      }
+      for (const field of ['host', 'port', 'username', 'password', 'sslMode']) {
+        setDisabled(field, guidance.disabled?.[field] === true);
+      }
+      sqlitePickButton.hidden = type !== 'sqlite';
     }
     function renderSourceList() {
       const selected = selectedId;
@@ -10792,18 +11176,20 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       }
     }
     function loadConnection(connection) {
+      const selectedType = form.elements.namedItem('type').value || 'postgres';
+      const selectedDefaults = defaultsFor(selectedType);
       const next = connection || {
         id: undefined,
-        name: defaultsByType[form.elements.namedItem('type').value || 'postgres'].name,
-        type: form.elements.namedItem('type').value || 'postgres',
-        host: 'localhost',
-        port: defaultsByType[form.elements.namedItem('type').value || 'postgres'].port,
-        database: defaultsByType[form.elements.namedItem('type').value || 'postgres'].database,
-        username: '',
+        name: selectedDefaults.name,
+        type: selectedType,
+        host: selectedDefaults.host,
+        port: selectedDefaults.port,
+        database: selectedDefaults.database,
+        username: selectedDefaults.username,
         password: '',
-        sslMode: defaultsByType[form.elements.namedItem('type').value || 'postgres'].sslMode,
-        defaultSchema: 'public',
-        color: defaultsByType[form.elements.namedItem('type').value || 'postgres'].color,
+        sslMode: selectedDefaults.sslMode,
+        defaultSchema: selectedDefaults.defaultSchema,
+        color: selectedDefaults.color,
         sshTunnelEnabled: false,
         sshTunnelHost: '',
         sshTunnelPort: '22',
@@ -10821,23 +11207,26 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       formData.id = next.id;
       previousType = form.elements.namedItem('type').value || 'postgres';
       draftActive = !next.id;
+      applyEngineGuidance();
       syncDerivedFields();
       renderSourceList();
     }
     function selectConnection(id) {
       selectedId = id;
       if (id === 'new') {
+        const type = typeField.value || 'postgres';
+        const defaults = defaultsFor(type);
         loadConnection({
-          type: typeField.value || 'postgres',
-          name: defaultsByType[typeField.value || 'postgres'].name,
-          host: 'localhost',
-          port: defaultsByType[typeField.value || 'postgres'].port,
-          database: defaultsByType[typeField.value || 'postgres'].database,
-          username: '',
+          type,
+          name: defaults.name,
+          host: defaults.host,
+          port: defaults.port,
+          database: defaults.database,
+          username: defaults.username,
           password: '',
-          sslMode: defaultsByType[typeField.value || 'postgres'].sslMode,
-          defaultSchema: 'public',
-          color: defaultsByType[typeField.value || 'postgres'].color,
+          sslMode: defaults.sslMode,
+          defaultSchema: defaults.defaultSchema,
+          color: defaults.color,
           sshTunnelEnabled: false,
           sshTunnelHost: '',
           sshTunnelPort: '22',
@@ -10864,6 +11253,7 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       }
     }
     function syncDerivedFields() {
+      applyEngineGuidance();
       const name = form.elements.namedItem('name').value || 'Connection';
       const type = typeField.value;
       const host = form.elements.namedItem('host').value || 'host';
@@ -10887,9 +11277,9 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       renderSourceList();
     }
     function applyDefaultsForType(nextType) {
-      const previousDefaults = defaultsByType[previousType] || defaultsByType.postgres;
-      const nextDefaults = defaultsByType[nextType] || defaultsByType.postgres;
-      for (const name of ['name', 'port', 'database', 'sslMode', 'color']) {
+      const previousDefaults = defaultsFor(previousType);
+      const nextDefaults = defaultsFor(nextType);
+      for (const name of ['name', 'host', 'port', 'database', 'sslMode', 'color', 'defaultSchema']) {
         const field = form.elements.namedItem(name);
         if (!field) continue;
         if (!field.value || field.value === previousDefaults[name]) {
@@ -10897,6 +11287,7 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
         }
       }
       previousType = nextType;
+      applyEngineGuidance();
     }
     typeField.addEventListener('change', () => {
       const nextType = typeField.value;
@@ -10923,6 +11314,7 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       form.elements.namedItem(name)?.addEventListener('input', syncDerivedFields);
     }
     form.elements.namedItem('type')?.addEventListener('change', syncDerivedFields);
+    sqlitePickButton.addEventListener('click', () => vscode.postMessage({ type: 'pickSqliteFile' }));
     addButton.addEventListener('click', () => selectConnection('new'));
     removeButton.addEventListener('click', () => {
       if (selectedId === 'new') {
@@ -10939,6 +11331,10 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       const data = {};
       for (const element of form.elements) {
         if (!element.name) continue;
+        if (element.disabled) {
+          data[element.name] = element.type === 'checkbox' ? false : '';
+          continue;
+        }
         data[element.name] = element.type === 'checkbox' ? element.checked : element.value;
       }
       data.id = formData.id;
@@ -10949,6 +11345,14 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
     document.getElementById('cancel').addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
     document.getElementById('cancelTop').addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
     window.addEventListener('message', event => {
+      if (event.data?.type === 'sqliteFile') {
+        const databaseField = form.elements.namedItem('database');
+        if (databaseField && typeof event.data.path === 'string') {
+          databaseField.value = event.data.path;
+          syncDerivedFields();
+        }
+        return;
+      }
       if (event.data?.type === 'connections') {
         connectionList.splice(0, connectionList.length, ...(event.data.connections || []));
         if (event.data.selectedId) {
@@ -10992,6 +11396,53 @@ function toOptionalNumber(value) {
   }
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : void 0;
+}
+function toSslMode(value, fallback) {
+  return value === "disable" || value === "prefer" || value === "require" ? value : fallback;
+}
+function engineDisplayName(type) {
+  return {
+    postgres: "PostgreSQL",
+    redshift: "Amazon Redshift",
+    mysql: "MySQL",
+    sqlite: "SQLite",
+    sqlserver: "Microsoft SQL Server",
+    oracle: "Oracle",
+    redis: "Redis",
+    snowflake: "Snowflake"
+  }[type];
+}
+function databaseFieldLabel(type) {
+  return {
+    postgres: "Database",
+    redshift: "Database",
+    mysql: "Database",
+    sqlite: "SQLite database file",
+    sqlserver: "Database",
+    oracle: "Oracle service name",
+    redis: "Redis database index",
+    snowflake: "Database"
+  }[type];
+}
+function hostFieldLabel(type) {
+  return type === "snowflake" ? "Snowflake account" : type === "redshift" ? "cluster endpoint" : "host";
+}
+function friendlyConnectionError(error, type) {
+  const message = error instanceof Error ? error.message : String(error);
+  const hint = connectionTestHint(type);
+  return hint ? `${message} ${hint}` : message;
+}
+function connectionTestHint(type) {
+  return {
+    postgres: "Hint: check host, port, database, username, password, and whether SSL should be require for managed providers.",
+    redshift: "Hint: use the cluster endpoint, port 5439, database name, and SSL mode require.",
+    mysql: "Hint: check that the MySQL user can access this database from your client host, and use SSL require when the server enforces TLS.",
+    sqlite: "Hint: choose a readable .db/.sqlite file, or use :memory: for a temporary in-memory database.",
+    sqlserver: "Hint: SSL mode prefer encrypts while trusting the server certificate; use require only when the certificate chain is trusted.",
+    oracle: "Hint: the database field is the Oracle service name in host:port/service, for example ORCLPDB1.",
+    redis: "Hint: Redis database must be a zero-based number such as 0; username is optional unless ACLs are enabled.",
+    snowflake: "Hint: enter the Snowflake account identifier rather than a full URL, and keep SSL mode require."
+  }[type];
 }
 function getNonce() {
   return Array.from({ length: 16 }, () => Math.floor(Math.random() * 36).toString(36)).join("");
