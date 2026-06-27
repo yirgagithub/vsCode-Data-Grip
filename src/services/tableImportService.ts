@@ -1,4 +1,5 @@
 import { ColumnInfo, DatabaseType } from '../types';
+import { insertBatchSql } from './sqlDialect';
 
 export type TableImportSourceKind = 'csv' | 'json';
 
@@ -48,6 +49,11 @@ export function buildTableImportPreview(
     throw new Error('Could not map any source fields to table columns.');
   }
 
+  const warnings = [
+    ...source.warnings,
+    ...mappingWarnings(source.columns, tableColumns, mapping)
+  ];
+
   return {
     kind,
     fileName,
@@ -61,10 +67,7 @@ export function buildTableImportPreview(
     })),
     mapping,
     sampleRows: source.rows.slice(0, 50),
-    warnings: [
-      ...source.warnings,
-      ...mappingWarnings(source.columns, tableColumns, mapping)
-    ]
+    warnings
   };
 }
 
@@ -120,7 +123,7 @@ export function buildTableImportStatements(
     throw new Error('No import rows were found.');
   }
   const safeBatchSize = Number.isFinite(batchSize) && batchSize > 0 ? Math.floor(batchSize) : 100;
-  return chunk(data.rows, safeBatchSize).map((batch) => buildInsertBatch(databaseType, schema, table, data.columns, batch));
+  return chunk(data.rows, safeBatchSize).map((batch) => insertBatchSql(databaseType, schema, table, data.columns, batch));
 }
 
 interface ParsedSource {
@@ -270,40 +273,6 @@ function mappingWarnings(sourceColumns: string[], targetColumns: ColumnInfo[], m
     warnings.push(`Target columns left unmapped: ${unusedTargets.join(', ')}.`);
   }
   return warnings;
-}
-
-function buildInsertBatch(databaseType: DatabaseType, schema: string, table: string, columns: string[], rows: Array<Record<string, unknown>>): string {
-  return `insert into ${qualifiedSqlName(databaseType, schema, table)} (${columns.map((column) => quoteSqlIdentifier(databaseType, column)).join(', ')})\nvalues\n${rows.map((row) => `  (${columns.map((column) => sqlLiteral(databaseType, row[column])).join(', ')})`).join(',\n')};`;
-}
-
-function qualifiedSqlName(databaseType: DatabaseType, schema: string, table: string): string {
-  return `${quoteSqlIdentifier(databaseType, schema)}.${quoteSqlIdentifier(databaseType, table)}`;
-}
-
-function quoteSqlIdentifier(databaseType: DatabaseType, identifier: string): string {
-  if (databaseType === 'mysql') {
-    return `\`${identifier.replace(/`/g, '``')}\``;
-  }
-  return `"${identifier.replace(/"/g, '""')}"`;
-}
-
-function sqlLiteral(_databaseType: DatabaseType, value: unknown): string {
-  if (value === null || value === undefined) {
-    return 'null';
-  }
-  if (typeof value === 'number' || typeof value === 'bigint') {
-    return String(value);
-  }
-  if (typeof value === 'boolean') {
-    return value ? 'true' : 'false';
-  }
-  if (value instanceof Date) {
-    return `'${value.toISOString().replace(/'/g, "''")}'`;
-  }
-  if (typeof value === 'object') {
-    return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
-  }
-  return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 function normalizeName(value: string): string {

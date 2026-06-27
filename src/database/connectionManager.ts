@@ -5,6 +5,11 @@ import { PostgresDriver } from './drivers/postgresDriver';
 import { RedshiftDriver } from './drivers/redshiftDriver';
 import { DatabaseDriver } from './drivers/DatabaseDriver';
 import { MySQLDriver } from './drivers/mysqlDriver';
+import { SQLiteDriver } from './drivers/sqliteDriver';
+import { SqlServerDriver } from './drivers/sqlServerDriver';
+import { OracleDriver } from './drivers/oracleDriver';
+import { RedisDriver } from './drivers/redisDriver';
+import { SnowflakeDriver } from './drivers/snowflakeDriver';
 import { createId } from '../utils/id';
 import { connectionDefaultsForType } from '../services/connectionDefaults';
 import { SshTunnelManager } from '../services/sshTunnelManager';
@@ -21,6 +26,11 @@ export class ConnectionManager {
     this.drivers.set('postgres', new PostgresDriver());
     this.drivers.set('redshift', new RedshiftDriver());
     this.drivers.set('mysql', new MySQLDriver());
+    this.drivers.set('sqlite', new SQLiteDriver());
+    this.drivers.set('sqlserver', new SqlServerDriver());
+    this.drivers.set('oracle', new OracleDriver());
+    this.drivers.set('redis', new RedisDriver());
+    this.drivers.set('snowflake', new SnowflakeDriver());
   }
 
   getConnections(): ConnectionConfig[] {
@@ -211,7 +221,12 @@ export class ConnectionManager {
     const typePick = await vscode.window.showQuickPick([
       { label: 'PostgreSQL', type: 'postgres' as const },
       { label: 'Amazon Redshift', type: 'redshift' as const },
-      { label: 'MySQL', type: 'mysql' as const }
+      { label: 'MySQL', type: 'mysql' as const },
+      { label: 'SQLite', type: 'sqlite' as const },
+      { label: 'Microsoft SQL Server', type: 'sqlserver' as const },
+      { label: 'Oracle', type: 'oracle' as const },
+      { label: 'Redis', type: 'redis' as const },
+      { label: 'Snowflake', type: 'snowflake' as const }
     ], { placeHolder: 'Database type' });
     if (!typePick) {
       return undefined;
@@ -223,8 +238,8 @@ export class ConnectionManager {
     if (!name) {
       return undefined;
     }
-    const host = await vscode.window.showInputBox({ prompt: 'Host', value: existing?.host ?? 'localhost' });
-    if (!host) {
+    const host = await vscode.window.showInputBox({ prompt: type === 'snowflake' ? 'Account / host' : 'Host', value: existing?.host ?? 'localhost' });
+    if (type !== 'sqlite' && !host) {
       return undefined;
     }
     const port = Number(await vscode.window.showInputBox({ prompt: 'Port', value: String(existing?.port ?? defaults.port) }));
@@ -233,7 +248,7 @@ export class ConnectionManager {
       return undefined;
     }
     const username = await vscode.window.showInputBox({ prompt: 'Username', value: existing?.username });
-    if (!username) {
+    if (type !== 'sqlite' && type !== 'redis' && !username) {
       return undefined;
     }
     const password = await vscode.window.showInputBox({ prompt: 'Password', password: true });
@@ -243,10 +258,10 @@ export class ConnectionManager {
       id: existing?.id ?? createId('conn'),
       name,
       type,
-      host,
-      port,
+      host: host || 'localhost',
+      port: type === 'sqlite' ? 0 : port,
       database,
-      username,
+      username: username ?? '',
       password,
       sslMode: (ssl ?? defaults.sslMode) as 'disable' | 'prefer' | 'require',
       color: existing?.color ?? defaults.color,

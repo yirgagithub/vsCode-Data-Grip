@@ -27,6 +27,7 @@ import {
 import { qualifiedName, quoteIdentifier } from '../../utils/identifiers';
 import { textExplainPlan } from '../../services/queryPlanService';
 import { loadBundledRuntime } from '../../runtime/runtimeLoader';
+import { createTableSql } from '../../services/sqlDialect';
 
 interface ActiveExecution {
   connectionId: string;
@@ -427,12 +428,7 @@ export class MySQLDriver implements DatabaseDriver {
 
   async getTableDDL(connectionId: string, schema: string, table: string): Promise<string> {
     const columns = await this.getColumns(connectionId, schema, table);
-    const lines = columns.map((column) => {
-      const nullable = column.nullable ? '' : ' not null';
-      const defaultValue = column.defaultValue ? ` default ${column.defaultValue}` : '';
-      return `  ${quoteIdentifier(column.name, '`')} ${column.dataType}${defaultValue}${nullable}`;
-    });
-    return `create table ${qualifiedName(schema, table, '`')} (\n${lines.join(',\n')}\n);`;
+    return createTableSql(this.id, schema, table, columns);
   }
 
   async getTableStats(connectionId: string, schema: string, table: string): Promise<TableStatsInfo> {

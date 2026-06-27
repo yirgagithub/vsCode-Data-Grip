@@ -1,6 +1,6 @@
 # Data Grip
 
-Data Grip is a VS Code database workbench for PostgreSQL, Redshift, and MySQL. It is built for everyday SQL work inside the editor:
+Data Grip is a VS Code database workbench for PostgreSQL, Redshift, MySQL, SQLite, Microsoft SQL Server, Oracle, Redis, and Snowflake. It is built for everyday SQL work inside the editor:
 
 ```text
 connect -> browse schema -> write SQL -> run queries -> inspect results -> reuse history
@@ -27,7 +27,7 @@ The extension brings the core DataGrip-style workflow into VS Code: durable quer
 
 1. Open the Database activity view in VS Code.
 2. Run `Database: Add Database Connection`.
-3. Choose PostgreSQL, Redshift, or MySQL.
+3. Choose PostgreSQL, Redshift, MySQL, SQLite, Microsoft SQL Server, Oracle, Redis, or Snowflake.
 4. Enter the connection details and give the connection a clear generic name, such as `Local PostgreSQL`, `Analytics Warehouse`, or `Production Reporting`.
 5. Connect from the Database explorer.
 6. Run `Database: Add Query Console`, or open a `.sql` file and run `Database: Set SQL File Connection`.
@@ -167,4 +167,4 @@ The table preview should show a loading state while data is being fetched. If it
 
 ## Status
 
-This project is in active development. PostgreSQL, Redshift, and MySQL are the supported database engines. The core workflow is available, but validating database-specific behavior against your own database is still recommended before relying on a driver, schema-cache, or query-execution change.
+This project is in active development. PostgreSQL, Redshift, MySQL, SQLite, Microsoft SQL Server, Oracle, Redis, and Snowflake are supported database engines. Redis is exposed through command execution plus logical key-type views. The core workflow is available, but validating database-specific behavior against your own database is still recommended before relying on a driver, schema-cache, or query-execution change.

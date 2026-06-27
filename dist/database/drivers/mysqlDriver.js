@@ -38,6 +38,7 @@ const crypto_1 = require("crypto");
 const identifiers_1 = require("../../utils/identifiers");
 const queryPlanService_1 = require("../../services/queryPlanService");
 const runtimeLoader_1 = require("../../runtime/runtimeLoader");
+const sqlDialect_1 = require("../../services/sqlDialect");
 class MySQLDriver {
     id = 'mysql';
     displayName = 'MySQL';
@@ -393,12 +394,7 @@ class MySQLDriver {
     }
     async getTableDDL(connectionId, schema, table) {
         const columns = await this.getColumns(connectionId, schema, table);
-        const lines = columns.map((column) => {
-            const nullable = column.nullable ? '' : ' not null';
-            const defaultValue = column.defaultValue ? ` default ${column.defaultValue}` : '';
-            return `  ${(0, identifiers_1.quoteIdentifier)(column.name, '`')} ${column.dataType}${defaultValue}${nullable}`;
-        });
-        return `create table ${(0, identifiers_1.qualifiedName)(schema, table, '`')} (\n${lines.join(',\n')}\n);`;
+        return (0, sqlDialect_1.createTableSql)(this.id, schema, table, columns);
     }
     async getTableStats(connectionId, schema, table) {
         const [rows] = await this.requirePool(connectionId).query(`select table_rows as "rowEstimate",
