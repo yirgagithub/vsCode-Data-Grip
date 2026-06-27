@@ -238,36 +238,80 @@ export class ConnectionManager {
     if (!name) {
       return undefined;
     }
-    const host = await vscode.window.showInputBox({ prompt: type === 'snowflake' ? 'Account / host' : 'Host', value: existing?.host ?? 'localhost' });
-    if (type !== 'sqlite' && !host) {
+    const host = type === 'sqlite'
+      ? defaults.host
+      : await vscode.window.showInputBox({ prompt: connectionHostPrompt(type), value: existing?.host ?? defaults.host });
+    if (!host && type !== 'sqlite') {
       return undefined;
     }
-    const port = Number(await vscode.window.showInputBox({ prompt: 'Port', value: String(existing?.port ?? defaults.port) }));
-    const database = await vscode.window.showInputBox({ prompt: 'Database', value: existing?.database ?? defaults.database });
+    const port = type === 'sqlite'
+      ? 0
+      : Number(await vscode.window.showInputBox({ prompt: 'Port', value: String(existing?.port ?? defaults.port) }));
+    if (type !== 'sqlite' && (!Number.isInteger(port) || port <= 0)) {
+      void vscode.window.showErrorMessage(`${typePick.label} port must be a positive whole number.`);
+      return undefined;
+    }
+    const database = type === 'sqlite'
+      ? await this.pickSqliteDatabase(existing?.database ?? defaults.database)
+      : await vscode.window.showInputBox({ prompt: connectionDatabasePrompt(type), value: existing?.database ?? defaults.database });
     if (!database) {
       return undefined;
     }
-    const username = await vscode.window.showInputBox({ prompt: 'Username', value: existing?.username });
+    if (type === 'redis') {
+      const databaseIndex = Number(database);
+      if (!Number.isInteger(databaseIndex) || databaseIndex < 0) {
+        void vscode.window.showErrorMessage('Redis database index must be a zero-based whole number, for example 0.');
+        return undefined;
+      }
+    }
+    const username = type === 'sqlite'
+      ? defaults.username
+      : await vscode.window.showInputBox({ prompt: type === 'redis' ? 'ACL username (optional)' : 'Username', value: existing?.username ?? defaults.username });
     if (type !== 'sqlite' && type !== 'redis' && !username) {
       return undefined;
     }
-    const password = await vscode.window.showInputBox({ prompt: 'Password', password: true });
-    const ssl = await vscode.window.showQuickPick(['disable', 'prefer', 'require'], { placeHolder: 'SSL mode' });
+    const password = type === 'sqlite' ? undefined : await vscode.window.showInputBox({ prompt: 'Password', password: true });
+    const ssl = type === 'sqlite' ? defaults.sslMode : await vscode.window.showQuickPick(['disable', 'prefer', 'require'], { placeHolder: connectionSslPrompt(type) });
 
     return {
       id: existing?.id ?? createId('conn'),
       name,
       type,
-      host: host || 'localhost',
+      host: host || defaults.host,
       port: type === 'sqlite' ? 0 : port,
       database,
       username: username ?? '',
       password,
       sslMode: (ssl ?? defaults.sslMode) as 'disable' | 'prefer' | 'require',
       color: existing?.color ?? defaults.color,
-      defaultSchema: existing?.defaultSchema ?? 'public',
+      defaultSchema: existing?.defaultSchema ?? defaults.defaultSchema,
       queryTimeoutMs: vscode.workspace.getConfiguration('database').get<number>('query.timeoutMs', 300000)
     };
+  }
+
+  private async pickSqliteDatabase(current: string): Promise<string | undefined> {
+    const choice = await vscode.window.showQuickPick([
+      { label: 'Choose SQLite database file', value: 'file' as const },
+      { label: 'Use in-memory database', description: ':memory:', value: 'memory' as const }
+    ], { placeHolder: current === ':memory:' ? 'SQLite database' : `SQLite database: ${current}` });
+    if (!choice) {
+      return undefined;
+    }
+    if (choice.value === 'memory') {
+      return ':memory:';
+    }
+    const files = await vscode.window.showOpenDialog({
+      title: 'Choose SQLite database file',
+      openLabel: 'Use Database File',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      filters: {
+        'SQLite databases': ['db', 'sqlite', 'sqlite3'],
+        'All files': ['*']
+      }
+    });
+    return files?.[0]?.fsPath;
   }
 }
 
@@ -277,4 +321,40 @@ function truncateMiddle(value: string, maxLength: number): string {
   }
   const keep = Math.max(4, Math.floor((maxLength - 3) / 2));
   return `${value.slice(0, keep)}...${value.slice(-keep)}`;
+}
+
+function connectionHostPrompt(type: DatabaseType): string {
+  if (type === 'snowflake') {
+    return 'Snowflake account identifier';
+  }
+  if (type === 'redshift') {
+    return 'Redshift cluster endpoint';
+  }
+  if (type === 'sqlserver') {
+    return 'SQL Server host';
+  }
+  return 'Host';
+}
+
+function connectionDatabasePrompt(type: DatabaseType): string {
+  if (type === 'oracle') {
+    return 'Oracle service name';
+  }
+  if (type === 'redis') {
+    return 'Redis database index';
+  }
+  return 'Database';
+}
+
+function connectionSslPrompt(type: DatabaseType): string {
+  if (type === 'sqlserver') {
+    return 'SSL mode: prefer trusts the server certificate, require validates it';
+  }
+  if (type === 'redshift' || type === 'snowflake') {
+    return 'SSL mode: require is recommended';
+  }
+  if (type === 'redis') {
+    return 'SSL mode: use require for rediss/TLS endpoints';
+  }
+  return 'SSL mode';
 }
