@@ -53,6 +53,7 @@ class ConnectionManager {
     transactionModes = new Map();
     activeConnectionEmitter = new vscode.EventEmitter();
     sshTunnelManager = new sshTunnelManager_1.SshTunnelManager();
+    connectionCreator;
     onDidChangeActiveConnections = this.activeConnectionEmitter.event;
     constructor(store) {
         this.store = store;
@@ -64,6 +65,9 @@ class ConnectionManager {
         this.drivers.set('oracle', new oracleDriver_1.OracleDriver());
         this.drivers.set('redis', new redisDriver_1.RedisDriver());
         this.drivers.set('snowflake', new snowflakeDriver_1.SnowflakeDriver());
+    }
+    setConnectionCreator(creator) {
+        this.connectionCreator = creator;
     }
     getConnections() {
         return this.store.getAll();
@@ -215,7 +219,7 @@ class ConnectionManager {
         if (connections.length === 0) {
             const create = await vscode.window.showInformationMessage('No database connections yet.', 'Add Connection');
             if (create === 'Add Connection') {
-                return this.promptConnection();
+                return this.connectionCreator?.();
             }
             return undefined;
         }
