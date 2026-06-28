@@ -1,5 +1,5 @@
 {
-  "name": "querydeck",
+  "name": "vscode-data-grip",
   "displayName": "QueryDeck",
   "description": "SQL workbench for VS Code with query consoles, schema browsing, result grids, local history, AI help, and multi-database support.",
   "version": "0.0.9",
