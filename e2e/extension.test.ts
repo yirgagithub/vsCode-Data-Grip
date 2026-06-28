@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 
-const EXTENSION_ID = 'vs-code-database-client.querydeck';
+const EXTENSION_ID = 'vs-code-database-client.vscode-data-grip';
 const TWO_STATEMENTS = 'select 1;\n\nselect 2;\n';
 
 async function openSqlDocument(content: string): Promise<vscode.TextDocument> {
