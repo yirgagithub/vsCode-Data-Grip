@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 
-const EXTENSION_ID = 'vs-code-database-client.vscode-data-grip';
+const EXTENSION_ID = 'vs-code-database-client.querydeck';
 const TWO_STATEMENTS = 'select 1;\n\nselect 2;\n';
 
 async function openSqlDocument(content: string): Promise<vscode.TextDocument> {
@@ -27,7 +27,7 @@ async function getCodeLenses(doc: vscode.TextDocument): Promise<vscode.CodeLens[
   return lenses;
 }
 
-suite('Data Grip extension', () => {
+suite('QueryDeck extension', () => {
   test('activates when a SQL document is opened', async () => {
     await openSqlDocument(TWO_STATEMENTS);
     const extension = vscode.extensions.getExtension(EXTENSION_ID);
