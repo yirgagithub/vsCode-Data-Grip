@@ -39,7 +39,7 @@ export class SnowflakeDriver extends BasicDatabaseDriver {
       database: optionalString(config.database),
       schema: optionalString(config.defaultSchema),
       timeout: config.connectTimeoutMs ?? 10000,
-      application: 'VSCodeDataGrip',
+      application: 'QueryDeck',
       rowMode: 'object'
     });
     await connection.connectAsync();
