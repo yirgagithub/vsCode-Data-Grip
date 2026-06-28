@@ -151,6 +151,18 @@ Use neutral connection names and generic schema/table examples in shared screens
 
 This keeps screenshots and documentation reusable without exposing company-specific connection names, schemas, campaign logic, or production query details.
 
+## Live Database Tests
+
+CI runs real driver tests against Docker-backed PostgreSQL, MySQL, Redis, SQL Server, and Oracle containers, plus SQLite. To run one engine locally:
+
+```bash
+docker compose -f docker-compose.live-tests.yml up -d postgres
+LIVE_DATABASE_ENGINE=postgres npm run test:live
+docker compose -f docker-compose.live-tests.yml down -v
+```
+
+Use `LIVE_DATABASE_ENGINE=all` after starting the Docker services to run the full live matrix locally.
+
 ## Troubleshooting
 
 ### Query Console File Location

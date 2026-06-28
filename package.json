@@ -981,6 +981,7 @@
     "build": "npm run copy:codicons && npm run compile && npm run bundle:extension && npm run bundle:runtimes && npm run copy:native-runtimes && npm run bundle:webview",
     "lint": "tsc -p ./ --noEmit",
     "test": "vitest run",
+    "test:live": "vitest run tests/liveDatabaseDrivers.integration.test.ts",
     "compile:e2e": "tsc -p e2e",
     "test:e2e": "npm run compile && npm run compile:e2e && vscode-test",
     "package": "vsce package --no-dependencies",
