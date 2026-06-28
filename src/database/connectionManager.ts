@@ -14,12 +14,15 @@ import { createId } from '../utils/id';
 import { connectionDefaultsForType } from '../services/connectionDefaults';
 import { SshTunnelManager } from '../services/sshTunnelManager';
 
+type ConnectionCreator = () => Promise<ConnectionConfig | undefined>;
+
 export class ConnectionManager {
   private readonly drivers = new Map<DatabaseType, DatabaseDriver>();
   private readonly active = new Map<string, DbConnection>();
   private readonly transactionModes = new Map<string, 'auto' | 'manual'>();
   private readonly activeConnectionEmitter = new vscode.EventEmitter<string>();
   private readonly sshTunnelManager = new SshTunnelManager();
+  private connectionCreator: ConnectionCreator | undefined;
   readonly onDidChangeActiveConnections = this.activeConnectionEmitter.event;
 
   constructor(private readonly store: ConnectionStore) {
@@ -31,6 +34,10 @@ export class ConnectionManager {
     this.drivers.set('oracle', new OracleDriver());
     this.drivers.set('redis', new RedisDriver());
     this.drivers.set('snowflake', new SnowflakeDriver());
+  }
+
+  setConnectionCreator(creator: ConnectionCreator): void {
+    this.connectionCreator = creator;
   }
 
   getConnections(): ConnectionConfig[] {
@@ -202,7 +209,7 @@ export class ConnectionManager {
     if (connections.length === 0) {
       const create = await vscode.window.showInformationMessage('No database connections yet.', 'Add Connection');
       if (create === 'Add Connection') {
-        return this.promptConnection();
+        return this.connectionCreator?.();
       }
       return undefined;
     }
