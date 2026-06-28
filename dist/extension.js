@@ -2770,7 +2770,7 @@ var SnowflakeDriver = class extends BasicDatabaseDriver {
       database: optionalString4(config.database),
       schema: optionalString4(config.defaultSchema),
       timeout: config.connectTimeoutMs ?? 1e4,
-      application: "VSCodeDataGrip",
+      application: "QueryDeck",
       rowMode: "object"
     });
     await connection.connectAsync();

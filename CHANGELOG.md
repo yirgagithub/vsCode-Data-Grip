@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.9
+
+- Renamed the public extension brand to QueryDeck.
+- Added Marketplace-focused positioning, keywords, screenshots, and demo media.
+
 ## 0.0.8
 
 - Added support for SQL Server, Oracle, Redis, Snowflake, and SQLite connections alongside PostgreSQL, Redshift, and MySQL, with engine-aware SQL dialect handling.
@@ -32,7 +37,7 @@
 
 ## 0.0.1
 
-- Initial release of Data Grip for VS Code.
+- Initial release of QueryDeck for VS Code.
 - Added PostgreSQL and Redshift connection management.
 - Added schema browsing, query consoles, SQL execution, result grids, table previews, and query history.
 - Added result-grid column filters, column resizing, column selection summaries, and copy/export actions.

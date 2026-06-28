@@ -185,7 +185,7 @@ run('live database drivers', () => {
 
   engineTest('sqlite', 'executes and introspects SQLite through the real driver', async () => {
     const driver = new SQLiteDriver();
-    const database = join(tmpdir(), `vscode-data-grip-live-${randomUUID()}.sqlite`);
+    const database = join(tmpdir(), `querydeck-live-${randomUUID()}.sqlite`);
     const config = connection('sqlite', {
       database,
       host: '',

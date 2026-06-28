@@ -1,8 +1,8 @@
 {
-  "name": "vscode-data-grip",
-  "displayName": "Data Grip",
-  "description": "A VS Code database client for PostgreSQL, Redshift, MySQL, SQLite, SQL Server, Oracle, Redis, and Snowflake.",
-  "version": "0.0.8",
+  "name": "querydeck",
+  "displayName": "QueryDeck",
+  "description": "A VS Code SQL workbench with query consoles, schema browsing, local history, AI help, and multi-database support.",
+  "version": "0.0.9",
   "publisher": "vs-code-database-client",
   "icon": "media/icon.png",
   "repository": {
@@ -14,7 +14,30 @@
     "vscode": "^1.90.0"
   },
   "categories": [
+    "Data Science",
+    "Visualization",
     "Other"
+  ],
+  "galleryBanner": {
+    "color": "#0f172a",
+    "theme": "dark"
+  },
+  "keywords": [
+    "database",
+    "sql",
+    "postgres",
+    "postgresql",
+    "mysql",
+    "sqlite",
+    "sqlserver",
+    "oracle",
+    "redis",
+    "snowflake",
+    "redshift",
+    "query",
+    "schema",
+    "data",
+    "ai"
   ],
   "activationEvents": [
     "onView:databaseExplorer",

@@ -1,4 +1,4 @@
-name: vscode-data-grip-live-tests
+name: querydeck-live-tests
 
 services:
   postgres:
