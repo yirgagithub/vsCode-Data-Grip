@@ -1541,7 +1541,7 @@ var MySQLDriver = class {
   }
   async getTables(connectionId, schema) {
     const [rows] = await this.requirePool(connectionId).query(
-      `select table_schema as schema,
+      `select table_schema as \`schema\`,
               table_name as name,
               'table' as type,
               table_rows as "rowEstimate",
@@ -1555,7 +1555,7 @@ var MySQLDriver = class {
   }
   async getViews(connectionId, schema) {
     const [rows] = await this.requirePool(connectionId).query(
-      `select table_schema as schema, table_name as name, 'view' as type
+      `select table_schema as \`schema\`, table_name as name, 'view' as type
        from information_schema.views
        where table_schema = ?
        order by table_name`,
@@ -1571,7 +1571,7 @@ var MySQLDriver = class {
   }
   async getTriggers(connectionId, schema) {
     const [rows] = await this.requirePool(connectionId).query(
-      `select trigger_schema as schema,
+      `select trigger_schema as \`schema\`,
               event_object_table as "table",
               trigger_name as name,
               action_timing as timing,
@@ -1625,8 +1625,8 @@ var MySQLDriver = class {
   }
   async getColumns(connectionId, schema, table) {
     const [rows] = await this.requirePool(connectionId).query(
-      `select table_schema as schema,
-              table_name as table,
+      `select table_schema as \`schema\`,
+              table_name as \`table\`,
               column_name as name,
               ordinal_position as ordinal,
               column_type as "dataType",
@@ -1813,7 +1813,7 @@ where ${where}` : ""}${orderBy}${paging}`;
   }
   async getRoutines(connectionId, schema, type) {
     const [rows] = await this.requirePool(connectionId).query(
-      `select routine_schema as schema,
+      `select routine_schema as \`schema\`,
               routine_name as name,
               routine_type as kind,
               dtd_identifier as "returnType",
@@ -2278,11 +2278,11 @@ var SqlServerDriver = class extends BasicDatabaseDriver {
     return result.map((row) => ({ name: String(row.name) }));
   }
   async getTables(connectionId, schema) {
-    const result = await this.query(connectionId, `select table_schema as schema, table_name as name, 'table' as type from information_schema.tables where table_schema = '${escapeSql(schema)}' and table_type = 'BASE TABLE' order by table_name`);
+    const result = await this.query(connectionId, `select table_schema as [schema], table_name as name, 'table' as type from information_schema.tables where table_schema = '${escapeSql(schema)}' and table_type = 'BASE TABLE' order by table_name`);
     return result.map((row) => ({ schema: String(row.schema), name: String(row.name), type: "table" }));
   }
   async getViews(connectionId, schema) {
-    const result = await this.query(connectionId, `select table_schema as schema, table_name as name, 'view' as type from information_schema.views where table_schema = '${escapeSql(schema)}' order by table_name`);
+    const result = await this.query(connectionId, `select table_schema as [schema], table_name as name, 'view' as type from information_schema.views where table_schema = '${escapeSql(schema)}' order by table_name`);
     return result.map((row) => ({ schema: String(row.schema), name: String(row.name), type: "view" }));
   }
   async getFunctions(connectionId, schema) {
@@ -2292,7 +2292,7 @@ var SqlServerDriver = class extends BasicDatabaseDriver {
     return this.getRoutines(connectionId, schema, "PROCEDURE");
   }
   async getColumns(connectionId, schema, table) {
-    const rows = await this.query(connectionId, `select table_schema as schema, table_name as [table], column_name as name, ordinal_position as ordinal, data_type as dataType, is_nullable as nullable, column_default as defaultValue from information_schema.columns where table_schema = '${escapeSql(schema)}' and table_name = '${escapeSql(table)}' order by ordinal_position`);
+    const rows = await this.query(connectionId, `select table_schema as [schema], table_name as [table], column_name as name, ordinal_position as ordinal, data_type as dataType, is_nullable as nullable, column_default as defaultValue from information_schema.columns where table_schema = '${escapeSql(schema)}' and table_name = '${escapeSql(table)}' order by ordinal_position`);
     return rows.map((row) => ({
       schema: String(row.schema),
       table: String(row.table),
@@ -2311,7 +2311,7 @@ var SqlServerDriver = class extends BasicDatabaseDriver {
     return this.executeQuery({ connectionId, sql, maxRows: 0 });
   }
   async getRoutines(connectionId, schema, type) {
-    const rows = await this.query(connectionId, `select routine_schema as schema, routine_name as name, routine_type as kind, data_type as returnType from information_schema.routines where routine_schema = '${escapeSql(schema)}' and routine_type = '${type}' order by routine_name`);
+    const rows = await this.query(connectionId, `select routine_schema as [schema], routine_name as name, routine_type as kind, data_type as returnType from information_schema.routines where routine_schema = '${escapeSql(schema)}' and routine_type = '${type}' order by routine_name`);
     return rows.map((row) => ({
       schema: String(row.schema),
       name: String(row.name),
@@ -3164,7 +3164,11 @@ var ConnectionManager = class {
   transactionModes = /* @__PURE__ */ new Map();
   activeConnectionEmitter = new vscode.EventEmitter();
   sshTunnelManager = new SshTunnelManager();
+  connectionCreator;
   onDidChangeActiveConnections = this.activeConnectionEmitter.event;
+  setConnectionCreator(creator) {
+    this.connectionCreator = creator;
+  }
   getConnections() {
     return this.store.getAll();
   }
@@ -3309,7 +3313,7 @@ var ConnectionManager = class {
     if (connections.length === 0) {
       const create = await vscode.window.showInformationMessage("No database connections yet.", "Add Connection");
       if (create === "Add Connection") {
-        return this.promptConnection();
+        return this.connectionCreator?.();
       }
       return void 0;
     }
@@ -15721,6 +15725,17 @@ function activate(context) {
       }
     }));
   };
+  connectionManager.setConnectionCreator(createConnectionFromEditor);
+  async function createConnectionFromEditor() {
+    const config = await ConnectionEditorPanel.open(context, connectionManager);
+    if (!config) {
+      return void 0;
+    }
+    await connectionManager.save(config);
+    refreshQueryMap();
+    tree.refresh();
+    return connectionManager.getConnection(config.id) ?? config;
+  }
   function refreshQueryMap() {
     const connections = connectionManager.getConnections();
     const knownConnectionIds = new Set(connections.map((connection) => connection.id));
@@ -16137,13 +16152,7 @@ function activate(context) {
     queryMap.updateResults(results.getTabs());
   }).register(register);
   register("database.addConnection", async () => {
-    const config = await ConnectionEditorPanel.open(context, connectionManager);
-    if (!config) {
-      return;
-    }
-    await connectionManager.save(config);
-    refreshQueryMap();
-    tree.refresh();
+    await createConnectionFromEditor();
   });
   register("database.editConnection", async (node) => {
     const id = connectionIdFromArg(node) ?? (await connectionManager.pickConnection())?.id;
