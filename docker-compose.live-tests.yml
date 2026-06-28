@@ -1,0 +1,42 @@
+name: vscode-data-grip-live-tests
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: vscode_data_grip
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+    ports:
+      - "${LIVE_POSTGRES_PORT:-5432}:5432"
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: vscode_data_grip
+      MYSQL_ROOT_PASSWORD: mysql
+    ports:
+      - "${LIVE_MYSQL_PORT:-3306}:3306"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${LIVE_REDIS_PORT:-6379}:6379"
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: "YourStrong!Passw0rd"
+    ports:
+      - "${LIVE_SQLSERVER_PORT:-1433}:1433"
+
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    environment:
+      APP_USER: app
+      APP_USER_PASSWORD: oracle
+      ORACLE_PASSWORD: oracle
+    ports:
+      - "${LIVE_ORACLE_PORT:-1521}:1521"

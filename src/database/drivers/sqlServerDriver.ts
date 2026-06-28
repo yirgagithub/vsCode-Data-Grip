@@ -97,12 +97,12 @@ export class SqlServerDriver extends BasicDatabaseDriver {
   }
 
   async getTables(connectionId: string, schema: string): Promise<TableInfo[]> {
-    const result = await this.query(connectionId, `select table_schema as schema, table_name as name, 'table' as type from information_schema.tables where table_schema = '${escapeSql(schema)}' and table_type = 'BASE TABLE' order by table_name`);
+    const result = await this.query(connectionId, `select table_schema as [schema], table_name as name, 'table' as type from information_schema.tables where table_schema = '${escapeSql(schema)}' and table_type = 'BASE TABLE' order by table_name`);
     return result.map((row) => ({ schema: String(row.schema), name: String(row.name), type: 'table' }));
   }
 
   override async getViews(connectionId: string, schema: string): Promise<ViewInfo[]> {
-    const result = await this.query(connectionId, `select table_schema as schema, table_name as name, 'view' as type from information_schema.views where table_schema = '${escapeSql(schema)}' order by table_name`);
+    const result = await this.query(connectionId, `select table_schema as [schema], table_name as name, 'view' as type from information_schema.views where table_schema = '${escapeSql(schema)}' order by table_name`);
     return result.map((row) => ({ schema: String(row.schema), name: String(row.name), type: 'view' }));
   }
 
@@ -115,7 +115,7 @@ export class SqlServerDriver extends BasicDatabaseDriver {
   }
 
   async getColumns(connectionId: string, schema: string, table: string): Promise<ColumnInfo[]> {
-    const rows = await this.query(connectionId, `select table_schema as schema, table_name as [table], column_name as name, ordinal_position as ordinal, data_type as dataType, is_nullable as nullable, column_default as defaultValue from information_schema.columns where table_schema = '${escapeSql(schema)}' and table_name = '${escapeSql(table)}' order by ordinal_position`);
+    const rows = await this.query(connectionId, `select table_schema as [schema], table_name as [table], column_name as name, ordinal_position as ordinal, data_type as dataType, is_nullable as nullable, column_default as defaultValue from information_schema.columns where table_schema = '${escapeSql(schema)}' and table_name = '${escapeSql(table)}' order by ordinal_position`);
     return rows.map((row) => ({
       schema: String(row.schema),
       table: String(row.table),
@@ -142,7 +142,7 @@ export class SqlServerDriver extends BasicDatabaseDriver {
   }
 
   private async getRoutines(connectionId: string, schema: string, type: 'FUNCTION' | 'PROCEDURE'): Promise<RoutineInfo[]> {
-    const rows = await this.query(connectionId, `select routine_schema as schema, routine_name as name, routine_type as kind, data_type as returnType from information_schema.routines where routine_schema = '${escapeSql(schema)}' and routine_type = '${type}' order by routine_name`);
+    const rows = await this.query(connectionId, `select routine_schema as [schema], routine_name as name, routine_type as kind, data_type as returnType from information_schema.routines where routine_schema = '${escapeSql(schema)}' and routine_type = '${type}' order by routine_name`);
     return rows.map((row) => ({
       schema: String(row.schema),
       name: String(row.name),
