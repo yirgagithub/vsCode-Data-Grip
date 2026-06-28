@@ -238,7 +238,7 @@ class MySQLDriver {
         return rows;
     }
     async getTables(connectionId, schema) {
-        const [rows] = await this.requirePool(connectionId).query(`select table_schema as schema,
+        const [rows] = await this.requirePool(connectionId).query(`select table_schema as \`schema\`,
               table_name as name,
               'table' as type,
               table_rows as "rowEstimate",
@@ -249,7 +249,7 @@ class MySQLDriver {
         return rows;
     }
     async getViews(connectionId, schema) {
-        const [rows] = await this.requirePool(connectionId).query(`select table_schema as schema, table_name as name, 'view' as type
+        const [rows] = await this.requirePool(connectionId).query(`select table_schema as \`schema\`, table_name as name, 'view' as type
        from information_schema.views
        where table_schema = ?
        order by table_name`, [schema]);
@@ -262,7 +262,7 @@ class MySQLDriver {
         return this.getRoutines(connectionId, schema, 'PROCEDURE');
     }
     async getTriggers(connectionId, schema) {
-        const [rows] = await this.requirePool(connectionId).query(`select trigger_schema as schema,
+        const [rows] = await this.requirePool(connectionId).query(`select trigger_schema as \`schema\`,
               event_object_table as "table",
               trigger_name as name,
               action_timing as timing,
@@ -314,8 +314,8 @@ class MySQLDriver {
         await this.requirePool(connectionId).query(`kill ${Math.trunc(pid)}`);
     }
     async getColumns(connectionId, schema, table) {
-        const [rows] = await this.requirePool(connectionId).query(`select table_schema as schema,
-              table_name as table,
+        const [rows] = await this.requirePool(connectionId).query(`select table_schema as \`schema\`,
+              table_name as \`table\`,
               column_name as name,
               ordinal_position as ordinal,
               column_type as "dataType",
@@ -499,7 +499,7 @@ class MySQLDriver {
         };
     }
     async getRoutines(connectionId, schema, type) {
-        const [rows] = await this.requirePool(connectionId).query(`select routine_schema as schema,
+        const [rows] = await this.requirePool(connectionId).query(`select routine_schema as \`schema\`,
               routine_name as name,
               routine_type as kind,
               dtd_identifier as "returnType",
