@@ -17,6 +17,19 @@ It supports PostgreSQL, Redshift, MySQL, SQLite, Microsoft SQL Server, Oracle, R
 - Use AI to explain SQL, fix SQL errors, summarize query memory, and analyze table performance without sending database passwords in prompts.
 - Mark production and read-only connections so destructive SQL gets an extra safety check.
 
+## Coming From Another Database Tool?
+
+QueryDeck is built for developers who want a focused SQL workflow inside VS Code: connect, write SQL, run queries, inspect results, and recover past work quickly.
+
+| If you use... | What QueryDeck is good for |
+| --- | --- |
+| DBCode | QueryDeck is lighter and focused on SQL consoles, local query memory, safety checks, and AI-assisted SQL inside VS Code. DBCode has broader database coverage and advanced features; QueryDeck aims to be simpler to adopt for daily SQL work. |
+| Database Client | QueryDeck focuses less on general database administration and more on repeatable SQL workflows: durable consoles, history search, schema-aware editing, result grids, and production safety. |
+| SQLTools | QueryDeck avoids a separate driver-extension setup for its supported engines and adds a richer workbench layer around query consoles, result tabs, AI help, and local query history. |
+| Desktop database IDEs | QueryDeck keeps common database work inside the editor you already use, so you do not have to switch apps just to inspect schema, run SQL, or reopen an old query. |
+
+Choose QueryDeck if your pain is not just connecting to a database, but keeping the whole SQL loop close to your code.
+
 ## Screenshots
 
 ### Connect And Browse
