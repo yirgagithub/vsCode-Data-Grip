@@ -1,7 +1,7 @@
 {
   "name": "querydeck",
   "displayName": "QueryDeck",
-  "description": "A VS Code SQL workbench with query consoles, schema browsing, local history, AI help, and multi-database support.",
+  "description": "SQL workbench for VS Code with query consoles, schema browsing, result grids, local history, AI help, and multi-database support.",
   "version": "0.0.9",
   "publisher": "vs-code-database-client",
   "icon": "media/icon.png",
