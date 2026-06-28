@@ -51,7 +51,7 @@ class SnowflakeDriver extends driverUtils_1.BasicDatabaseDriver {
             database: (0, driverUtils_1.optionalString)(config.database),
             schema: (0, driverUtils_1.optionalString)(config.defaultSchema),
             timeout: config.connectTimeoutMs ?? 10000,
-            application: 'VSCodeDataGrip',
+            application: 'QueryDeck',
             rowMode: 'object'
         });
         await connection.connectAsync();
