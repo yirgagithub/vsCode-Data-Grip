@@ -287,6 +287,19 @@ export function activate(context: vscode.ExtensionContext): void {
     }));
   };
 
+  connectionManager.setConnectionCreator(createConnectionFromEditor);
+
+  async function createConnectionFromEditor(): Promise<ConnectionConfig | undefined> {
+    const config = await ConnectionEditorPanel.open(context, connectionManager);
+    if (!config) {
+      return undefined;
+    }
+    await connectionManager.save(config);
+    refreshQueryMap();
+    tree.refresh();
+    return connectionManager.getConnection(config.id) ?? config;
+  }
+
   function refreshQueryMap(): void {
     const connections = connectionManager.getConnections();
     const knownConnectionIds = new Set(connections.map((connection) => connection.id));
@@ -754,13 +767,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }).register(register);
 
   register('database.addConnection', async () => {
-    const config = await ConnectionEditorPanel.open(context, connectionManager);
-    if (!config) {
-      return;
-    }
-    await connectionManager.save(config);
-    refreshQueryMap();
-    tree.refresh();
+    await createConnectionFromEditor();
   });
 
   register('database.editConnection', async (node?: unknown) => {
