@@ -1,7 +1,7 @@
 {
   "name": "vscode-data-grip",
   "displayName": "QueryDeck",
-  "description": "SQL workbench for VS Code with query consoles, schema browsing, result grids, local history, AI help, and multi-database support.",
+  "description": "AI-first SQL workbench for VS Code with multi-database connections, local query memory, performance recommendations, and result grids.",
   "version": "0.0.9",
   "publisher": "vs-code-database-client",
   "icon": "media/icon.png",
@@ -1001,6 +1001,7 @@
     "bundle:webview": "vite build --config vite.config.ts",
     "copy:native-runtimes": "node scripts/copyNativeRuntimes.js",
     "copy:codicons": "node scripts/copyCodicons.js",
+    "marketplace:assets": "node scripts/generateMarketplaceAssets.js",
     "build": "npm run copy:codicons && npm run compile && npm run bundle:extension && npm run bundle:runtimes && npm run copy:native-runtimes && npm run bundle:webview",
     "lint": "tsc -p ./ --noEmit",
     "test": "vitest run",
