@@ -1,21 +1,33 @@
 # QueryDeck
 
-QueryDeck is a VS Code SQL workbench for developers who want to connect, browse schema, run queries, inspect results, and recover useful SQL without leaving the editor.
+QueryDeck is an AI-first VS Code SQL workbench for developers who want to connect, browse schema, run queries, inspect results, and recover useful SQL without leaving the editor.
 
 It supports PostgreSQL, Redshift, MySQL, SQLite, Microsoft SQL Server, Oracle, Redis, and Snowflake.
 
-![QueryDeck demo](media/marketplace/querydeck-demo.gif)
+![QueryDeck supported database connections](https://raw.githubusercontent.com/yirgagithub/vsCode-Data-Grip/main/media/marketplace/querydeck-connections.png)
 
 ## Why Install QueryDeck?
 
+- Bring SQL work into the same editor where Codex, Claude Code, Copilot, and other AI coding tools already work.
+- Ask AI to explain SQL, fix SQL errors, summarize local query memory, and recommend table performance improvements.
+- Search local query memory by plain-language phrases, table names, columns, output fields, status, or SQL fragments.
 - Stay in VS Code while working with production, local, and warehouse databases.
 - Open durable query consoles that are tied to saved connections.
 - Browse schemas, tables, columns, keys, indexes, views, procedures, and generated DDL.
 - Run SQL from files, selections, or parameterized query consoles.
 - Inspect result grids with paging, filtering, copy, export, charting, and pinned tabs.
-- Search local query history by plain-language phrases, table names, columns, output fields, status, or SQL fragments.
-- Use AI to explain SQL, fix SQL errors, summarize query memory, and analyze table performance without sending database passwords in prompts.
 - Mark production and read-only connections so destructive SQL gets an extra safety check.
+
+## AI-First SQL Workflow
+
+QueryDeck is designed for the way developers now work in VS Code: write SQL, inspect schema, keep history, and hand useful context to AI coding assistants without jumping into a separate database IDE.
+
+Use it with:
+
+- Codex, Claude Code, Copilot, or another AI assistant reading and editing SQL in your workspace.
+- QueryDeck AI commands for explain, fix, query-memory summaries, and performance recommendations.
+- Local query memory so useful SQL does not disappear after a tab closes.
+- Production and read-only safety checks before risky SQL runs.
 
 ## Coming From Another Database Tool?
 
@@ -34,15 +46,15 @@ Choose QueryDeck if your pain is not just connecting to a database, but keeping 
 
 ### Connect And Browse
 
-![QueryDeck connection onboarding and schema explorer](media/marketplace/querydeck-connections.png)
+![QueryDeck connection onboarding and schema explorer](https://raw.githubusercontent.com/yirgagithub/vsCode-Data-Grip/main/media/marketplace/querydeck-connections.png)
 
 ### Run SQL And Inspect Results
 
-![QueryDeck SQL console and result grid](media/marketplace/querydeck-results.png)
+![QueryDeck SQL console and result grid](https://raw.githubusercontent.com/yirgagithub/vsCode-Data-Grip/main/media/marketplace/querydeck-results.png)
 
 ### Recover Past Queries And Use AI
 
-![QueryDeck query history and AI assistance](media/marketplace/querydeck-history-ai.png)
+![QueryDeck query history and AI assistance](https://raw.githubusercontent.com/yirgagithub/vsCode-Data-Grip/main/media/marketplace/querydeck-history-ai.png)
 
 ## Built For Daily SQL Work
 
