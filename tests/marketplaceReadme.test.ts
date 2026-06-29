@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -15,6 +15,7 @@ describe('marketplace README', () => {
     for (const reference of imageReferences) {
       const assetPath = reference.replace('https://raw.githubusercontent.com/yirgagithub/vsCode-Data-Grip/main/', '');
       expect(existsSync(join(process.cwd(), assetPath))).toBe(true);
+      expect(statSync(join(process.cwd(), assetPath)).size).toBeGreaterThan(10_000);
     }
   });
 

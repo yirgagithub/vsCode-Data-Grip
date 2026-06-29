@@ -1001,6 +1001,7 @@
     "bundle:webview": "vite build --config vite.config.ts",
     "copy:native-runtimes": "node scripts/copyNativeRuntimes.js",
     "copy:codicons": "node scripts/copyCodicons.js",
+    "marketplace:assets": "node scripts/generateMarketplaceAssets.js",
     "build": "npm run copy:codicons && npm run compile && npm run bundle:extension && npm run bundle:runtimes && npm run copy:native-runtimes && npm run bundle:webview",
     "lint": "tsc -p ./ --noEmit",
     "test": "vitest run",

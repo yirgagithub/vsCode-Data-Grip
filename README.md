@@ -52,9 +52,9 @@ Choose QueryDeck if your pain is not just connecting to a database, but keeping 
 
 ![QueryDeck SQL console and result grid](https://raw.githubusercontent.com/yirgagithub/vsCode-Data-Grip/main/media/marketplace/querydeck-results.png)
 
-### Recover Past Queries And Use AI
+### Recover Past Queries
 
-![QueryDeck query history and AI assistance](https://raw.githubusercontent.com/yirgagithub/vsCode-Data-Grip/main/media/marketplace/querydeck-history-ai.png)
+![QueryDeck query history](https://raw.githubusercontent.com/yirgagithub/vsCode-Data-Grip/main/media/marketplace/querydeck-history-ai.png)
 
 ## Built For Daily SQL Work
 
