@@ -4,7 +4,7 @@ QueryDeck is an AI-first VS Code SQL workbench for developers who want to connec
 
 It supports PostgreSQL, Redshift, MySQL, SQLite, Microsoft SQL Server, Oracle, Redis, and Snowflake.
 
-![QueryDeck supported database connections](https://raw.githubusercontent.com/yirgagithub/vsCode-Data-Grip/main/media/marketplace/querydeck-connections.png)
+![QueryDeck real database connection UI in VS Code](media/marketplace/querydeck-connections.png)
 
 ## Why Install QueryDeck?
 
@@ -46,15 +46,11 @@ Choose QueryDeck if your pain is not just connecting to a database, but keeping 
 
 ### Connect And Browse
 
-![QueryDeck connection onboarding and schema explorer](https://raw.githubusercontent.com/yirgagithub/vsCode-Data-Grip/main/media/marketplace/querydeck-connections.png)
+![QueryDeck real database connection UI in VS Code](media/marketplace/querydeck-connections.png)
 
-### Run SQL And Inspect Results
+### Write SQL In VS Code
 
-![QueryDeck SQL console and result grid](https://raw.githubusercontent.com/yirgagithub/vsCode-Data-Grip/main/media/marketplace/querydeck-results.png)
-
-### Recover Past Queries
-
-![QueryDeck query history](https://raw.githubusercontent.com/yirgagithub/vsCode-Data-Grip/main/media/marketplace/querydeck-history-ai.png)
+![QueryDeck real SQL editor controls in VS Code](media/marketplace/querydeck-sql-editor.png)
 
 ## Built For Daily SQL Work
 
