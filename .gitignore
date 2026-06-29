@@ -1,4 +1,5 @@
 .vscode-data-grip/
+.tmp-marketplace/
 *.vsix
 .vscode-test/
 e2e/out/

@@ -2,6 +2,7 @@ src/**
 tests/**
 docs/**
 scripts/**
+.tmp-marketplace/**
 .vscode-data-grip/**
 **/*.vsix
 .vscode-test/**
