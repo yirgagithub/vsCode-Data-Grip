@@ -47,7 +47,7 @@ import { TableImportPanel } from './webviews/table/TableImportPanel';
 import { Logger } from './utils/logger';
 import { qualifiedName, quoteIdentifier } from './utils/identifiers';
 import { createId } from './utils/id';
-import { ConnectionConfig, QueryConsoleRecord, QueryExecutionProgress, QueryPlanResult, QueryResultTab, SchemaCacheEntry, TableStatsInfo, TableWorkloadSummary } from './types';
+import { ConnectionConfig, ConnectionConfigWithPassword, QueryConsoleRecord, QueryExecutionProgress, QueryPlanResult, QueryResultTab, SchemaCacheEntry, TableStatsInfo, TableWorkloadSummary } from './types';
 
 const PROJECT_SQL_SESSION_PREFIX = 'project-sql:';
 
@@ -288,6 +288,21 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   connectionManager.setConnectionCreator(createConnectionFromEditor);
+
+  if (process.env.QUERYDECK_ENABLE_TEST_COMMANDS === 'true') {
+    register('database.internal.seedAndConnectForMarketplaceMedia', async (configsArg: unknown) => {
+      const configs = configsArg as ConnectionConfigWithPassword[];
+      for (const config of configs) {
+        await connectionManager.save(config);
+      }
+      for (const config of configs) {
+        await connectionManager.connect(config.id);
+      }
+      refreshQueryMap();
+      tree.refresh();
+      return connectionManager.getActiveConnections().map((connection) => connection.config.id);
+    });
+  }
 
   async function createConnectionFromEditor(): Promise<ConnectionConfig | undefined> {
     const config = await ConnectionEditorPanel.open(context, connectionManager);
