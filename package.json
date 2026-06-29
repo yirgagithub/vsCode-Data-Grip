@@ -1007,6 +1007,7 @@
     "test:live": "vitest run tests/liveDatabaseDrivers.integration.test.ts",
     "compile:e2e": "tsc -p e2e",
     "test:e2e": "npm run compile && npm run compile:e2e && vscode-test",
+    "capture:marketplace-media": "node scripts/captureMarketplaceMedia.js",
     "package": "vsce package --no-dependencies",
     "publish": "vsce publish --no-dependencies"
   },
