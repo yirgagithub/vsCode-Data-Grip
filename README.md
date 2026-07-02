@@ -4,6 +4,8 @@ AI-first SQL workbench and database client for VS Code.
 
 QueryDeck keeps the everyday database loop inside your editor: connect to databases, browse schemas, run SQL, inspect result grids, search query history, and use AI help without switching tools.
 
+Built for Codex, Claude Code, and AI-assisted SQL workflows with local query memory and table performance recommendations.
+
 Works with PostgreSQL, MySQL, SQLite, Microsoft SQL Server, Oracle, Redis, Snowflake, and Redshift.
 
 ![QueryDeck MySQL result grid in VS Code](media/marketplace/querydeck-mysql-results.jpg)
@@ -20,11 +22,19 @@ Works with PostgreSQL, MySQL, SQLite, Microsoft SQL Server, Oracle, Redis, Snowf
 
 ## Screenshots
 
-### Multi-Database Explorer
+### Connections
+
+![QueryDeck saved database connections in VS Code](media/marketplace/querydeck-connections.png)
+
+### SQL Editor
+
+![QueryDeck SQL editor workflow in VS Code](media/marketplace/querydeck-sql-editor.png)
+
+### PostgreSQL Explorer
 
 ![QueryDeck database explorer with PostgreSQL connection in VS Code](media/marketplace/querydeck-postgres-connection.jpg)
 
-### Browse Real Tables
+### PostgreSQL Table Data
 
 ![QueryDeck PostgreSQL table data grid in VS Code](media/marketplace/querydeck-postgres-table.jpg)
 
