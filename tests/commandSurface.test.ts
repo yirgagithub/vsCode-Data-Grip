@@ -69,6 +69,7 @@ describe('command surface', () => {
       'database.executeCurrentQuery',
       'database.executeSelection',
       'database.executeStatementRange',
+      'database.internal.seedAndConnectForMarketplaceMedia',
       'database.pickConnection'
     ]);
 

@@ -3,6 +3,7 @@ tests/**
 docs/**
 scripts/**
 .tmp-marketplace/**
+.tmp-real-screenshots/**
 .vscode-data-grip/**
 **/*.vsix
 .vscode-test/**
