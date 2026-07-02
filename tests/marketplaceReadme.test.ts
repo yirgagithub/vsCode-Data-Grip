@@ -3,19 +3,24 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const readme = readFileSync('README.md', 'utf8');
+const verifiedMarketplaceAssets = new Set([
+  'media/marketplace/querydeck-connections.png',
+  'media/marketplace/querydeck-sql-editor.png'
+]);
 
 describe('marketplace README', () => {
-  it('uses Marketplace-safe raw image URLs instead of local image references', () => {
+  it('uses only verified real Marketplace screenshots and no GIFs', () => {
     const imageReferences = [...readme.matchAll(/!\[[^\]]*]\(([^)]+)\)/g)].map((match) => match[1]);
 
-    expect(imageReferences.length).toBeGreaterThanOrEqual(3);
-    expect(imageReferences.every((reference) => reference.startsWith('https://raw.githubusercontent.com/yirgagithub/vsCode-Data-Grip/main/'))).toBe(true);
-    expect(imageReferences.some((reference) => reference.endsWith('.gif'))).toBe(false);
+    expect(imageReferences.length).toBeGreaterThanOrEqual(2);
+    expect(imageReferences.every((reference) => verifiedMarketplaceAssets.has(reference))).toBe(true);
+    expect(readme).not.toContain('raw.githubusercontent.com');
+    expect(readme).not.toMatch(/\.gif\)/i);
+    expect(existsSync('scripts/generateMarketplaceAssets.js')).toBe(false);
 
     for (const reference of imageReferences) {
-      const assetPath = reference.replace('https://raw.githubusercontent.com/yirgagithub/vsCode-Data-Grip/main/', '');
-      expect(existsSync(join(process.cwd(), assetPath))).toBe(true);
-      expect(statSync(join(process.cwd(), assetPath)).size).toBeGreaterThan(10_000);
+      expect(existsSync(join(process.cwd(), reference))).toBe(true);
+      expect(statSync(join(process.cwd(), reference)).size).toBeGreaterThan(15_000);
     }
   });
 
