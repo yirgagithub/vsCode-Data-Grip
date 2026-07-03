@@ -6,6 +6,7 @@ import { QueryHistoryStore } from '../persistence/queryHistoryStore';
 import { createId } from '../utils/id';
 import { outputColumnNames, extractQualifiedColumns, extractQueryTables } from '../services/queryMemoryMetadata';
 import { SqlSafetyClassifier } from '../services/sqlSafetyClassifier';
+import { isReadOnlySql } from '../services/readOnlySql';
 
 export interface QueryExecutionRecorder {
   recordHistoryItem(item: QueryHistoryItem): Promise<void>;
@@ -236,12 +237,6 @@ export class QueryExecutor {
       where: pgError.where
     };
   }
-}
-
-function isReadOnlySql(sql: string): boolean {
-  const statements = splitSqlStatements(sql).map((statement) => statement.sql.trim()).filter(Boolean);
-  const parts = statements.length ? statements : [sql.trim()].filter(Boolean);
-  return parts.every((statement) => /^(select|with|values|show|describe|explain)\b/i.test(statement));
 }
 
 function isCancellationError(error: unknown): boolean {

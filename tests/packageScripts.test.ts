@@ -21,8 +21,7 @@ const runtimePackages = [
   'snowflake-sdk/*',
   'sqlite3',
   'sqlite3/*',
-  'sql-formatter',
-  'xlsx'
+  'sql-formatter'
 ];
 
 function packageJson(): PackageJson {
@@ -49,13 +48,39 @@ describe('package scripts', () => {
     expect(scripts['bundle:runtimes']).toContain('src/runtime/snowflakeRuntime.ts');
     expect(scripts['bundle:runtimes']).toContain('src/runtime/sqliteRuntime.ts');
     expect(scripts['bundle:runtimes']).toContain('src/runtime/sqlFormatterRuntime.ts');
-    expect(scripts['bundle:runtimes']).toContain('src/runtime/xlsxRuntime.ts');
-    expect(scripts['bundle:runtimes']).toContain('--external:oracledb');
+    expect(scripts['bundle:runtimes']).not.toContain('src/runtime/xlsxRuntime.ts');
+    expect(scripts['bundle:mcp']).toContain('src/mcpServer.ts');
+    expect(scripts['bundle:mcp']).toContain('--external:pg');
+    expect(scripts['bundle:mcp']).toContain('--external:sqlite3');
+    expect(scripts['bundle:runtimes']).not.toContain('--external:oracledb');
     expect(scripts['bundle:runtimes']).toContain('--external:sqlite3');
+    expect(scripts['bundle:extension']).not.toContain('--external:xlsx');
     expect(scripts['copy:native-runtimes']).toBe('node scripts/copyNativeRuntimes.js');
     expect(scripts.build).toContain('npm run copy:native-runtimes');
+    expect(scripts.build).toContain('npm run bundle:mcp');
     expect(scripts.build).toContain('npm run bundle:runtimes');
     expect(scripts.package).toBe('vsce package --no-dependencies');
     expect(scripts.publish).toBe('vsce publish --no-dependencies');
+  });
+
+  it('packages only bundle entrypoints and runtime assets from dist', () => {
+    const ignore = readFileSync(join(root, '.vscodeignore'), 'utf8').split(/\r?\n/);
+
+    expect(ignore).not.toContain('!dist/**/*.js');
+    expect(ignore).not.toContain('dist/**');
+    expect(ignore).toContain('dist/database/**');
+    expect(ignore).toContain('dist/services/**');
+    expect(ignore).toContain('dist/webviews/**');
+    expect(ignore).toContain('dist/mcp/**');
+    expect(ignore).toContain('dist/**/*.map');
+    expect(ignore).toContain('.tmp-*');
+  });
+
+  it('does not copy Oracle JavaScript sources into the VSIX', () => {
+    const copyNativeRuntimes = readFileSync(join(root, 'scripts', 'copyNativeRuntimes.js'), 'utf8');
+
+    expect(copyNativeRuntimes).not.toContain("['oracledb/index.js'");
+    expect(copyNativeRuntimes).not.toContain("['oracledb/lib'");
+    expect(copyNativeRuntimes).not.toContain("['oracledb/plugins'");
   });
 });

@@ -996,12 +996,13 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "bundle:extension": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --external:pg --external:pg/* --external:pg-native --external:mysql2 --external:mysql2/* --external:mssql --external:mssql/* --external:oracledb --external:redis --external:redis/* --external:snowflake-sdk --external:snowflake-sdk/* --external:sqlite3 --external:sqlite3/* --external:sql-formatter --external:xlsx --sourcemap --outfile=dist/extension.js",
-    "bundle:runtimes": "esbuild src/runtime/pgRuntime.ts src/runtime/mysqlRuntime.ts src/runtime/mssqlRuntime.ts src/runtime/oracleRuntime.ts src/runtime/redisRuntime.ts src/runtime/snowflakeRuntime.ts src/runtime/sqliteRuntime.ts src/runtime/sqlFormatterRuntime.ts src/runtime/xlsxRuntime.ts --bundle --platform=node --format=cjs --target=node20 --external:pg-native --external:oracledb --external:sqlite3 --sourcemap --outdir=dist/runtime",
+    "bundle:extension": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --external:pg --external:pg/* --external:pg-native --external:mysql2 --external:mysql2/* --external:mssql --external:mssql/* --external:oracledb --external:redis --external:redis/* --external:snowflake-sdk --external:snowflake-sdk/* --external:sqlite3 --external:sqlite3/* --external:sql-formatter --sourcemap --outfile=dist/extension.js",
+    "bundle:runtimes": "esbuild src/runtime/pgRuntime.ts src/runtime/mysqlRuntime.ts src/runtime/mssqlRuntime.ts src/runtime/oracleRuntime.ts src/runtime/redisRuntime.ts src/runtime/snowflakeRuntime.ts src/runtime/sqliteRuntime.ts src/runtime/sqlFormatterRuntime.ts --bundle --platform=node --format=cjs --target=node20 --external:pg-native --external:sqlite3 --sourcemap --outdir=dist/runtime",
+    "bundle:mcp": "esbuild src/mcpServer.ts --bundle --platform=node --format=cjs --target=node20 --external:pg --external:pg/* --external:pg-native --external:mysql2 --external:mysql2/* --external:mssql --external:mssql/* --external:oracledb --external:redis --external:redis/* --external:snowflake-sdk --external:snowflake-sdk/* --external:sqlite3 --external:sqlite3/* --sourcemap --outfile=dist/mcpServer.js",
     "bundle:webview": "vite build --config vite.config.ts",
     "copy:native-runtimes": "node scripts/copyNativeRuntimes.js",
     "copy:codicons": "node scripts/copyCodicons.js",
-    "build": "npm run copy:codicons && npm run compile && npm run bundle:extension && npm run bundle:runtimes && npm run copy:native-runtimes && npm run bundle:webview",
+    "build": "npm run copy:codicons && npm run compile && npm run bundle:extension && npm run bundle:mcp && npm run bundle:runtimes && npm run copy:native-runtimes && npm run bundle:webview",
     "lint": "tsc -p ./ --noEmit",
     "test": "vitest run",
     "test:live": "vitest run tests/liveDatabaseDrivers.integration.test.ts",
@@ -1012,8 +1013,9 @@
     "publish": "vsce publish --no-dependencies"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@observablehq/plot": "^0.6.17",
-    "@vitejs/plugin-react": "^4.3.4",
+    "fflate": "^0.8.3",
     "mssql": "^12.6.0",
     "mysql2": "^3.22.5",
     "oracledb": "^7.0.0",
@@ -1024,7 +1026,7 @@
     "snowflake-sdk": "^3.0.0",
     "sql-formatter": "^15.8.1",
     "sqlite3": "^6.0.1",
-    "xlsx": "^0.18.5",
+    "zod": "^4.4.3",
     "zustand": "^5.0.7"
   },
   "devDependencies": {
@@ -1034,6 +1036,7 @@
     "@types/react": "^19.1.9",
     "@types/react-dom": "^19.1.7",
     "@types/vscode": "^1.90.0",
+    "@vitejs/plugin-react": "^4.3.4",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^3.0.0",
     "@vscode/vsce": "^3.9.2",

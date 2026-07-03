@@ -37,7 +37,7 @@ exports.TableDataPanel = void 0;
 const vscode = __importStar(require("vscode"));
 const identifiers_1 = require("../../utils/identifiers");
 const sqlDialect_1 = require("../../services/sqlDialect");
-const runtimeLoader_1 = require("../../runtime/runtimeLoader");
+const xlsxExport_1 = require("../../services/xlsxExport");
 class TableDataPanel {
     static async open(context, connectionManager, node) {
         const configuredMaxRows = vscode.workspace.getConfiguration('database').get('defaultMaxRows', 500);
@@ -70,13 +70,9 @@ class TableDataPanel {
                 });
                 if (target) {
                     if (message.format === 'xlsx') {
-                        const XLSX = await loadXlsx();
-                        const workbook = XLSX.utils.book_new();
                         const rows = message.rows ?? [];
                         const columns = message.columns ?? (rows[0] ? Object.keys(rows[0]) : []);
-                        const sheet = XLSX.utils.json_to_sheet(rows, { header: columns });
-                        XLSX.utils.book_append_sheet(workbook, sheet, sanitizeSheetName(node.table.name));
-                        await vscode.workspace.fs.writeFile(target, Buffer.from(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })));
+                        await vscode.workspace.fs.writeFile(target, (0, xlsxExport_1.rowsToXlsxBuffer)(rows, columns, node.table.name));
                     }
                     else if (typeof message.text === 'string') {
                         await vscode.workspace.fs.writeFile(target, Buffer.from(message.text, 'utf8'));
@@ -2076,21 +2072,6 @@ function escapeHtml(value) {
 function sanitizeSheetName(name) {
     const cleaned = name.replace(/[\\/?*[\]:]/g, ' ').trim();
     return (cleaned || 'Sheet1').slice(0, 31);
-}
-let xlsxRuntime;
-function loadXlsx() {
-    xlsxRuntime ??= loadXlsxRuntime();
-    return xlsxRuntime;
-}
-async function loadXlsxRuntime() {
-    const bundled = (0, runtimeLoader_1.loadBundledRuntime)('xlsxRuntime');
-    if (bundled) {
-        return bundled;
-    }
-    return Promise.resolve().then(() => __importStar(require('xlsx'))).then((module) => {
-        const candidate = module;
-        return 'utils' in candidate ? candidate : candidate.default;
-    });
 }
 function formatOptionalNumber(value) {
     return value === undefined ? 'unknown' : value.toLocaleString();

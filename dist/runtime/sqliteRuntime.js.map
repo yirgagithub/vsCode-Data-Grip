@@ -1,7 +1,7 @@
 {
   "version": 3,
   "sources": ["../../src/runtime/sqliteRuntime.ts"],
-  "sourcesContent": ["import sqlite3 = require('sqlite3');\n\nexport = sqlite3;\n"],
+  "sourcesContent": ["import sqlite3 = require('sqlite3');\r\n\r\nexport = sqlite3;\r\n"],
   "mappings": ";;;AAAA,IAAO,UAAU,QAAQ;AAEzB,iBAAS;",
   "names": []
 }
