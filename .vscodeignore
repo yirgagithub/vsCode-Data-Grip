@@ -2,6 +2,8 @@ src/**
 tests/**
 docs/**
 scripts/**
+artifacts/**
+capture.log
 .tmp-marketplace/**
 .tmp-real-screenshots/**
 .vscode-data-grip/**
