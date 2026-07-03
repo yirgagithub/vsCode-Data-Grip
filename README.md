@@ -85,6 +85,35 @@ When VS Code language models or an OpenAI-compatible provider are configured, Qu
 
 Saved database passwords are not sent to AI prompts.
 
+## MCP Server For AI Agents
+
+QueryDeck includes a read-only MCP server for Codex, Claude, Cursor, and other MCP clients. It exposes tools to list database connections, inspect schemas, get table DDL, search query memory, explain queries, and run read-only SQL with row limits.
+
+Create a config file and point your MCP client at `dist/mcpServer.js` from the installed extension or local checkout:
+
+```json
+{
+  "defaultMaxRows": 100,
+  "connections": [
+    {
+      "id": "local-postgres",
+      "name": "Local PostgreSQL",
+      "type": "postgres",
+      "host": "localhost",
+      "port": 5432,
+      "database": "postgres",
+      "username": "postgres",
+      "passwordEnv": "QUERYDECK_POSTGRES_PASSWORD",
+      "sslMode": "disable",
+      "color": "blue"
+    }
+  ],
+  "queryMemory": []
+}
+```
+
+Set `QUERYDECK_MCP_CONFIG` to that file and configure the client command as `node dist/mcpServer.js`. MCP query execution is read-only by default; write and destructive statements are rejected.
+
 ## Privacy And Safety
 
 - Passwords are stored with VS Code SecretStorage.

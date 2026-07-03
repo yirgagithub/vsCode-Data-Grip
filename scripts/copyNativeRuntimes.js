@@ -15,11 +15,6 @@ const copies = [
   ['file-uri-to-path/package.json', 'file-uri-to-path/package.json'],
   ['file-uri-to-path/index.js', 'file-uri-to-path/index.js'],
   ['file-uri-to-path/LICENSE', 'file-uri-to-path/LICENSE'],
-  ['oracledb/package.json', 'oracledb/package.json'],
-  ['oracledb/index.js', 'oracledb/index.js'],
-  ['oracledb/lib', 'oracledb/lib'],
-  ['oracledb/plugins', 'oracledb/plugins'],
-  ['oracledb/build/Release', 'oracledb/build/Release'],
   ['oracledb/LICENSE.txt', 'oracledb/LICENSE.txt'],
   ['oracledb/NOTICE.txt', 'oracledb/NOTICE.txt'],
   ['oracledb/THIRD_PARTY_LICENSES.txt', 'oracledb/THIRD_PARTY_LICENSES.txt']
