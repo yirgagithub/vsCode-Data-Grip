@@ -5,6 +5,9 @@ import { describe, expect, it } from 'vitest';
 const readme = readFileSync('README.md', 'utf8');
 const verifiedMarketplaceAssets = new Set([
   'media/marketplace/querydeck-connections.png',
+  'media/marketplace/querydeck-mysql-results.jpg',
+  'media/marketplace/querydeck-postgres-connection.jpg',
+  'media/marketplace/querydeck-postgres-table.jpg',
   'media/marketplace/querydeck-sql-editor.png'
 ]);
 
