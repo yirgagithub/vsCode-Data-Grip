@@ -32,6 +32,9 @@ jobs:
       - name: Type-check
         run: npm run lint
 
+      - name: Build packaged assets
+        run: npm run build
+
       - name: Run unit tests
         run: npm test
 

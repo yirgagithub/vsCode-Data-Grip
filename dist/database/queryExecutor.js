@@ -39,6 +39,7 @@ const sqlSplitter_1 = require("./sqlSplitter");
 const id_1 = require("../utils/id");
 const queryMemoryMetadata_1 = require("../services/queryMemoryMetadata");
 const sqlSafetyClassifier_1 = require("../services/sqlSafetyClassifier");
+const readOnlySql_1 = require("../services/readOnlySql");
 class QueryExecutor {
     connectionManager;
     historyStore;
@@ -64,7 +65,7 @@ class QueryExecutor {
             if (!this.connectionManager.isConnected(params.connectionId)) {
                 await this.connectionManager.connect(params.connectionId);
             }
-            if (config.readOnlyDefault && !isReadOnlySql(params.sql)) {
+            if (config.readOnlyDefault && !(0, readOnlySql_1.isReadOnlySql)(params.sql)) {
                 throw new Error('This connection is read-only by default and only accepts SELECT-style queries.');
             }
             await this.confirmDestructiveIfNeeded(config.production === true, params.sql);
@@ -256,11 +257,6 @@ class QueryExecutor {
     }
 }
 exports.QueryExecutor = QueryExecutor;
-function isReadOnlySql(sql) {
-    const statements = (0, sqlSplitter_1.splitSqlStatements)(sql).map((statement) => statement.sql.trim()).filter(Boolean);
-    const parts = statements.length ? statements : [sql.trim()].filter(Boolean);
-    return parts.every((statement) => /^(select|with|values|show|describe|explain)\b/i.test(statement));
-}
 function isCancellationError(error) {
     const record = error;
     const code = typeof record?.code === 'string' ? record.code : undefined;
