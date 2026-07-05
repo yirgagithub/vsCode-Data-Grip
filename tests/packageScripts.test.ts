@@ -83,4 +83,14 @@ describe('package scripts', () => {
     expect(copyNativeRuntimes).not.toContain("['oracledb/lib'");
     expect(copyNativeRuntimes).not.toContain("['oracledb/plugins'");
   });
+
+  it('rebuilds packaged runtime assets before unit tests import dist chunks in CI', () => {
+    const workflow = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+    const buildIndex = workflow.indexOf('run: npm run build');
+    const testIndex = workflow.indexOf('run: npm test');
+
+    expect(buildIndex).toBeGreaterThan(-1);
+    expect(testIndex).toBeGreaterThan(-1);
+    expect(buildIndex).toBeLessThan(testIndex);
+  });
 });
