@@ -5,7 +5,7 @@ import { DataProfileReport } from '../../types';
 import { TablePerformanceAdvisorReport } from '../../services/tablePerformanceAdvisorService';
 import { qualifiedName } from '../../utils/identifiers';
 import { qualifiedSqlName } from '../../services/sqlDialect';
-import { loadBundledRuntime } from '../../runtime/runtimeLoader';
+import { rowsToXlsxBuffer } from '../../services/xlsxExport';
 
 type TableDataMessage =
   | { type?: 'ready' }
@@ -59,13 +59,9 @@ export class TableDataPanel {
         });
         if (target) {
           if (message.format === 'xlsx') {
-            const XLSX = await loadXlsx();
-            const workbook = XLSX.utils.book_new();
             const rows = message.rows ?? [];
             const columns = message.columns ?? (rows[0] ? Object.keys(rows[0]) : []);
-            const sheet = XLSX.utils.json_to_sheet(rows, { header: columns });
-            XLSX.utils.book_append_sheet(workbook, sheet, sanitizeSheetName(node.table.name));
-            await vscode.workspace.fs.writeFile(target, Buffer.from(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })));
+            await vscode.workspace.fs.writeFile(target, rowsToXlsxBuffer(rows, columns, node.table.name));
           } else if (typeof message.text === 'string') {
             await vscode.workspace.fs.writeFile(target, Buffer.from(message.text, 'utf8'));
           }
@@ -2111,33 +2107,6 @@ function escapeHtml(value: string): string {
 function sanitizeSheetName(name: string): string {
   const cleaned = name.replace(/[\\/?*[\]:]/g, ' ').trim();
   return (cleaned || 'Sheet1').slice(0, 31);
-}
-
-type XlsxRuntime = {
-  utils: {
-    book_new(): unknown;
-    json_to_sheet(rows: Record<string, unknown>[], options: { header: string[] }): unknown;
-    book_append_sheet(workbook: unknown, sheet: unknown, name: string): void;
-  };
-  write(workbook: unknown, options: { type: 'buffer'; bookType: 'xlsx' }): Buffer | Uint8Array;
-};
-
-let xlsxRuntime: Promise<XlsxRuntime> | undefined;
-
-function loadXlsx(): Promise<XlsxRuntime> {
-  xlsxRuntime ??= loadXlsxRuntime();
-  return xlsxRuntime;
-}
-
-async function loadXlsxRuntime(): Promise<XlsxRuntime> {
-  const bundled = loadBundledRuntime<XlsxRuntime>('xlsxRuntime');
-  if (bundled) {
-    return bundled;
-  }
-  return import('xlsx').then((module) => {
-    const candidate = module as unknown as XlsxRuntime | { default?: XlsxRuntime };
-    return 'utils' in candidate ? candidate : candidate.default as XlsxRuntime;
-  });
 }
 
 function formatOptionalNumber(value: number | undefined): string {

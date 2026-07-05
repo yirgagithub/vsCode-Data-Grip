@@ -61,12 +61,6 @@ const runtimes: RuntimeContract[] = [
     exportName: 'format',
     fallbackImport: "import('sql-formatter')",
     sourcePath: 'src/services/sqlFormattingService.ts'
-  },
-  {
-    chunk: 'xlsxRuntime',
-    exportName: 'write',
-    fallbackImport: "import('xlsx')",
-    sourcePath: 'src/webviews/table/TableDataPanel.ts'
   }
 ];
 
