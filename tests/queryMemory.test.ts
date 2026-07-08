@@ -1506,7 +1506,7 @@ describe('SQL parameters', () => {
     const prompt = new SqlParameterPrompt();
     const sql = `select *
 from public.event_fact
-where event_datetime::date = '{startDate}'`;
+where event_datetime::date = {startDate}`;
 
     const resolving = prompt.resolve(sql);
     await Promise.resolve();
@@ -1531,7 +1531,7 @@ where event_datetime::date = '{startDate}'`;
   it('finds brace and named placeholders without treating PostgreSQL casts as parameters', () => {
     const sql = `select event_datetime::date
 from public.event_fact
-where event_datetime::date between '{startDate}' and :endDate
+where event_datetime::date between {startDate} and :endDate
   and status = :status
 -- :commented_out`;
 
@@ -1541,10 +1541,24 @@ where event_datetime::date between '{startDate}' and :endDate
     expect(parameters.map((parameter) => parameter.placeholder)).not.toContain(':date');
   });
 
-  it('applies parameter values as escaped SQL literals unless the placeholder is already quoted', () => {
+  it('ignores brace and named placeholders inside SQL string literals', () => {
     const sql = `select *
 from public.event_fact
-where event_datetime::date between '{startDate}' and :endDate
+where event_datetime::date between {startDate} and :endDate
+  and literal_brace = '{startDate}'
+  and literal_colon = ":startDate"
+  and status = :status`;
+
+    const parameters = findSqlParameters(sql);
+
+    expect(uniqueSqlParameterNames(parameters)).toEqual(['startDate', 'endDate', 'status']);
+    expect(parameters.map((parameter) => parameter.placeholder)).toEqual(['{startDate}', ':endDate', ':status']);
+  });
+
+  it('applies parameter values as escaped SQL literals', () => {
+    const sql = `select *
+from public.event_fact
+where event_datetime::date between {startDate} and :endDate
   and network_affiliate_id = :affiliateId
   and source = :source`;
 
