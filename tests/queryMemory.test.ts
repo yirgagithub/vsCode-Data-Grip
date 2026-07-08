@@ -1528,6 +1528,50 @@ where event_datetime::date = {startDate}`;
     expect(resolved).toContain("event_datetime::date = '2026-06-01'");
   });
 
+  it('prefills previous parameter values only within the same query session', async () => {
+    const windowMock = vscode.window as unknown as {
+      createWebviewPanel: ReturnType<typeof vi.fn>;
+    };
+    windowMock.createWebviewPanel.mockReset();
+    const messageHandlers: Array<(message: unknown) => void> = [];
+    const panels = Array.from({ length: 3 }, () => ({
+      webview: {
+        html: '',
+        onDidReceiveMessage: vi.fn((handler: (message: unknown) => void) => {
+          messageHandlers.push(handler);
+          return { dispose: vi.fn() };
+        })
+      },
+      onDidDispose: vi.fn(() => ({ dispose: vi.fn() })),
+      dispose: vi.fn()
+    }));
+    for (const panel of panels) {
+      windowMock.createWebviewPanel.mockReturnValueOnce(panel);
+    }
+    const prompt = new SqlParameterPrompt();
+    const sql = 'select * from public.event_fact where event_datetime::date >= :startDate';
+
+    const firstRun = prompt.resolve(sql, { sessionKey: 'console-a' });
+    await Promise.resolve();
+    messageHandlers[0]?.({ type: 'execute', values: { startDate: '2026-06-01' } });
+    await firstRun;
+
+    const secondRun = prompt.resolve(sql, { sessionKey: 'console-a' });
+    await Promise.resolve();
+
+    expect(panels[1].webview.html).toContain('"value":"2026-06-01"');
+
+    messageHandlers[1]?.({ type: 'cancel' });
+    await secondRun;
+    const otherSessionRun = prompt.resolve(sql, { sessionKey: 'console-b' });
+    await Promise.resolve();
+
+    expect(panels[2].webview.html).not.toContain('"value":"2026-06-01"');
+
+    messageHandlers[2]?.({ type: 'cancel' });
+    await otherSessionRun;
+  });
+
   it('finds brace and named placeholders without treating PostgreSQL casts as parameters', () => {
     const sql = `select event_datetime::date
 from public.event_fact

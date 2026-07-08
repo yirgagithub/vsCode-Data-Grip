@@ -6743,13 +6743,18 @@ function escapeRegExp2(value) {
 // src/services/sqlParameterPrompt.ts
 var vscode12 = __toESM(require("vscode"));
 var SqlParameterPrompt = class {
-  async resolve(sql) {
+  valuesBySession = /* @__PURE__ */ new Map();
+  async resolve(sql, options = {}) {
     const parameters = findSqlParameters(sql);
     const names = uniqueSqlParameterNames(parameters);
     if (!names.length) {
       return sql;
     }
-    const values = await this.collectValues(sql, this.parameterRows(sql, parameters, names));
+    const sessionKey = options.sessionKey ?? sql;
+    const values = await this.collectValues(sql, this.parameterRows(sql, parameters, names, this.valuesBySession.get(sessionKey)));
+    if (values) {
+      this.valuesBySession.set(sessionKey, pickParameterValues(names, values));
+    }
     return values ? applySqlParameterValues(sql, values) : void 0;
   }
   collectValues(sql, rows) {
@@ -6793,13 +6798,14 @@ var SqlParameterPrompt = class {
       subscriptions.push(panel.onDidDispose(() => finish(void 0)));
     });
   }
-  parameterRows(sql, parameters, names) {
+  parameterRows(sql, parameters, names, previousValues = {}) {
     return names.map((name) => {
       const parameter = parameters.find((item) => item.name === name);
       return {
         name,
         placeholder: parameter?.placeholder ?? `:${name}`,
-        context: parameter ? this.contextPreview(sql, parameter) : ""
+        context: parameter ? this.contextPreview(sql, parameter) : "",
+        value: previousValues[name] ?? ""
       };
     });
   }
@@ -7000,7 +7006,7 @@ var SqlParameterPrompt = class {
       '<tr>' +
       '<td><span class="name">' + html(row.name) + '</span></td>' +
       '<td><div class="context" title="' + html(row.context) + '">' + html(row.context) + '</div></td>' +
-      '<td><input data-name="' + html(row.name) + '" placeholder="&lt;null&gt;" autocomplete="off"></td>' +
+      '<td><input data-name="' + html(row.name) + '" value="' + html(row.value) + '" placeholder="&lt;null&gt;" autocomplete="off"></td>' +
       '</tr>'
     )).join('');
     const inputs = Array.from(tbody.querySelectorAll('input'));
@@ -7060,6 +7066,9 @@ var SqlParameterPrompt = class {
 };
 function jsonForScript(value) {
   return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+function pickParameterValues(names, values) {
+  return Object.fromEntries(names.map((name) => [name, values[name] ?? ""]));
 }
 
 // src/services/sqlSectionHighlighter.ts
@@ -17788,11 +17797,13 @@ function activate(context) {
       return;
     }
     const sourceSql = detected.sql;
-    const executableSql = await parameterPrompt.resolve(sourceSql);
+    const documentUri = editor.document.uri.toString();
+    const executableSql = await parameterPrompt.resolve(sourceSql, {
+      sessionKey: sqlParameterSessionKey(documentUri, detected)
+    });
     if (executableSql === void 0) {
       return;
     }
-    const documentUri = editor.document.uri.toString();
     const sourceOrigin = executionOriginForDocument(documentUri, queryConsoleDocumentUris(consoleStore.getAll()));
     const sourceRange = rangeToPlain(detected.range);
     const runningTab = await results.addTab(createRunningResultTab(connection, executableSql, void 0, {
@@ -17868,6 +17879,15 @@ function activate(context) {
       sql: editor.document.getText(range),
       range
     }));
+  }
+  function sqlParameterSessionKey(documentUri, detected) {
+    const sectionKey = detected.id ?? detected.index ?? [
+      detected.range.start.line,
+      detected.range.start.character,
+      detected.range.end.line,
+      detected.range.end.character
+    ].join(":");
+    return `${documentUri}#${sectionKey}`;
   }
   function updateSqlDiagnostics(document, selection) {
     if (!document || document.languageId !== "sql") {
@@ -17993,7 +18013,10 @@ function activate(context) {
       sqlCodeLensRefresh.fire();
     }
     const sourceSql = detected.sql;
-    const executableSql = await parameterPrompt.resolve(sourceSql);
+    const documentUri = editor.document.uri.toString();
+    const executableSql = await parameterPrompt.resolve(sourceSql, {
+      sessionKey: sqlParameterSessionKey(documentUri, detected)
+    });
     if (executableSql === void 0) {
       return;
     }
@@ -18004,7 +18027,6 @@ function activate(context) {
     let elapsedTimer;
     try {
       const maxRows = options.maxRows ?? configuredDefaultMaxRows();
-      const documentUri = editor.document.uri.toString();
       const sourceOrigin = executionOriginForDocument(documentUri, queryConsoleDocumentUris(consoleStore.getAll()));
       const executedRange = {
         startLine: detected.range.start.line,
