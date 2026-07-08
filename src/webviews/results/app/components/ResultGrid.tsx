@@ -37,7 +37,7 @@ const NUMERIC_TYPE_NAMES = [
   'smallint'
 ];
 
-interface ColumnFilter {
+export interface ColumnFilter {
   column: string;
   operator: string;
   value: string;
@@ -108,7 +108,7 @@ export function ResultGrid({
   } as CSSProperties;
 
   const visibleRows = useMemo(() => {
-    const filtered = rows.filter((row) => filters.every((filter) => matchesFilter(row[filter.column], filter)));
+    const filtered = rows.filter((row) => filters.every((filter) => matchesColumnFilter(row[filter.column], filter)));
     if (!sort) {
       return filtered;
     }
@@ -550,7 +550,7 @@ function ColumnFilterPopover({
 }) {
   const options = useMemo(() => columnFilterOptions(rows, column), [rows, column]);
   const allKeys = useMemo(() => options.map((option) => option.key), [options]);
-  const initialSelection = filter?.operator === 'values' && filter.values ? filter.values : allKeys;
+  const initialSelection = initialColumnFilterSelection(filter, allKeys);
   const [search, setSearch] = useState('');
   const [selectedValues, setSelectedValues] = useState(() => new Set(initialSelection));
   const normalizedSearch = search.trim().toLowerCase();
@@ -633,6 +633,14 @@ function columnFilterOptions(rows: Record<string, unknown>[], column: string): F
   return [...counts.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
+export function initialColumnFilterSelection(filter: ColumnFilter | undefined, allKeys: string[]): string[] {
+  if (filter?.operator !== 'values' || !filter.values) {
+    return [];
+  }
+  const available = new Set(allKeys);
+  return filter.values.filter((value) => available.has(value));
+}
+
 function filterKey(value: unknown): string {
   if (value === null || value === undefined) {
     return '<NULL>';
@@ -648,7 +656,7 @@ function filterLabel(value: unknown): string {
   return next === '' ? '(empty)' : next;
 }
 
-function matchesFilter(value: unknown, filter: ColumnFilter): boolean {
+export function matchesColumnFilter(value: unknown, filter: ColumnFilter): boolean {
   if (filter.operator === 'values') {
     return filter.values ? filter.values.includes(filterKey(value)) : true;
   }

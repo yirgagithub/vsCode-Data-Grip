@@ -1,6 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ResultGrid = ResultGrid;
+exports.initialColumnFilterSelection = initialColumnFilterSelection;
+exports.matchesColumnFilter = matchesColumnFilter;
 const jsx_runtime_1 = require("react/jsx-runtime");
 const react_1 = require("react");
 const format_1 = require("../format");
@@ -55,7 +57,7 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
         gridTemplateColumns: `var(--row-number-width) ${fields.map((field) => `${columnWidths[field.name] ?? DEFAULT_COLUMN_WIDTH}px`).join(' ')}`
     };
     const visibleRows = (0, react_1.useMemo)(() => {
-        const filtered = rows.filter((row) => filters.every((filter) => matchesFilter(row[filter.column], filter)));
+        const filtered = rows.filter((row) => filters.every((filter) => matchesColumnFilter(row[filter.column], filter)));
         if (!sort) {
             return filtered;
         }
@@ -319,7 +321,7 @@ function formatNumber(value) {
 function ColumnFilterPopover({ column, rows, filter, style, onApply, onClear }) {
     const options = (0, react_1.useMemo)(() => columnFilterOptions(rows, column), [rows, column]);
     const allKeys = (0, react_1.useMemo)(() => options.map((option) => option.key), [options]);
-    const initialSelection = filter?.operator === 'values' && filter.values ? filter.values : allKeys;
+    const initialSelection = initialColumnFilterSelection(filter, allKeys);
     const [search, setSearch] = (0, react_1.useState)('');
     const [selectedValues, setSelectedValues] = (0, react_1.useState)(() => new Set(initialSelection));
     const normalizedSearch = search.trim().toLowerCase();
@@ -373,6 +375,13 @@ function columnFilterOptions(rows, column) {
     }
     return [...counts.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' }));
 }
+function initialColumnFilterSelection(filter, allKeys) {
+    if (filter?.operator !== 'values' || !filter.values) {
+        return [];
+    }
+    const available = new Set(allKeys);
+    return filter.values.filter((value) => available.has(value));
+}
 function filterKey(value) {
     if (value === null || value === undefined) {
         return '<NULL>';
@@ -386,7 +395,7 @@ function filterLabel(value) {
     const next = (0, format_1.formatValue)(value);
     return next === '' ? '(empty)' : next;
 }
-function matchesFilter(value, filter) {
+function matchesColumnFilter(value, filter) {
     if (filter.operator === 'values') {
         return filter.values ? filter.values.includes(filterKey(value)) : true;
     }
