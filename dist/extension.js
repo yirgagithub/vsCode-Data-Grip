@@ -12739,6 +12739,29 @@ var QueryMapProvider = class {
 
 // src/webviews/results/ResultsPanelProvider.ts
 var vscode23 = __toESM(require("vscode"));
+
+// src/webviews/results/gridState.ts
+function applyResultGridState(tab, state) {
+  return {
+    ...tab,
+    filters: state.filters ?? tab.filters,
+    sort: state.sort ?? tab.sort,
+    columnState: state.columnState ?? tab.columnState,
+    scrollState: state.scrollState ?? tab.scrollState,
+    updatedAt: Date.now()
+  };
+}
+function withPreservedResultGridState(next, previous, state = {}) {
+  return {
+    ...next,
+    filters: state.filters ?? previous.filters,
+    sort: state.sort ?? previous.sort,
+    columnState: state.columnState ?? previous.columnState,
+    scrollState: state.scrollState ?? previous.scrollState
+  };
+}
+
+// src/webviews/results/ResultsPanelProvider.ts
 var ResultsPanelProvider = class _ResultsPanelProvider {
   constructor(context, connectionManager, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection, onCancelRequest, onCompareRequest) {
     this.context = context;
@@ -12847,16 +12870,23 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
       this.postHydrate();
       return;
     }
+    if (message.type === "updateGridState") {
+      this.tabs = this.tabs.map((tab) => tab.id === message.tabId ? applyResultGridState(tab, message) : tab);
+      await this.sessionStore.saveTabs(this.tabs);
+      this.onTabsChanged?.(this.tabs);
+      return;
+    }
     if (message.type === "rerunTab") {
       const tab = this.getTab(message.tabId);
       if (tab) {
+        const gridState = { filters: message.filters, sort: message.sort };
         const maxRows = typeof message.maxRows === "number" ? message.maxRows : message.maxRows === null ? void 0 : tab.maxRows;
         const offset = typeof message.offset === "number" ? message.offset : message.offset === null ? 0 : tab.rowOffset ?? 0;
         if (await this.runActiveEditorSelection?.(maxRows)) {
           return;
         }
         const started = Date.now();
-        await this.addTab({
+        await this.addTab(withPreservedResultGridState({
           ...tab,
           executionStatus: "running",
           executionStartedAt: started,
@@ -12869,7 +12899,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
           resultSets: [],
           activeResultSetIndex: 0,
           updatedAt: started
-        }, { replaceTabId: tab.id });
+        }, tab, gridState), { replaceTabId: tab.id });
         const next = await this.executor.execute({
           connectionId: tab.connectionId,
           sql: tab.queryText,
@@ -12883,7 +12913,12 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
             range: tab.sourceRange
           }
         });
-        await this.addTab({ ...next, id: tab.id, pinned: tab.pinned, customTitle: tab.customTitle }, { replaceTabId: tab.id });
+        await this.addTab(withPreservedResultGridState({
+          ...next,
+          id: tab.id,
+          pinned: tab.pinned,
+          customTitle: tab.customTitle
+        }, tab, gridState), { replaceTabId: tab.id });
       }
       return;
     }
