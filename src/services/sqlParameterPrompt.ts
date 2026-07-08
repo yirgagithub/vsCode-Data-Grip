@@ -6,20 +6,31 @@ interface ParameterDialogMessage {
   values?: Record<string, string>;
 }
 
+interface SqlParameterResolveOptions {
+  sessionKey?: string;
+}
+
 interface ParameterRow {
   name: string;
   placeholder: string;
   context: string;
+  value: string;
 }
 
 export class SqlParameterPrompt {
-  async resolve(sql: string): Promise<string | undefined> {
+  private readonly valuesBySession = new Map<string, Record<string, string>>();
+
+  async resolve(sql: string, options: SqlParameterResolveOptions = {}): Promise<string | undefined> {
     const parameters = findSqlParameters(sql);
     const names = uniqueSqlParameterNames(parameters);
     if (!names.length) {
       return sql;
     }
-    const values = await this.collectValues(sql, this.parameterRows(sql, parameters, names));
+    const sessionKey = options.sessionKey ?? sql;
+    const values = await this.collectValues(sql, this.parameterRows(sql, parameters, names, this.valuesBySession.get(sessionKey)));
+    if (values) {
+      this.valuesBySession.set(sessionKey, pickParameterValues(names, values));
+    }
     return values ? applySqlParameterValues(sql, values) : undefined;
   }
 
@@ -67,13 +78,14 @@ export class SqlParameterPrompt {
     });
   }
 
-  private parameterRows(sql: string, parameters: SqlParameter[], names: string[]): ParameterRow[] {
+  private parameterRows(sql: string, parameters: SqlParameter[], names: string[], previousValues: Record<string, string> = {}): ParameterRow[] {
     return names.map((name) => {
       const parameter = parameters.find((item) => item.name === name);
       return {
         name,
         placeholder: parameter?.placeholder ?? `:${name}`,
-        context: parameter ? this.contextPreview(sql, parameter) : ''
+        context: parameter ? this.contextPreview(sql, parameter) : '',
+        value: previousValues[name] ?? ''
       };
     });
   }
@@ -275,7 +287,7 @@ export class SqlParameterPrompt {
       '<tr>' +
       '<td><span class="name">' + html(row.name) + '</span></td>' +
       '<td><div class="context" title="' + html(row.context) + '">' + html(row.context) + '</div></td>' +
-      '<td><input data-name="' + html(row.name) + '" placeholder="&lt;null&gt;" autocomplete="off"></td>' +
+      '<td><input data-name="' + html(row.name) + '" value="' + html(row.value) + '" placeholder="&lt;null&gt;" autocomplete="off"></td>' +
       '</tr>'
     )).join('');
     const inputs = Array.from(tbody.querySelectorAll('input'));
@@ -338,4 +350,8 @@ export class SqlParameterPrompt {
 
 function jsonForScript(value: unknown): string {
   return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
+function pickParameterValues(names: string[], values: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(names.map((name) => [name, values[name] ?? '']));
 }

@@ -37,13 +37,18 @@ exports.SqlParameterPrompt = void 0;
 const vscode = __importStar(require("vscode"));
 const sqlParameters_1 = require("./sqlParameters");
 class SqlParameterPrompt {
-    async resolve(sql) {
+    valuesBySession = new Map();
+    async resolve(sql, options = {}) {
         const parameters = (0, sqlParameters_1.findSqlParameters)(sql);
         const names = (0, sqlParameters_1.uniqueSqlParameterNames)(parameters);
         if (!names.length) {
             return sql;
         }
-        const values = await this.collectValues(sql, this.parameterRows(sql, parameters, names));
+        const sessionKey = options.sessionKey ?? sql;
+        const values = await this.collectValues(sql, this.parameterRows(sql, parameters, names, this.valuesBySession.get(sessionKey)));
+        if (values) {
+            this.valuesBySession.set(sessionKey, pickParameterValues(names, values));
+        }
         return values ? (0, sqlParameters_1.applySqlParameterValues)(sql, values) : undefined;
     }
     collectValues(sql, rows) {
@@ -82,13 +87,14 @@ class SqlParameterPrompt {
             subscriptions.push(panel.onDidDispose(() => finish(undefined)));
         });
     }
-    parameterRows(sql, parameters, names) {
+    parameterRows(sql, parameters, names, previousValues = {}) {
         return names.map((name) => {
             const parameter = parameters.find((item) => item.name === name);
             return {
                 name,
                 placeholder: parameter?.placeholder ?? `:${name}`,
-                context: parameter ? this.contextPreview(sql, parameter) : ''
+                context: parameter ? this.contextPreview(sql, parameter) : '',
+                value: previousValues[name] ?? ''
             };
         });
     }
@@ -289,7 +295,7 @@ class SqlParameterPrompt {
       '<tr>' +
       '<td><span class="name">' + html(row.name) + '</span></td>' +
       '<td><div class="context" title="' + html(row.context) + '">' + html(row.context) + '</div></td>' +
-      '<td><input data-name="' + html(row.name) + '" placeholder="&lt;null&gt;" autocomplete="off"></td>' +
+      '<td><input data-name="' + html(row.name) + '" value="' + html(row.value) + '" placeholder="&lt;null&gt;" autocomplete="off"></td>' +
       '</tr>'
     )).join('');
     const inputs = Array.from(tbody.querySelectorAll('input'));
@@ -350,5 +356,8 @@ class SqlParameterPrompt {
 exports.SqlParameterPrompt = SqlParameterPrompt;
 function jsonForScript(value) {
     return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+function pickParameterValues(names, values) {
+    return Object.fromEntries(names.map((name) => [name, values[name] ?? '']));
 }
 //# sourceMappingURL=sqlParameterPrompt.js.map
