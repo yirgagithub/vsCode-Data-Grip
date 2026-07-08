@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
-import { QueryField, QueryResultTab, ResultSet } from '../../../../types';
+import { GridFilter, QueryField, QueryResultTab, ResultSet, SortSpec } from '../../../../types';
 import { formatValue } from '../format';
 import { vscode } from '../vscode';
 import { rowsToCsv, rowsToTsv } from '../format';
@@ -36,13 +36,6 @@ const NUMERIC_TYPE_NAMES = [
   'serial8',
   'smallint'
 ];
-
-export interface ColumnFilter {
-  column: string;
-  operator: string;
-  value: string;
-  values?: string[];
-}
 
 interface SelectedCell {
   rowIndex: number;
@@ -91,8 +84,8 @@ export function ResultGrid({
   columnFiltersVisible: boolean;
 }) {
   const [scrollTop, setScrollTop] = useState(0);
-  const [sort, setSort] = useState<{ column: string; direction: 'asc' | 'desc' } | undefined>(tab.sort[0]);
-  const [filters, setFilters] = useState<ColumnFilter[]>([]);
+  const [sort, setSort] = useState<SortSpec | undefined>(tab.sort[0]);
+  const [filters, setFilters] = useState<GridFilter[]>(tab.filters);
   const [openFilter, setOpenFilter] = useState<OpenColumnFilter>();
   const [selection, setSelection] = useState<Selection>();
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -145,6 +138,11 @@ export function ResultGrid({
   useEffect(() => {
     setPageSize(tab.maxRows ?? 'all');
   }, [tab.id, tab.maxRows]);
+
+  useEffect(() => {
+    setFilters(tab.filters);
+    setSort(tab.sort[0]);
+  }, [tab.id]);
 
   if (!resultSet) {
     return <section className="grid-empty">No result set.</section>;
@@ -268,12 +266,29 @@ export function ResultGrid({
   const changePageSize = (value: string) => {
     if (value === 'all') {
       setPageSize('all');
-      vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: null, offset: 0 });
+      postRerun(null, 0);
       return;
     }
     const nextSize = Number(value);
     setPageSize(nextSize);
-    vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: nextSize, offset: 0 });
+    postRerun(nextSize, 0);
+  };
+  const persistGridState = (nextFilters: GridFilter[], nextSort: SortSpec | undefined) => {
+    vscode.postMessage({ type: 'updateGridState', tabId: tab.id, filters: nextFilters, sort: nextSort ? [nextSort] : [] });
+  };
+  const updateFilters = (updater: (current: GridFilter[]) => GridFilter[]) => {
+    setFilters((current) => {
+      const next = updater(current);
+      persistGridState(next, sort);
+      return next;
+    });
+  };
+  const updateSort = (nextSort: SortSpec) => {
+    setSort(nextSort);
+    persistGridState(filters, nextSort);
+  };
+  const postRerun = (maxRows: number | null, offset: number) => {
+    vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows, offset, filters, sort: sort ? [sort] : [] });
   };
 
   return (
@@ -318,7 +333,7 @@ export function ResultGrid({
                     onClick={(event) => {
                       event.stopPropagation();
                       const nextSort = sort?.column === field.name && sort.direction === 'asc' ? { column: field.name, direction: 'desc' as const } : { column: field.name, direction: 'asc' as const };
-                      setSort(nextSort);
+                      updateSort(nextSort);
                       setSelection({ type: 'column', column: field.name });
                     }}
                   >
@@ -429,10 +444,10 @@ export function ResultGrid({
           filter={filters.find((filter) => filter.column === openFilter.column)}
           style={openFilter.style}
           onApply={(filter) => {
-            setFilters((current) => [...current.filter((item) => item.column !== openFilter.column), filter]);
+            updateFilters((current) => [...current.filter((item) => item.column !== openFilter.column), filter]);
           }}
           onClear={() => {
-            setFilters((current) => current.filter((item) => item.column !== openFilter.column));
+            updateFilters((current) => current.filter((item) => item.column !== openFilter.column));
           }}
         />
       )}
@@ -452,8 +467,8 @@ export function ResultGrid({
       )}
       <div className="result-pager">
         <span className="pager-group">
-          <button className="pager-button" title="First page" aria-label="First page" disabled={currentOffset === 0 || pageSize === 'all'} onClick={() => vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: 0 })}><Icon name="debug-step-back" /></button>
-          <button className="pager-button" title="Previous page" aria-label="Previous page" disabled={currentOffset === 0 || pageSize === 'all'} onClick={() => vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: Math.max(0, currentOffset - Number(pageSize)) })}><Icon name="chevron-left" /></button>
+          <button className="pager-button" title="First page" aria-label="First page" disabled={currentOffset === 0 || pageSize === 'all'} onClick={() => postRerun(pageSize === 'all' ? null : pageSize, 0)}><Icon name="debug-step-back" /></button>
+          <button className="pager-button" title="Previous page" aria-label="Previous page" disabled={currentOffset === 0 || pageSize === 'all'} onClick={() => postRerun(pageSize === 'all' ? null : pageSize, Math.max(0, currentOffset - Number(pageSize)))}><Icon name="chevron-left" /></button>
           <select
             value={pageSize === 'all' ? 'all' : String(pageSize)}
             onChange={(event) => changePageSize(event.target.value)}
@@ -466,7 +481,7 @@ export function ResultGrid({
             <option value="all">All rows</option>
           </select>
           <span>of {hasMore ? `${(currentOffset + visibleRows.length + 1).toLocaleString()}+` : (currentOffset + visibleRows.length).toLocaleString()}</span>
-          <button className="pager-button" title="Next page" aria-label="Next page" disabled={!hasMore || pageSize === 'all'} onClick={() => vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: currentOffset + Number(pageSize) })}><Icon name="chevron-right" /></button>
+          <button className="pager-button" title="Next page" aria-label="Next page" disabled={!hasMore || pageSize === 'all'} onClick={() => postRerun(pageSize === 'all' ? null : pageSize, currentOffset + Number(pageSize))}><Icon name="chevron-right" /></button>
         </span>
       </div>
     </section>
@@ -543,9 +558,9 @@ function ColumnFilterPopover({
 }: {
   column: string;
   rows: Record<string, unknown>[];
-  filter?: ColumnFilter;
+  filter?: GridFilter;
   style: CSSProperties;
-  onApply: (filter: ColumnFilter) => void;
+  onApply: (filter: GridFilter) => void;
   onClear: () => void;
 }) {
   const options = useMemo(() => columnFilterOptions(rows, column), [rows, column]);
@@ -633,7 +648,7 @@ function columnFilterOptions(rows: Record<string, unknown>[], column: string): F
   return [...counts.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
-export function initialColumnFilterSelection(filter: ColumnFilter | undefined, allKeys: string[]): string[] {
+export function initialColumnFilterSelection(filter: GridFilter | undefined, allKeys: string[]): string[] {
   if (filter?.operator !== 'values' || !filter.values) {
     return [];
   }
@@ -656,12 +671,12 @@ function filterLabel(value: unknown): string {
   return next === '' ? '(empty)' : next;
 }
 
-export function matchesColumnFilter(value: unknown, filter: ColumnFilter): boolean {
+export function matchesColumnFilter(value: unknown, filter: GridFilter): boolean {
   if (filter.operator === 'values') {
     return filter.values ? filter.values.includes(filterKey(value)) : true;
   }
   const text = formatValue(value).toLowerCase();
-  const expected = filter.value.toLowerCase();
+  const expected = (filter.value ?? '').toLowerCase();
   if (filter.operator === 'is null') {
     return value === null || value === undefined;
   }
