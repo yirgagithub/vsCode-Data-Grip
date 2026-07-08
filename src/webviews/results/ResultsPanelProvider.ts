@@ -3,6 +3,7 @@ import { ConnectionManager } from '../../database/connectionManager';
 import { QueryExecutor } from '../../database/queryExecutor';
 import { ResultSessionStore } from '../../persistence/resultSessionStore';
 import { QueryResultTab } from '../../types';
+import { applyResultGridState, withPreservedResultGridState } from './gridState';
 import { ResultsFromWebviewMessage, ResultsToWebviewMessage } from './messages';
 
 export interface AddResultTabOptions {
@@ -130,16 +131,23 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
       this.postHydrate();
       return;
     }
+    if (message.type === 'updateGridState') {
+      this.tabs = this.tabs.map((tab) => tab.id === message.tabId ? applyResultGridState(tab, message) : tab);
+      await this.sessionStore.saveTabs(this.tabs);
+      this.onTabsChanged?.(this.tabs);
+      return;
+    }
     if (message.type === 'rerunTab') {
       const tab = this.getTab(message.tabId);
       if (tab) {
+        const gridState = { filters: message.filters, sort: message.sort };
         const maxRows = typeof message.maxRows === 'number' ? message.maxRows : message.maxRows === null ? undefined : tab.maxRows;
         const offset = typeof message.offset === 'number' ? message.offset : message.offset === null ? 0 : tab.rowOffset ?? 0;
         if (await this.runActiveEditorSelection?.(maxRows)) {
           return;
         }
         const started = Date.now();
-        await this.addTab({
+        await this.addTab(withPreservedResultGridState({
           ...tab,
           executionStatus: 'running',
           executionStartedAt: started,
@@ -152,7 +160,7 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
           resultSets: [],
           activeResultSetIndex: 0,
           updatedAt: started
-        }, { replaceTabId: tab.id });
+        }, tab, gridState), { replaceTabId: tab.id });
         const next = await this.executor.execute({
           connectionId: tab.connectionId,
           sql: tab.queryText,
@@ -166,7 +174,12 @@ export class ResultsPanelProvider implements vscode.WebviewViewProvider {
             range: tab.sourceRange
           }
         });
-        await this.addTab({ ...next, id: tab.id, pinned: tab.pinned, customTitle: tab.customTitle }, { replaceTabId: tab.id });
+        await this.addTab(withPreservedResultGridState({
+          ...next,
+          id: tab.id,
+          pinned: tab.pinned,
+          customTitle: tab.customTitle
+        }, tab, gridState), { replaceTabId: tab.id });
       }
       return;
     }
