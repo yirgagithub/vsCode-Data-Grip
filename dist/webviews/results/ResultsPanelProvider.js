@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ResultsPanelProvider = void 0;
 const vscode = __importStar(require("vscode"));
+const gridState_1 = require("./gridState");
 class ResultsPanelProvider {
     context;
     connectionManager;
@@ -156,16 +157,23 @@ class ResultsPanelProvider {
             this.postHydrate();
             return;
         }
+        if (message.type === 'updateGridState') {
+            this.tabs = this.tabs.map((tab) => tab.id === message.tabId ? (0, gridState_1.applyResultGridState)(tab, message) : tab);
+            await this.sessionStore.saveTabs(this.tabs);
+            this.onTabsChanged?.(this.tabs);
+            return;
+        }
         if (message.type === 'rerunTab') {
             const tab = this.getTab(message.tabId);
             if (tab) {
+                const gridState = { filters: message.filters, sort: message.sort };
                 const maxRows = typeof message.maxRows === 'number' ? message.maxRows : message.maxRows === null ? undefined : tab.maxRows;
                 const offset = typeof message.offset === 'number' ? message.offset : message.offset === null ? 0 : tab.rowOffset ?? 0;
                 if (await this.runActiveEditorSelection?.(maxRows)) {
                     return;
                 }
                 const started = Date.now();
-                await this.addTab({
+                await this.addTab((0, gridState_1.withPreservedResultGridState)({
                     ...tab,
                     executionStatus: 'running',
                     executionStartedAt: started,
@@ -178,7 +186,7 @@ class ResultsPanelProvider {
                     resultSets: [],
                     activeResultSetIndex: 0,
                     updatedAt: started
-                }, { replaceTabId: tab.id });
+                }, tab, gridState), { replaceTabId: tab.id });
                 const next = await this.executor.execute({
                     connectionId: tab.connectionId,
                     sql: tab.queryText,
@@ -192,7 +200,12 @@ class ResultsPanelProvider {
                         range: tab.sourceRange
                     }
                 });
-                await this.addTab({ ...next, id: tab.id, pinned: tab.pinned, customTitle: tab.customTitle }, { replaceTabId: tab.id });
+                await this.addTab((0, gridState_1.withPreservedResultGridState)({
+                    ...next,
+                    id: tab.id,
+                    pinned: tab.pinned,
+                    customTitle: tab.customTitle
+                }, tab, gridState), { replaceTabId: tab.id });
             }
             return;
         }

@@ -320,6 +320,7 @@ export interface GridFilter {
   operator: string;
   value?: string;
   secondValue?: string;
+  values?: string[];
 }
 
 export type GridFilterState = GridFilter[];

@@ -1,4 +1,4 @@
-import { QueryResultTab } from '../../types';
+import { GridFilterState, QueryResultTab, SortSpec } from '../../types';
 
 export type ResultsToWebviewMessage =
   | { type: 'hydrate'; tabs: QueryResultTab[]; activeTabId?: string }
@@ -11,7 +11,8 @@ export type ResultsFromWebviewMessage =
   | { type: 'closeTab'; tabId: string }
   | { type: 'activateTab'; tabId: string }
   | { type: 'renameTab'; tabId: string; title: string }
-  | { type: 'rerunTab'; tabId: string; maxRows?: number | null; offset?: number | null }
+  | { type: 'rerunTab'; tabId: string; maxRows?: number | null; offset?: number | null; filters?: GridFilterState; sort?: SortSpec[] }
+  | { type: 'updateGridState'; tabId: string; filters?: GridFilterState; sort?: SortSpec[] }
   | { type: 'cancelTab'; tabId: string }
   | { type: 'setTransactionMode'; tabId: string; mode: 'auto' | 'manual' }
   | { type: 'commitTransaction'; tabId: string }
