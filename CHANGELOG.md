@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.13
+
+- Fixed SQL parameter detection so unquoted `{name}` and `:name` placeholders are detected while quoted string literals are ignored.
+- Preserved result grid filters and sort state across pagination/rerun updates.
+- Remembered SQL parameter values per query session so reruns can use or edit the previous values.
+
 ## 0.0.9
 
 - Renamed the public extension brand to QueryDeck.
