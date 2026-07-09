@@ -45,19 +45,6 @@ export function findSqlParameters(sql: string): SqlParameter[] {
       continue;
     }
 
-    const brace = readBraceParameter(sql, index, single);
-    if (brace) {
-      parameters.push(brace);
-      index = brace.end;
-      continue;
-    }
-    const colon = readColonParameter(sql, index, single);
-    if (colon) {
-      parameters.push(colon);
-      index = colon.end;
-      continue;
-    }
-
     if (single) {
       if (char === '\'' && next === '\'') {
         index += 2;
@@ -74,6 +61,19 @@ export function findSqlParameters(sql: string): SqlParameter[] {
         double = char !== '"';
         index += 1;
       }
+      continue;
+    }
+
+    const brace = readBraceParameter(sql, index, single);
+    if (brace) {
+      parameters.push(brace);
+      index = brace.end;
+      continue;
+    }
+    const colon = readColonParameter(sql, index, single);
+    if (colon) {
+      parameters.push(colon);
+      index = colon.end;
       continue;
     }
 

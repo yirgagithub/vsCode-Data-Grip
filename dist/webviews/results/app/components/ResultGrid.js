@@ -1,6 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ResultGrid = ResultGrid;
+exports.initialColumnFilterSelection = initialColumnFilterSelection;
+exports.matchesColumnFilter = matchesColumnFilter;
 const jsx_runtime_1 = require("react/jsx-runtime");
 const react_1 = require("react");
 const format_1 = require("../format");
@@ -40,7 +42,7 @@ const NUMERIC_TYPE_NAMES = [
 function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
     const [scrollTop, setScrollTop] = (0, react_1.useState)(0);
     const [sort, setSort] = (0, react_1.useState)(tab.sort[0]);
-    const [filters, setFilters] = (0, react_1.useState)([]);
+    const [filters, setFilters] = (0, react_1.useState)(tab.filters);
     const [openFilter, setOpenFilter] = (0, react_1.useState)();
     const [selection, setSelection] = (0, react_1.useState)();
     const [inspectorOpen, setInspectorOpen] = (0, react_1.useState)(false);
@@ -55,7 +57,7 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
         gridTemplateColumns: `var(--row-number-width) ${fields.map((field) => `${columnWidths[field.name] ?? DEFAULT_COLUMN_WIDTH}px`).join(' ')}`
     };
     const visibleRows = (0, react_1.useMemo)(() => {
-        const filtered = rows.filter((row) => filters.every((filter) => matchesFilter(row[filter.column], filter)));
+        const filtered = rows.filter((row) => filters.every((filter) => matchesColumnFilter(row[filter.column], filter)));
         if (!sort) {
             return filtered;
         }
@@ -89,6 +91,10 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
     (0, react_1.useEffect)(() => {
         setPageSize(tab.maxRows ?? 'all');
     }, [tab.id, tab.maxRows]);
+    (0, react_1.useEffect)(() => {
+        setFilters(tab.filters);
+        setSort(tab.sort[0]);
+    }, [tab.id]);
     if (!resultSet) {
         return (0, jsx_runtime_1.jsx)("section", { className: "grid-empty", children: "No result set." });
     }
@@ -210,12 +216,29 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
     const changePageSize = (value) => {
         if (value === 'all') {
             setPageSize('all');
-            vscode_1.vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: null, offset: 0 });
+            postRerun(null, 0);
             return;
         }
         const nextSize = Number(value);
         setPageSize(nextSize);
-        vscode_1.vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: nextSize, offset: 0 });
+        postRerun(nextSize, 0);
+    };
+    const persistGridState = (nextFilters, nextSort) => {
+        vscode_1.vscode.postMessage({ type: 'updateGridState', tabId: tab.id, filters: nextFilters, sort: nextSort ? [nextSort] : [] });
+    };
+    const updateFilters = (updater) => {
+        setFilters((current) => {
+            const next = updater(current);
+            persistGridState(next, sort);
+            return next;
+        });
+    };
+    const updateSort = (nextSort) => {
+        setSort(nextSort);
+        persistGridState(filters, nextSort);
+    };
+    const postRerun = (maxRows, offset) => {
+        vscode_1.vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows, offset, filters, sort: sort ? [sort] : [] });
     };
     return ((0, jsx_runtime_1.jsxs)("section", { className: "grid-shell", onKeyDown: onGridKeyDown, children: [(0, jsx_runtime_1.jsxs)("div", { className: `grid-layout ${inspectorOpen ? 'with-inspector' : ''}`, children: [(0, jsx_runtime_1.jsxs)("div", { className: "grid result-grid", onScroll: (event) => setScrollTop(event.currentTarget.scrollTop), onClick: () => setContextMenu(undefined), role: "grid", "aria-rowcount": visibleRows.length, "aria-colcount": fields.length, tabIndex: 0, children: [(0, jsx_runtime_1.jsxs)("div", { className: "grid-header", style: gridColumnStyle, children: [(0, jsx_runtime_1.jsx)("div", { className: "cell rownum", role: "columnheader", children: "#" }), fields.map((field) => {
                                         const activeFilter = filters.find((filter) => filter.column === field.name);
@@ -224,7 +247,7 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
                                                     }, children: [(0, jsx_runtime_1.jsx)("span", { className: "column-type-icon" }), (0, jsx_runtime_1.jsx)("span", { children: field.name }), field.dataTypeName && (0, jsx_runtime_1.jsx)("small", { children: field.dataTypeName })] }), (0, jsx_runtime_1.jsx)("button", { className: `sort-button ${sort?.column === field.name ? 'active' : ''}`, title: `Sort ${field.name}`, "aria-label": `Sort ${field.name}`, onClick: (event) => {
                                                         event.stopPropagation();
                                                         const nextSort = sort?.column === field.name && sort.direction === 'asc' ? { column: field.name, direction: 'desc' } : { column: field.name, direction: 'asc' };
-                                                        setSort(nextSort);
+                                                        updateSort(nextSort);
                                                         setSelection({ type: 'column', column: field.name });
                                                     }, children: sort?.column === field.name
                                                         ? (0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: sort.direction === 'asc' ? 'arrow-up' : 'arrow-down' })
@@ -256,10 +279,10 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
                             vscode_1.vscode.postMessage({ type: 'copy', text: (0, format_2.rowsToCsv)(visibleRows) });
                             setContextMenu(undefined);
                         }, children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "desktop-download" }), (0, jsx_runtime_1.jsx)("span", { children: "Copy Visible as CSV" })] })] })), columnFiltersVisible && openFilter && ((0, jsx_runtime_1.jsx)(ColumnFilterPopover, { column: openFilter.column, rows: rows, filter: filters.find((filter) => filter.column === openFilter.column), style: openFilter.style, onApply: (filter) => {
-                    setFilters((current) => [...current.filter((item) => item.column !== openFilter.column), filter]);
+                    updateFilters((current) => [...current.filter((item) => item.column !== openFilter.column), filter]);
                 }, onClear: () => {
-                    setFilters((current) => current.filter((item) => item.column !== openFilter.column));
-                } })), selection?.type === 'column' && ((0, jsx_runtime_1.jsxs)("div", { className: "selection-summary", title: selectedColumnStats ? `${selection.column}: sum ${formatNumber(selectedColumnStats.sum)}, average ${formatNumber(selectedColumnStats.average)}` : `${selection.column}: ${visibleRows.length.toLocaleString()} rows selected`, children: [(0, jsx_runtime_1.jsx)("span", { className: "summary-column", children: selection.column }), selectedColumnStats ? ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [(0, jsx_runtime_1.jsxs)("span", { children: [selectedColumnStats.numericCount.toLocaleString(), " values"] }), (0, jsx_runtime_1.jsxs)("span", { children: ["Sum ", formatNumber(selectedColumnStats.sum)] }), (0, jsx_runtime_1.jsxs)("span", { children: ["Avg ", formatNumber(selectedColumnStats.average)] })] })) : ((0, jsx_runtime_1.jsxs)("span", { children: [visibleRows.length.toLocaleString(), " rows selected"] }))] })), (0, jsx_runtime_1.jsx)("div", { className: "result-pager", children: (0, jsx_runtime_1.jsxs)("span", { className: "pager-group", children: [(0, jsx_runtime_1.jsx)("button", { className: "pager-button", title: "First page", "aria-label": "First page", disabled: currentOffset === 0 || pageSize === 'all', onClick: () => vscode_1.vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: 0 }), children: (0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "debug-step-back" }) }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", title: "Previous page", "aria-label": "Previous page", disabled: currentOffset === 0 || pageSize === 'all', onClick: () => vscode_1.vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: Math.max(0, currentOffset - Number(pageSize)) }), children: (0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "chevron-left" }) }), (0, jsx_runtime_1.jsxs)("select", { value: pageSize === 'all' ? 'all' : String(pageSize), onChange: (event) => changePageSize(event.target.value), "aria-label": "Rows per page", title: "Rows per page", children: [[20, 50, 100, 250, 500].map((count) => ((0, jsx_runtime_1.jsx)("option", { value: String(count), children: `${count} rows` }, count))), (0, jsx_runtime_1.jsx)("option", { value: "all", children: "All rows" })] }), (0, jsx_runtime_1.jsxs)("span", { children: ["of ", hasMore ? `${(currentOffset + visibleRows.length + 1).toLocaleString()}+` : (currentOffset + visibleRows.length).toLocaleString()] }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", title: "Next page", "aria-label": "Next page", disabled: !hasMore || pageSize === 'all', onClick: () => vscode_1.vscode.postMessage({ type: 'rerunTab', tabId: tab.id, maxRows: pageSize === 'all' ? null : pageSize, offset: currentOffset + Number(pageSize) }), children: (0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "chevron-right" }) })] }) })] }));
+                    updateFilters((current) => current.filter((item) => item.column !== openFilter.column));
+                } })), selection?.type === 'column' && ((0, jsx_runtime_1.jsxs)("div", { className: "selection-summary", title: selectedColumnStats ? `${selection.column}: sum ${formatNumber(selectedColumnStats.sum)}, average ${formatNumber(selectedColumnStats.average)}` : `${selection.column}: ${visibleRows.length.toLocaleString()} rows selected`, children: [(0, jsx_runtime_1.jsx)("span", { className: "summary-column", children: selection.column }), selectedColumnStats ? ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [(0, jsx_runtime_1.jsxs)("span", { children: [selectedColumnStats.numericCount.toLocaleString(), " values"] }), (0, jsx_runtime_1.jsxs)("span", { children: ["Sum ", formatNumber(selectedColumnStats.sum)] }), (0, jsx_runtime_1.jsxs)("span", { children: ["Avg ", formatNumber(selectedColumnStats.average)] })] })) : ((0, jsx_runtime_1.jsxs)("span", { children: [visibleRows.length.toLocaleString(), " rows selected"] }))] })), (0, jsx_runtime_1.jsx)("div", { className: "result-pager", children: (0, jsx_runtime_1.jsxs)("span", { className: "pager-group", children: [(0, jsx_runtime_1.jsx)("button", { className: "pager-button", title: "First page", "aria-label": "First page", disabled: currentOffset === 0 || pageSize === 'all', onClick: () => postRerun(pageSize === 'all' ? null : pageSize, 0), children: (0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "debug-step-back" }) }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", title: "Previous page", "aria-label": "Previous page", disabled: currentOffset === 0 || pageSize === 'all', onClick: () => postRerun(pageSize === 'all' ? null : pageSize, Math.max(0, currentOffset - Number(pageSize))), children: (0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "chevron-left" }) }), (0, jsx_runtime_1.jsxs)("select", { value: pageSize === 'all' ? 'all' : String(pageSize), onChange: (event) => changePageSize(event.target.value), "aria-label": "Rows per page", title: "Rows per page", children: [[20, 50, 100, 250, 500].map((count) => ((0, jsx_runtime_1.jsx)("option", { value: String(count), children: `${count} rows` }, count))), (0, jsx_runtime_1.jsx)("option", { value: "all", children: "All rows" })] }), (0, jsx_runtime_1.jsxs)("span", { children: ["of ", hasMore ? `${(currentOffset + visibleRows.length + 1).toLocaleString()}+` : (currentOffset + visibleRows.length).toLocaleString()] }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", title: "Next page", "aria-label": "Next page", disabled: !hasMore || pageSize === 'all', onClick: () => postRerun(pageSize === 'all' ? null : pageSize, currentOffset + Number(pageSize)), children: (0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "chevron-right" }) })] }) })] }));
 }
 function calculateColumnStats(field, rows) {
     if (!isNumericAggregateColumn(field)) {
@@ -319,7 +342,7 @@ function formatNumber(value) {
 function ColumnFilterPopover({ column, rows, filter, style, onApply, onClear }) {
     const options = (0, react_1.useMemo)(() => columnFilterOptions(rows, column), [rows, column]);
     const allKeys = (0, react_1.useMemo)(() => options.map((option) => option.key), [options]);
-    const initialSelection = filter?.operator === 'values' && filter.values ? filter.values : allKeys;
+    const initialSelection = initialColumnFilterSelection(filter, allKeys);
     const [search, setSearch] = (0, react_1.useState)('');
     const [selectedValues, setSelectedValues] = (0, react_1.useState)(() => new Set(initialSelection));
     const normalizedSearch = search.trim().toLowerCase();
@@ -373,6 +396,13 @@ function columnFilterOptions(rows, column) {
     }
     return [...counts.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' }));
 }
+function initialColumnFilterSelection(filter, allKeys) {
+    if (filter?.operator !== 'values' || !filter.values) {
+        return [];
+    }
+    const available = new Set(allKeys);
+    return filter.values.filter((value) => available.has(value));
+}
 function filterKey(value) {
     if (value === null || value === undefined) {
         return '<NULL>';
@@ -386,12 +416,12 @@ function filterLabel(value) {
     const next = (0, format_1.formatValue)(value);
     return next === '' ? '(empty)' : next;
 }
-function matchesFilter(value, filter) {
+function matchesColumnFilter(value, filter) {
     if (filter.operator === 'values') {
         return filter.values ? filter.values.includes(filterKey(value)) : true;
     }
     const text = (0, format_1.formatValue)(value).toLowerCase();
-    const expected = filter.value.toLowerCase();
+    const expected = (filter.value ?? '').toLowerCase();
     if (filter.operator === 'is null') {
         return value === null || value === undefined;
     }

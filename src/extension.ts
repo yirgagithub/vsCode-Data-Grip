@@ -1537,12 +1537,14 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     const sourceSql = detected.sql;
-    const executableSql = await parameterPrompt.resolve(sourceSql);
+    const documentUri = editor.document.uri.toString();
+    const executableSql = await parameterPrompt.resolve(sourceSql, {
+      sessionKey: sqlParameterSessionKey(documentUri, detected)
+    });
     if (executableSql === undefined) {
       return;
     }
 
-    const documentUri = editor.document.uri.toString();
     const sourceOrigin = executionOriginForDocument(documentUri, queryConsoleDocumentUris(consoleStore.getAll()));
     const sourceRange = rangeToPlain(detected.range);
     const runningTab = await results.addTab(createRunningResultTab(connection, executableSql, undefined, {
@@ -1628,6 +1630,16 @@ export function activate(context: vscode.ExtensionContext): void {
         sql: editor.document.getText(range),
         range
       }));
+  }
+
+  function sqlParameterSessionKey(documentUri: string, detected: { range: vscode.Range; index?: number; id?: string }): string {
+    const sectionKey = detected.id ?? detected.index ?? [
+      detected.range.start.line,
+      detected.range.start.character,
+      detected.range.end.line,
+      detected.range.end.character
+    ].join(':');
+    return `${documentUri}#${sectionKey}`;
   }
 
   function updateSqlDiagnostics(document: vscode.TextDocument | undefined, selection?: vscode.Selection): void {
@@ -1766,7 +1778,10 @@ export function activate(context: vscode.ExtensionContext): void {
       sqlCodeLensRefresh.fire();
     }
     const sourceSql = detected.sql;
-    const executableSql = await parameterPrompt.resolve(sourceSql);
+    const documentUri = editor.document.uri.toString();
+    const executableSql = await parameterPrompt.resolve(sourceSql, {
+      sessionKey: sqlParameterSessionKey(documentUri, detected)
+    });
     if (executableSql === undefined) {
       return;
     }
@@ -1778,7 +1793,6 @@ export function activate(context: vscode.ExtensionContext): void {
     let elapsedTimer: NodeJS.Timeout | undefined;
     try {
       const maxRows = options.maxRows ?? configuredDefaultMaxRows();
-      const documentUri = editor.document.uri.toString();
       const sourceOrigin = executionOriginForDocument(documentUri, queryConsoleDocumentUris(consoleStore.getAll()));
       const executedRange = {
         startLine: detected.range.start.line,
