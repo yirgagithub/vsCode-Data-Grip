@@ -6189,18 +6189,6 @@ function findSqlParameters(sql) {
       }
       continue;
     }
-    const brace = readBraceParameter(sql, index, single);
-    if (brace) {
-      parameters.push(brace);
-      index = brace.end;
-      continue;
-    }
-    const colon = readColonParameter(sql, index, single);
-    if (colon) {
-      parameters.push(colon);
-      index = colon.end;
-      continue;
-    }
     if (single) {
       if (char === "'" && next === "'") {
         index += 2;
@@ -6217,6 +6205,18 @@ function findSqlParameters(sql) {
         double = char !== '"';
         index += 1;
       }
+      continue;
+    }
+    const brace = readBraceParameter(sql, index, single);
+    if (brace) {
+      parameters.push(brace);
+      index = brace.end;
+      continue;
+    }
+    const colon = readColonParameter(sql, index, single);
+    if (colon) {
+      parameters.push(colon);
+      index = colon.end;
       continue;
     }
     if (char === "-" && next === "-") {
@@ -6743,13 +6743,18 @@ function escapeRegExp2(value) {
 // src/services/sqlParameterPrompt.ts
 var vscode12 = __toESM(require("vscode"));
 var SqlParameterPrompt = class {
-  async resolve(sql) {
+  valuesBySession = /* @__PURE__ */ new Map();
+  async resolve(sql, options = {}) {
     const parameters = findSqlParameters(sql);
     const names = uniqueSqlParameterNames(parameters);
     if (!names.length) {
       return sql;
     }
-    const values = await this.collectValues(sql, this.parameterRows(sql, parameters, names));
+    const sessionKey = options.sessionKey ?? sql;
+    const values = await this.collectValues(sql, this.parameterRows(sql, parameters, names, this.valuesBySession.get(sessionKey)));
+    if (values) {
+      this.valuesBySession.set(sessionKey, pickParameterValues(names, values));
+    }
     return values ? applySqlParameterValues(sql, values) : void 0;
   }
   collectValues(sql, rows) {
@@ -6793,13 +6798,14 @@ var SqlParameterPrompt = class {
       subscriptions.push(panel.onDidDispose(() => finish(void 0)));
     });
   }
-  parameterRows(sql, parameters, names) {
+  parameterRows(sql, parameters, names, previousValues = {}) {
     return names.map((name) => {
       const parameter = parameters.find((item) => item.name === name);
       return {
         name,
         placeholder: parameter?.placeholder ?? `:${name}`,
-        context: parameter ? this.contextPreview(sql, parameter) : ""
+        context: parameter ? this.contextPreview(sql, parameter) : "",
+        value: previousValues[name] ?? ""
       };
     });
   }
@@ -7000,7 +7006,7 @@ var SqlParameterPrompt = class {
       '<tr>' +
       '<td><span class="name">' + html(row.name) + '</span></td>' +
       '<td><div class="context" title="' + html(row.context) + '">' + html(row.context) + '</div></td>' +
-      '<td><input data-name="' + html(row.name) + '" placeholder="&lt;null&gt;" autocomplete="off"></td>' +
+      '<td><input data-name="' + html(row.name) + '" value="' + html(row.value) + '" placeholder="&lt;null&gt;" autocomplete="off"></td>' +
       '</tr>'
     )).join('');
     const inputs = Array.from(tbody.querySelectorAll('input'));
@@ -7060,6 +7066,9 @@ var SqlParameterPrompt = class {
 };
 function jsonForScript(value) {
   return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+function pickParameterValues(names, values) {
+  return Object.fromEntries(names.map((name) => [name, values[name] ?? ""]));
 }
 
 // src/services/sqlSectionHighlighter.ts
@@ -12739,6 +12748,29 @@ var QueryMapProvider = class {
 
 // src/webviews/results/ResultsPanelProvider.ts
 var vscode23 = __toESM(require("vscode"));
+
+// src/webviews/results/gridState.ts
+function applyResultGridState(tab, state) {
+  return {
+    ...tab,
+    filters: state.filters ?? tab.filters,
+    sort: state.sort ?? tab.sort,
+    columnState: state.columnState ?? tab.columnState,
+    scrollState: state.scrollState ?? tab.scrollState,
+    updatedAt: Date.now()
+  };
+}
+function withPreservedResultGridState(next, previous, state = {}) {
+  return {
+    ...next,
+    filters: state.filters ?? previous.filters,
+    sort: state.sort ?? previous.sort,
+    columnState: state.columnState ?? previous.columnState,
+    scrollState: state.scrollState ?? previous.scrollState
+  };
+}
+
+// src/webviews/results/ResultsPanelProvider.ts
 var ResultsPanelProvider = class _ResultsPanelProvider {
   constructor(context, connectionManager, sessionStore, executor, revealSource, onTabsChanged, runActiveEditorSelection, onCancelRequest, onCompareRequest) {
     this.context = context;
@@ -12847,16 +12879,23 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
       this.postHydrate();
       return;
     }
+    if (message.type === "updateGridState") {
+      this.tabs = this.tabs.map((tab) => tab.id === message.tabId ? applyResultGridState(tab, message) : tab);
+      await this.sessionStore.saveTabs(this.tabs);
+      this.onTabsChanged?.(this.tabs);
+      return;
+    }
     if (message.type === "rerunTab") {
       const tab = this.getTab(message.tabId);
       if (tab) {
+        const gridState = { filters: message.filters, sort: message.sort };
         const maxRows = typeof message.maxRows === "number" ? message.maxRows : message.maxRows === null ? void 0 : tab.maxRows;
         const offset = typeof message.offset === "number" ? message.offset : message.offset === null ? 0 : tab.rowOffset ?? 0;
         if (await this.runActiveEditorSelection?.(maxRows)) {
           return;
         }
         const started = Date.now();
-        await this.addTab({
+        await this.addTab(withPreservedResultGridState({
           ...tab,
           executionStatus: "running",
           executionStartedAt: started,
@@ -12869,7 +12908,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
           resultSets: [],
           activeResultSetIndex: 0,
           updatedAt: started
-        }, { replaceTabId: tab.id });
+        }, tab, gridState), { replaceTabId: tab.id });
         const next = await this.executor.execute({
           connectionId: tab.connectionId,
           sql: tab.queryText,
@@ -12883,7 +12922,12 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
             range: tab.sourceRange
           }
         });
-        await this.addTab({ ...next, id: tab.id, pinned: tab.pinned, customTitle: tab.customTitle }, { replaceTabId: tab.id });
+        await this.addTab(withPreservedResultGridState({
+          ...next,
+          id: tab.id,
+          pinned: tab.pinned,
+          customTitle: tab.customTitle
+        }, tab, gridState), { replaceTabId: tab.id });
       }
       return;
     }
@@ -17753,11 +17797,13 @@ function activate(context) {
       return;
     }
     const sourceSql = detected.sql;
-    const executableSql = await parameterPrompt.resolve(sourceSql);
+    const documentUri = editor.document.uri.toString();
+    const executableSql = await parameterPrompt.resolve(sourceSql, {
+      sessionKey: sqlParameterSessionKey(documentUri, detected)
+    });
     if (executableSql === void 0) {
       return;
     }
-    const documentUri = editor.document.uri.toString();
     const sourceOrigin = executionOriginForDocument(documentUri, queryConsoleDocumentUris(consoleStore.getAll()));
     const sourceRange = rangeToPlain(detected.range);
     const runningTab = await results.addTab(createRunningResultTab(connection, executableSql, void 0, {
@@ -17833,6 +17879,15 @@ function activate(context) {
       sql: editor.document.getText(range),
       range
     }));
+  }
+  function sqlParameterSessionKey(documentUri, detected) {
+    const sectionKey = detected.id ?? detected.index ?? [
+      detected.range.start.line,
+      detected.range.start.character,
+      detected.range.end.line,
+      detected.range.end.character
+    ].join(":");
+    return `${documentUri}#${sectionKey}`;
   }
   function updateSqlDiagnostics(document, selection) {
     if (!document || document.languageId !== "sql") {
@@ -17958,7 +18013,10 @@ function activate(context) {
       sqlCodeLensRefresh.fire();
     }
     const sourceSql = detected.sql;
-    const executableSql = await parameterPrompt.resolve(sourceSql);
+    const documentUri = editor.document.uri.toString();
+    const executableSql = await parameterPrompt.resolve(sourceSql, {
+      sessionKey: sqlParameterSessionKey(documentUri, detected)
+    });
     if (executableSql === void 0) {
       return;
     }
@@ -17969,7 +18027,6 @@ function activate(context) {
     let elapsedTimer;
     try {
       const maxRows = options.maxRows ?? configuredDefaultMaxRows();
-      const documentUri = editor.document.uri.toString();
       const sourceOrigin = executionOriginForDocument(documentUri, queryConsoleDocumentUris(consoleStore.getAll()));
       const executedRange = {
         startLine: detected.range.start.line,
