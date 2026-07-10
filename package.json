@@ -9,6 +9,10 @@
     "type": "git",
     "url": "https://github.com/yirgagithub/vsCode-Data-Grip.git"
   },
+  "homepage": "https://github.com/yirgagithub/vsCode-Data-Grip#readme",
+  "bugs": {
+    "url": "https://github.com/yirgagithub/vsCode-Data-Grip/issues"
+  },
   "license": "MIT",
   "engines": {
     "vscode": "^1.90.0"
@@ -37,7 +41,16 @@
     "query",
     "schema",
     "data",
-    "ai"
+    "ai",
+    "mcp",
+    "codex",
+    "claude",
+    "cursor",
+    "query history",
+    "query memory",
+    "datagrip",
+    "results grid",
+    "sql workbench"
   ],
   "activationEvents": [
     "onView:databaseExplorer",
