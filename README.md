@@ -8,6 +8,8 @@ Built for Codex, Claude Code, and AI-assisted SQL workflows with local query mem
 
 Works with PostgreSQL, MySQL, SQLite, Microsoft SQL Server, Oracle, Redis, Snowflake, and Redshift.
 
+Use QueryDeck when you want a VS Code-native database workbench that also gives AI coding agents controlled database context instead of copied schema snippets and risky write access.
+
 ![QueryDeck MySQL result grid in VS Code](media/marketplace/querydeck-mysql-results.jpg)
 
 ## Why QueryDeck?
@@ -19,6 +21,7 @@ Works with PostgreSQL, MySQL, SQLite, Microsoft SQL Server, Oracle, Redis, Snowf
 - **Local query memory search** by phrase, table, column, output field, SQL fragment, file, connection, or status.
 - **AI SQL assistant** for explaining SQL, fixing errors, modifying queries, summarizing history, and table performance review.
 - **Safer database work** with read-only connections and destructive-query confirmation for production.
+- **Read-only MCP context** for AI agents that need schema, DDL, query memory, and row-limited SELECT access.
 
 ## Screenshots
 
@@ -114,12 +117,20 @@ Create a config file and point your MCP client at `dist/mcpServer.js` from the i
 
 Set `QUERYDECK_MCP_CONFIG` to that file and configure the client command as `node dist/mcpServer.js`. MCP query execution is read-only by default; write and destructive statements are rejected.
 
+## Coming From Another Database Tool?
+
+- **Compared with SQLTools:** QueryDeck focuses on a full workbench loop: query consoles, result tabs, local query memory, AI SQL tools, and MCP context for agents.
+- **Compared with Database Client:** QueryDeck's differentiator is AI-assisted SQL workflow, local query memory search, and safer agent access rather than only broad connection coverage.
+- **Compared with DBCode:** QueryDeck is open source and focused on local-first VS Code/Cursor workflows with explicit read-only MCP posture.
+- **Compared with desktop IDEs:** QueryDeck keeps everyday SQL work inside the editor where code, AI assistance, and database context already meet.
+
 ## Privacy And Safety
 
 - Passwords are stored with VS Code SecretStorage.
 - Query history stays local to your VS Code environment.
 - Production connections can require confirmation before destructive SQL.
 - Read-only connections block non-SELECT-style queries.
+- See [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md), and [SUPPORT.md](SUPPORT.md) for launch and support details.
 
 ## Local Live Tests
 
