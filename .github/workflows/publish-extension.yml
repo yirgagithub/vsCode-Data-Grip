@@ -1,0 +1,110 @@
+name: Publish Extension
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish. Leave empty to use package.json."
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-extension
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to VS Marketplace and Open VSX
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve package version
+        id: package
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "vsix=vscode-data-grip-$version.vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Verify requested version
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ -n "$REQUESTED_VERSION" && "$REQUESTED_VERSION" != "$PACKAGE_VERSION" ]]; then
+            echo "::error::Requested version $REQUESTED_VERSION does not match package.json version $PACKAGE_VERSION."
+            exit 1
+          fi
+
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [[ "$tag_version" != "$PACKAGE_VERSION" ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PACKAGE_VERSION."
+              exit 1
+            fi
+          fi
+
+      - name: Type-check
+        run: npm run lint
+
+      - name: Build packaged assets
+        run: npm run build
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Package VSIX
+        run: npx vsce package --no-dependencies --out "${{ steps.package.outputs.vsix }}"
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: querydeck-${{ steps.package.outputs.version }}-vsix
+          path: ${{ steps.package.outputs.vsix }}
+          if-no-files-found: error
+
+      - name: Verify publish secrets
+        shell: bash
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [[ -z "$VSCE_PAT" ]]; then
+            echo "::error::Missing repository secret VSCE_PAT for Visual Studio Marketplace publishing."
+            exit 1
+          fi
+
+          if [[ -z "$OVSX_PAT" ]]; then
+            echo "::error::Missing repository secret OVSX_PAT for Open VSX publishing."
+            exit 1
+          fi
+
+      - name: Publish to Visual Studio Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx vsce publish --pat "$VSCE_PAT" --packagePath "${{ steps.package.outputs.vsix }}"
+
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx --yes ovsx publish "${{ steps.package.outputs.vsix }}" --pat "$OVSX_PAT"
