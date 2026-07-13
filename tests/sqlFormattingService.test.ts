@@ -42,4 +42,28 @@ describe('sqlFormattingService', () => {
       'select\n  *\nfrom\n  users\nwhere\n  id = 1'
     );
   });
+
+  it('formats Redshift insert-with queries that contain QueryDeck parameters', async () => {
+    const sql = `insert into cost_plus_offers_fact_staging (
+ date,
+ network_offer_id,
+ installs
+)
+with cost_data as (
+ select
+   vcr.date::date as date,
+   trim(split_part(vcr.ad_name, '*', 1))::varchar(255) as network_offer_id,
+   sum(vcr.installs) as installs
+ from public.vivo_api_cost_report vcr
+ where vcr.date::date >= date_trunc('month', current_date)::date - (:months_ago || ' month')::interval
+ group by 1, 2
+)
+select date, network_offer_id, installs
+from cost_data`;
+
+    const formatted = await formatSqlText(sql, 'redshift');
+
+    expect(formatted).toContain(':months_ago');
+    expect(formatted).not.toContain('__querydeck_parameter_');
+  });
 });

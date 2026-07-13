@@ -1414,6 +1414,58 @@ from adjust_kpi_raw__keeper;`) as never, undefined, local);
     );
   });
 
+  it('accepts Redshift INSERT statements that use a WITH query expression', async () => {
+    const local = connection({ id: 'redshift', type: 'redshift' });
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => false)
+      } as never,
+      {
+        getCachedForConnection: vi.fn(async () => schemaEntry({
+          connectionId: local.id,
+          tables: [
+            { schema: 'public', name: 'vivo_api_cost_report', type: 'table' },
+            { schema: 'public', name: 'cost_plus_offers_fact', type: 'table' }
+          ]
+        })),
+        getCachedColumns: vi.fn(),
+        refreshDefaultSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+    const sql = `begin;
+
+create temp table cost_plus_offers_fact_staging
+(
+ like public.cost_plus_offers_fact
+);
+
+insert into cost_plus_offers_fact_staging (
+ date,
+ network_offer_id,
+ installs
+)
+with cost_data as (
+ select
+   vcr.date::date as date,
+   trim(split_part(vcr.ad_name, '*', 1))::varchar(255) as network_offer_id,
+   sum(vcr.installs) as installs
+ from public.vivo_api_cost_report vcr
+ where vcr.date::date >= date_trunc('month', current_date)::date - (:months_ago || ' month')::interval
+ group by 1, 2
+)
+select date, network_offer_id, installs
+from cost_data;`;
+
+    const diagnostics = await service.getDiagnostics(sqlDocument(sql) as never, undefined, local);
+    const messages = diagnostics.map((diagnostic) => diagnostic.message);
+
+    expect(messages).not.toContain('Expected a table name after INTO.');
+    expect(messages).not.toContain('Table or view "cost_data" does not exist in public.');
+    expect(messages).not.toContain('Table or view "cost_plus_offers_fact_staging" does not exist in public.');
+  });
+
   it('still flags relations that are neither in schema metadata nor created in the script', async () => {
     const local = connection({ id: 'local' });
     const service = new SqlDiagnosticsService(
