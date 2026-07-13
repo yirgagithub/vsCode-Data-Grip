@@ -7,9 +7,6 @@ on:
         description: "Version to publish. Leave empty to use package.json."
         required: false
         type: string
-  push:
-    tags:
-      - "v*"
 
 permissions:
   contents: read
@@ -54,14 +51,6 @@ jobs:
           if [[ -n "$REQUESTED_VERSION" && "$REQUESTED_VERSION" != "$PACKAGE_VERSION" ]]; then
             echo "::error::Requested version $REQUESTED_VERSION does not match package.json version $PACKAGE_VERSION."
             exit 1
-          fi
-
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            tag_version="${GITHUB_REF_NAME#v}"
-            if [[ "$tag_version" != "$PACKAGE_VERSION" ]]; then
-              echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PACKAGE_VERSION."
-              exit 1
-            fi
           fi
 
       - name: Type-check
