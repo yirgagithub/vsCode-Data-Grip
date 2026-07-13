@@ -92,7 +92,7 @@ export class SqlDiagnosticsService {
           diagnostics.push(new vscode.Diagnostic(
             this.findIdentifierRange(document, section, alias.schema ? `${alias.schema}.${alias.table}` : alias.table),
             `Table or view "${alias.schema ? `${alias.schema}.` : ''}${alias.table}" does not exist in ${schema}.`,
-            vscode.DiagnosticSeverity.Error
+            vscode.DiagnosticSeverity.Warning
           ));
         }
       }
@@ -141,7 +141,7 @@ export class SqlDiagnosticsService {
         diagnostics.push(new vscode.Diagnostic(
           new vscode.Range(document.positionAt(start), document.positionAt(start + column.length)),
           `Column "${column}" does not exist on ${alias.schema ? `${alias.schema}.` : ''}${alias.table}.`,
-          vscode.DiagnosticSeverity.Error
+          vscode.DiagnosticSeverity.Warning
         ));
       }
     }
@@ -217,7 +217,7 @@ export class SqlDiagnosticsService {
             document.positionAt(section.start + tokenStart + token.length)
           ),
           `Column "${token}" does not exist on ${relation.schema}.${relation.table}.`,
-          vscode.DiagnosticSeverity.Error
+          vscode.DiagnosticSeverity.Warning
         ));
       }
     }
