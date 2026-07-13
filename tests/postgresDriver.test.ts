@@ -101,6 +101,25 @@ describe('PostgresDriver DDL generation', () => {
 
     expect(String(pgMock.queries.at(-1)?.sql)).toContain('limit 11 offset 20');
   });
+
+  it('does not wrap writable CTE deletes with the client row limit', async () => {
+    const driver = new PostgresDriver();
+    await driver.connect(config({ sslMode: 'prefer' }));
+    const sql = `with stale_users as (
+      select id from users where last_seen_at < now() - interval '1 year'
+    )
+    delete from users
+    using stale_users
+    where users.id = stale_users.id
+    returning users.id`;
+
+    await driver.executeStatements(
+      { connectionId: 'local', sql, maxRows: 10, offset: 20 },
+      [sql]
+    );
+
+    expect(pgMock.queries.at(-1)?.sql).toBe(sql);
+  });
 });
 
 describe('PostgresDriver routine metadata', () => {
