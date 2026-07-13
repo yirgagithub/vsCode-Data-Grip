@@ -28,6 +28,7 @@ import { qualifiedName, quoteIdentifier } from '../../utils/identifiers';
 import { textExplainPlan } from '../../services/queryPlanService';
 import { loadBundledRuntime } from '../../runtime/runtimeLoader';
 import { createTableSql } from '../../services/sqlDialect';
+import { canApplyClientLimit } from './driverUtils';
 
 interface ActiveExecution {
   connectionId: string;
@@ -514,14 +515,9 @@ export class MySQLDriver implements DatabaseDriver {
     const limit = Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : undefined;
     const nextOffset = Number.isFinite(offset) && offset && offset > 0 ? Math.floor(offset) : 0;
     const pageLimit = limit ? limit + 1 : undefined;
-    return pageLimit && this.canApplyClientLimit(sql)
+    return pageLimit && canApplyClientLimit(sql)
       ? `select * from (${sql.replace(/;+\s*$/, '')}) __dg_query limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ''}`
       : sql;
-  }
-
-  private canApplyClientLimit(sql: string): boolean {
-    const normalized = sql.trim().replace(/^--.*$/gm, '').trim().toLowerCase();
-    return normalized.startsWith('select') || normalized.startsWith('with');
   }
 
   private toExecutionResult(rows: unknown, fields: unknown, executionId: string, started: number, sql: string): QueryExecutionResult {
