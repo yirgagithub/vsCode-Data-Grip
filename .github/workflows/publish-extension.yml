@@ -2,11 +2,6 @@ name: Publish Extension
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to publish. Leave empty to use package.json."
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -41,17 +36,6 @@ jobs:
           version="$(node -p "require('./package.json').version")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "vsix=vscode-data-grip-$version.vsix" >> "$GITHUB_OUTPUT"
-
-      - name: Verify requested version
-        shell: bash
-        env:
-          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
-          REQUESTED_VERSION: ${{ inputs.version }}
-        run: |
-          if [[ -n "$REQUESTED_VERSION" && "$REQUESTED_VERSION" != "$PACKAGE_VERSION" ]]; then
-            echo "::error::Requested version $REQUESTED_VERSION does not match package.json version $PACKAGE_VERSION."
-            exit 1
-          fi
 
       - name: Type-check
         run: npm run lint
