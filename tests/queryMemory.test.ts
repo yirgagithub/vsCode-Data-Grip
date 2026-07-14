@@ -19,6 +19,8 @@ import { connectionMetadataFingerprint, parseStoredSchemaCacheEntry, SCHEMA_META
 import { SqlDiagnosticsService } from '../src/services/sqlDiagnosticsService';
 import { relationCompletionCandidates, relationCompletionContext, selectListColumnCompletionContext, unqualifiedColumnCompletionContext } from '../src/services/sqlMetadataCompletion';
 import { connectAndRefreshSqlMetadata } from '../src/services/sqlMetadataWarmup';
+import { refreshSqlMetadata } from '../src/services/sqlMetadataRefresh';
+import { SqlMetadataCodeActionProvider } from '../src/services/sqlMetadataCodeActionProvider';
 import { SqlParameterPrompt } from '../src/services/sqlParameterPrompt';
 import { applySqlParameterValues, findSqlParameters, uniqueSqlParameterNames } from '../src/services/sqlParameters';
 import { SqlSafetyClassifier } from '../src/services/sqlSafetyClassifier';
@@ -70,6 +72,16 @@ vi.mock('vscode', () => ({
   DiagnosticSeverity: {
     Error: 0,
     Warning: 1
+  },
+  CodeActionKind: {
+    QuickFix: 'quickfix'
+  },
+  CodeAction: class {
+    diagnostics?: unknown[];
+    isPreferred?: boolean;
+    command?: unknown;
+
+    constructor(public title: string, public kind: unknown) {}
   },
   EventEmitter: class {
     event = vi.fn();
@@ -1706,6 +1718,118 @@ describe('SQL metadata warmup', () => {
 
     expect(manager.connect).not.toHaveBeenCalled();
     expect(schemaContext.refreshDefaultSchemaInBackground).toHaveBeenCalledWith(local);
+  });
+});
+
+describe('SQL metadata refresh', () => {
+  it('connects an offline connection before synchronously refreshing requested schemas', async () => {
+    const local = connection({ id: 'local' });
+    const active = { id: local.id, config: local, connectedAt: Date.now() };
+    const manager = {
+      isConnected: vi.fn(() => false),
+      connect: vi.fn(async () => active)
+    };
+    const schemaContext = {
+      invalidate: vi.fn(),
+      loadSchema: vi.fn(async (_connection: ConnectionConfig, schema: string) => schemaEntry({
+        connectionId: local.id,
+        schemaName: schema,
+        status: 'ready'
+      }))
+    };
+
+    await refreshSqlMetadata(manager, schemaContext, local, ['public', 'analytics', 'public']);
+
+    expect(manager.connect).toHaveBeenCalledWith(local.id);
+    expect(schemaContext.invalidate).toHaveBeenCalledWith(local.id);
+    expect(schemaContext.loadSchema).toHaveBeenCalledTimes(2);
+    expect(schemaContext.loadSchema).toHaveBeenCalledWith(local, 'public', true);
+    expect(schemaContext.loadSchema).toHaveBeenCalledWith(local, 'analytics', true);
+  });
+
+  it('does not reconnect an active connection', async () => {
+    const local = connection({ id: 'local' });
+    const manager = {
+      isConnected: vi.fn(() => true),
+      connect: vi.fn()
+    };
+    const schemaContext = {
+      invalidate: vi.fn(),
+      loadSchema: vi.fn(async () => schemaEntry({ connectionId: local.id, status: 'ready' }))
+    };
+
+    await refreshSqlMetadata(manager, schemaContext, local, ['public']);
+
+    expect(manager.connect).not.toHaveBeenCalled();
+    expect(schemaContext.loadSchema).toHaveBeenCalledWith(local, 'public', true);
+  });
+
+  it('reports a failed metadata refresh', async () => {
+    const local = connection({ id: 'local' });
+    const manager = {
+      isConnected: vi.fn(() => true),
+      connect: vi.fn()
+    };
+    const schemaContext = {
+      invalidate: vi.fn(),
+      loadSchema: vi.fn(async () => schemaEntry({
+        connectionId: local.id,
+        status: 'error',
+        errorMessage: 'metadata unavailable'
+      }))
+    };
+
+    await expect(refreshSqlMetadata(manager, schemaContext, local, ['public'])).rejects.toThrow('metadata unavailable');
+  });
+});
+
+describe('SQL metadata code actions', () => {
+  it('offers a preferred metadata refresh Quick Fix for tagged warnings', () => {
+    const provider = new SqlMetadataCodeActionProvider();
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(new vscode.Position(0, 14), new vscode.Position(0, 27)),
+      'Table or view "missing_table" does not exist in analytics.',
+      vscode.DiagnosticSeverity.Warning
+    );
+    diagnostic.source = 'QueryDeck metadata';
+    diagnostic.code = 'querydeck.metadata.missingRelation:analytics';
+    const document = { uri: vscode.Uri.parse('file:///query.sql') };
+
+    const actions = provider.provideCodeActions(
+      document as never,
+      diagnostic.range,
+      { diagnostics: [diagnostic] } as never
+    ) as vscode.CodeAction[];
+
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      title: 'Refresh database metadata',
+      kind: vscode.CodeActionKind.QuickFix,
+      diagnostics: [diagnostic],
+      isPreferred: true,
+      command: {
+        command: 'database.refreshSqlMetadata',
+        title: 'Refresh database metadata',
+        arguments: [document.uri, 'analytics']
+      }
+    });
+  });
+
+  it('does not offer metadata refresh for authoritative diagnostics', () => {
+    const provider = new SqlMetadataCodeActionProvider();
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 6)),
+      'Missing closing parenthesis.',
+      vscode.DiagnosticSeverity.Error
+    );
+
+    const actions = provider.provideCodeActions(
+      { uri: vscode.Uri.parse('file:///query.sql') } as never,
+      diagnostic.range,
+      { diagnostics: [diagnostic] } as never
+    );
+
+    expect(actions).toEqual([]);
   });
 });
 
