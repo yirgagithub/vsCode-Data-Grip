@@ -38,6 +38,10 @@ const SQL_COLUMN_CONTEXT_KEYWORDS = new Set([
   'where'
 ]);
 
+export const SQL_METADATA_DIAGNOSTIC_SOURCE = 'QueryDeck metadata';
+export const SQL_METADATA_MISSING_RELATION = 'querydeck.metadata.missingRelation';
+export const SQL_METADATA_MISSING_COLUMN = 'querydeck.metadata.missingColumn';
+
 export class SqlDiagnosticsService {
   constructor(
     private readonly connectionManager: ConnectionManager,
@@ -89,10 +93,11 @@ export class SqlDiagnosticsService {
         }
         const schema = alias.schema ?? defaultSchema;
         if (!knownRelations.has(this.relationKey(schema, alias.table))) {
-          diagnostics.push(new vscode.Diagnostic(
+          diagnostics.push(this.metadataDiagnostic(
             this.findIdentifierRange(document, section, alias.schema ? `${alias.schema}.${alias.table}` : alias.table),
             `Table or view "${alias.schema ? `${alias.schema}.` : ''}${alias.table}" does not exist in ${schema}.`,
-            vscode.DiagnosticSeverity.Error
+            SQL_METADATA_MISSING_RELATION,
+            schema
           ));
         }
       }
@@ -138,10 +143,11 @@ export class SqlDiagnosticsService {
       }
       if (!columns.some((item) => item.name.toLowerCase() === column.toLowerCase())) {
         const start = section.start + match.index + match[0].lastIndexOf(column);
-        diagnostics.push(new vscode.Diagnostic(
+        diagnostics.push(this.metadataDiagnostic(
           new vscode.Range(document.positionAt(start), document.positionAt(start + column.length)),
           `Column "${column}" does not exist on ${alias.schema ? `${alias.schema}.` : ''}${alias.table}.`,
-          vscode.DiagnosticSeverity.Error
+          SQL_METADATA_MISSING_COLUMN,
+          alias.schema ?? defaultSchema
         ));
       }
     }
@@ -211,13 +217,14 @@ export class SqlDiagnosticsService {
           continue;
         }
         seen.add(key);
-        diagnostics.push(new vscode.Diagnostic(
+        diagnostics.push(this.metadataDiagnostic(
           new vscode.Range(
             document.positionAt(section.start + tokenStart),
             document.positionAt(section.start + tokenStart + token.length)
           ),
           `Column "${token}" does not exist on ${relation.schema}.${relation.table}.`,
-          vscode.DiagnosticSeverity.Error
+          SQL_METADATA_MISSING_COLUMN,
+          relation.schema
         ));
       }
     }
@@ -251,6 +258,18 @@ export class SqlDiagnosticsService {
       this.errorMessage(result.error),
       vscode.DiagnosticSeverity.Error
     );
+  }
+
+  private metadataDiagnostic(
+    range: vscode.Range,
+    message: string,
+    kind: typeof SQL_METADATA_MISSING_RELATION | typeof SQL_METADATA_MISSING_COLUMN,
+    schema: string
+  ): vscode.Diagnostic {
+    const diagnostic = new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Warning);
+    diagnostic.source = SQL_METADATA_DIAGNOSTIC_SOURCE;
+    diagnostic.code = `${kind}:${schema}`;
+    return diagnostic;
   }
 
   private findIdentifierRange(document: vscode.TextDocument, section: SqlSection, identifier: string): vscode.Range {

@@ -19,6 +19,8 @@ import { connectionMetadataFingerprint, parseStoredSchemaCacheEntry, SCHEMA_META
 import { SqlDiagnosticsService } from '../src/services/sqlDiagnosticsService';
 import { relationCompletionCandidates, relationCompletionContext, selectListColumnCompletionContext, unqualifiedColumnCompletionContext } from '../src/services/sqlMetadataCompletion';
 import { connectAndRefreshSqlMetadata } from '../src/services/sqlMetadataWarmup';
+import { refreshSqlMetadata } from '../src/services/sqlMetadataRefresh';
+import { SqlMetadataCodeActionProvider } from '../src/services/sqlMetadataCodeActionProvider';
 import { SqlParameterPrompt } from '../src/services/sqlParameterPrompt';
 import { applySqlParameterValues, findSqlParameters, uniqueSqlParameterNames } from '../src/services/sqlParameters';
 import { SqlSafetyClassifier } from '../src/services/sqlSafetyClassifier';
@@ -28,7 +30,7 @@ import { buildTablePerformancePrepassFlags } from '../src/services/tablePerforma
 import { orphanedConnectionRecordIds } from '../src/persistence/orphanedConnectionRecords';
 import { partitionExistingConsoleRecords } from '../src/persistence/queryConsoleRecords';
 import { ResultsPanelProvider } from '../src/webviews/results/ResultsPanelProvider';
-import { ConnectionConfig, QueryConsoleRecord, QueryHistoryItem, QueryMemoryItem, QueryResultTab, SchemaCacheEntry, TablePerformanceAdviceRequest, TableStatsInfo, TableWorkloadSummary } from '../src/types';
+import { ConnectionConfig, DatabaseType, QueryConsoleRecord, QueryHistoryItem, QueryMemoryItem, QueryResultTab, SchemaCacheEntry, TablePerformanceAdviceRequest, TableStatsInfo, TableWorkloadSummary } from '../src/types';
 import { profileColumn } from '../src/services/dataProfileService';
 
 vi.mock('vscode', () => ({
@@ -68,7 +70,18 @@ vi.mock('vscode', () => ({
     constructor(public range: unknown, public message: string, public severity: number) {}
   },
   DiagnosticSeverity: {
-    Error: 0
+    Error: 0,
+    Warning: 1
+  },
+  CodeActionKind: {
+    QuickFix: 'quickfix'
+  },
+  CodeAction: class {
+    diagnostics?: unknown[];
+    isPreferred?: boolean;
+    command?: unknown;
+
+    constructor(public title: string, public kind: unknown) {}
   },
   EventEmitter: class {
     event = vi.fn();
@@ -1246,6 +1259,8 @@ describe('schema metadata cache', () => {
 });
 
 describe('SQL diagnostics', () => {
+  const sqlDatabaseTypes: Exclude<DatabaseType, 'redis'>[] = ['postgres', 'redshift', 'mysql', 'sqlite', 'sqlserver', 'oracle', 'snowflake'];
+
   it('does not treat FROM inside EXTRACT casts as a table reference', async () => {
     const local = connection({ id: 'local' });
     const service = new SqlDiagnosticsService(
@@ -1434,6 +1449,106 @@ from adjust_kpi_raw__keeper;`) as never, undefined, local);
     expect(diagnostics.map((diagnostic) => diagnostic.message)).toContain(
       'Table or view "missing_relation" does not exist in public.'
     );
+  });
+
+  it.each(sqlDatabaseTypes)('identifies metadata-only relation and column warnings for %s', async (databaseType) => {
+    const local = connection({ id: databaseType, type: databaseType });
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => false)
+      } as never,
+      {
+        getCachedForConnection: vi.fn(async () => schemaEntry({
+          connectionId: local.id,
+          tables: [{ schema: 'public', name: 'event_fact', type: 'table' }]
+        })),
+        getCachedColumns: vi.fn(async (_connection: ConnectionConfig, _schema: string, table: string) => (
+          table === 'event_fact'
+            ? [{ schema: 'public', table: 'event_fact', name: 'revenue', ordinal: 1, dataType: 'numeric', nullable: true }]
+            : undefined
+        )),
+        refreshDefaultSchemaInBackground: vi.fn(),
+        refreshSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+
+    const diagnostics = await service.getDiagnostics(sqlDocument(`select revenue, cost
+from public.event_fact;
+
+select *
+from missing_relation;`) as never, undefined, local);
+    const metadataDiagnostics = diagnostics.filter((diagnostic) => (
+      diagnostic.message === 'Table or view "missing_relation" does not exist in public.'
+      || diagnostic.message === 'Column "cost" does not exist on public.event_fact.'
+    ));
+
+    expect(metadataDiagnostics).toHaveLength(2);
+    expect(metadataDiagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        severity: vscode.DiagnosticSeverity.Warning,
+        source: 'QueryDeck metadata',
+        code: 'querydeck.metadata.missingColumn:public'
+      }),
+      expect.objectContaining({
+        severity: vscode.DiagnosticSeverity.Warning,
+        source: 'QueryDeck metadata',
+        code: 'querydeck.metadata.missingRelation:public'
+      })
+    ]));
+  });
+
+  it('keeps structural SQL diagnostics as errors', async () => {
+    const local = connection({ id: 'local' });
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => false)
+      } as never,
+      {
+        getCachedForConnection: vi.fn(),
+        getCachedColumns: vi.fn(),
+        refreshDefaultSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+
+    const diagnostics = await service.getDiagnostics(sqlDocument('select (1;') as never, undefined, local);
+    const diagnostic = diagnostics.find((item) => item.message === 'Missing closing parenthesis.');
+
+    expect(diagnostic?.severity).toBe(vscode.DiagnosticSeverity.Error);
+  });
+
+  it('keeps live database planner diagnostics as errors', async () => {
+    const local = connection({ id: 'local' });
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => true),
+        getDriver: vi.fn(() => ({
+          validateQuery: vi.fn(async () => ({
+            ok: false,
+            error: { message: 'Database planner rejected this query.' }
+          }))
+        }))
+      } as never,
+      {
+        getCachedForConnection: vi.fn(async () => schemaEntry({
+          connectionId: local.id,
+          tables: [{ schema: 'public', name: 'event_fact', type: 'table' }]
+        })),
+        getCachedColumns: vi.fn(),
+        refreshDefaultSchemaInBackground: vi.fn(),
+        refreshSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+
+    const diagnostics = await service.getDiagnostics(sqlDocument('select * from public.event_fact;') as never, undefined, local);
+    const diagnostic = diagnostics.find((item) => item.message === 'Database planner rejected this query.');
+
+    expect(diagnostic?.severity).toBe(vscode.DiagnosticSeverity.Error);
   });
 
   it('flags an unqualified missing column on the column token for single-table queries', async () => {
@@ -1655,6 +1770,118 @@ describe('SQL metadata warmup', () => {
 
     expect(manager.connect).not.toHaveBeenCalled();
     expect(schemaContext.refreshDefaultSchemaInBackground).toHaveBeenCalledWith(local);
+  });
+});
+
+describe('SQL metadata refresh', () => {
+  it('connects an offline connection before synchronously refreshing requested schemas', async () => {
+    const local = connection({ id: 'local' });
+    const active = { id: local.id, config: local, connectedAt: Date.now() };
+    const manager = {
+      isConnected: vi.fn(() => false),
+      connect: vi.fn(async () => active)
+    };
+    const schemaContext = {
+      invalidate: vi.fn(),
+      loadSchema: vi.fn(async (_connection: ConnectionConfig, schema: string) => schemaEntry({
+        connectionId: local.id,
+        schemaName: schema,
+        status: 'ready'
+      }))
+    };
+
+    await refreshSqlMetadata(manager, schemaContext, local, ['public', 'analytics', 'public']);
+
+    expect(manager.connect).toHaveBeenCalledWith(local.id);
+    expect(schemaContext.invalidate).toHaveBeenCalledWith(local.id);
+    expect(schemaContext.loadSchema).toHaveBeenCalledTimes(2);
+    expect(schemaContext.loadSchema).toHaveBeenCalledWith(local, 'public', true);
+    expect(schemaContext.loadSchema).toHaveBeenCalledWith(local, 'analytics', true);
+  });
+
+  it('does not reconnect an active connection', async () => {
+    const local = connection({ id: 'local' });
+    const manager = {
+      isConnected: vi.fn(() => true),
+      connect: vi.fn()
+    };
+    const schemaContext = {
+      invalidate: vi.fn(),
+      loadSchema: vi.fn(async () => schemaEntry({ connectionId: local.id, status: 'ready' }))
+    };
+
+    await refreshSqlMetadata(manager, schemaContext, local, ['public']);
+
+    expect(manager.connect).not.toHaveBeenCalled();
+    expect(schemaContext.loadSchema).toHaveBeenCalledWith(local, 'public', true);
+  });
+
+  it('reports a failed metadata refresh', async () => {
+    const local = connection({ id: 'local' });
+    const manager = {
+      isConnected: vi.fn(() => true),
+      connect: vi.fn()
+    };
+    const schemaContext = {
+      invalidate: vi.fn(),
+      loadSchema: vi.fn(async () => schemaEntry({
+        connectionId: local.id,
+        status: 'error',
+        errorMessage: 'metadata unavailable'
+      }))
+    };
+
+    await expect(refreshSqlMetadata(manager, schemaContext, local, ['public'])).rejects.toThrow('metadata unavailable');
+  });
+});
+
+describe('SQL metadata code actions', () => {
+  it('offers a preferred metadata refresh Quick Fix for tagged warnings', () => {
+    const provider = new SqlMetadataCodeActionProvider();
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(new vscode.Position(0, 14), new vscode.Position(0, 27)),
+      'Table or view "missing_table" does not exist in analytics.',
+      vscode.DiagnosticSeverity.Warning
+    );
+    diagnostic.source = 'QueryDeck metadata';
+    diagnostic.code = 'querydeck.metadata.missingRelation:analytics';
+    const document = { uri: vscode.Uri.parse('file:///query.sql') };
+
+    const actions = provider.provideCodeActions(
+      document as never,
+      diagnostic.range,
+      { diagnostics: [diagnostic] } as never
+    ) as vscode.CodeAction[];
+
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      title: 'Refresh database metadata',
+      kind: vscode.CodeActionKind.QuickFix,
+      diagnostics: [diagnostic],
+      isPreferred: true,
+      command: {
+        command: 'database.refreshSqlMetadata',
+        title: 'Refresh database metadata',
+        arguments: [document.uri, 'analytics']
+      }
+    });
+  });
+
+  it('does not offer metadata refresh for authoritative diagnostics', () => {
+    const provider = new SqlMetadataCodeActionProvider();
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 6)),
+      'Missing closing parenthesis.',
+      vscode.DiagnosticSeverity.Error
+    );
+
+    const actions = provider.provideCodeActions(
+      { uri: vscode.Uri.parse('file:///query.sql') } as never,
+      diagnostic.range,
+      { diagnostics: [diagnostic] } as never
+    );
+
+    expect(actions).toEqual([]);
   });
 });
 

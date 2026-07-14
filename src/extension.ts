@@ -18,6 +18,8 @@ import { SchemaContextService } from './services/schemaContextService';
 import { SchemaMetadataCacheStore } from './services/schemaMetadataCacheStore';
 import { relationCompletionCandidates, relationCompletionContext, unqualifiedColumnCompletionContext } from './services/sqlMetadataCompletion';
 import { connectAndRefreshSqlMetadata } from './services/sqlMetadataWarmup';
+import { SqlMetadataCodeActionProvider, SQL_METADATA_REFRESH_COMMAND } from './services/sqlMetadataCodeActionProvider';
+import { refreshSqlMetadata } from './services/sqlMetadataRefresh';
 import { SqlDiagnosticsService } from './services/sqlDiagnosticsService';
 import { SqlParameterPrompt } from './services/sqlParameterPrompt';
 import { rangeFromPlain as rangeFromSource, SqlSectionHighlighter } from './services/sqlSectionHighlighter';
@@ -263,7 +265,10 @@ export function activate(context: vscode.ExtensionContext): void {
   };
   context.subscriptions.push(
     vscode.languages.registerDocumentFormattingEditProvider('sql', sqlFormatter),
-    vscode.languages.registerDocumentRangeFormattingEditProvider('sql', sqlFormatter)
+    vscode.languages.registerDocumentRangeFormattingEditProvider('sql', sqlFormatter),
+    vscode.languages.registerCodeActionsProvider('sql', new SqlMetadataCodeActionProvider(), {
+      providedCodeActionKinds: SqlMetadataCodeActionProvider.providedCodeActionKinds
+    })
   );
   refreshQueryMap();
   void schemaContext.warmFromDisk(connectionManager.getConnections());
@@ -288,6 +293,25 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   connectionManager.setConnectionCreator(createConnectionFromEditor);
+
+  register(SQL_METADATA_REFRESH_COMMAND, async (documentUri?: unknown, schemaName?: unknown) => {
+    const uri = documentUri && typeof (documentUri as vscode.Uri).toString === 'function'
+      ? documentUri as vscode.Uri
+      : vscode.window.activeTextEditor?.document.uri;
+    if (!uri) {
+      return;
+    }
+    const document = await vscode.workspace.openTextDocument(uri);
+    const resolved = resolveConnectionForDocument(document);
+    if (!resolved.connection) {
+      void vscode.window.showInformationMessage('No database connection is selected for this SQL editor.');
+      return;
+    }
+    const schemas = typeof schemaName === 'string' && schemaName ? [schemaName] : [];
+    await refreshSqlMetadata(connectionManager, schemaContext, resolved.connection, schemas);
+    tree.refresh();
+    updateSqlDiagnostics(document);
+  });
 
   if (process.env.QUERYDECK_ENABLE_TEST_COMMANDS === 'true') {
     register('database.internal.seedAndConnectForMarketplaceMedia', async (configsArg: unknown) => {
