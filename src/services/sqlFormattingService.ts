@@ -1,6 +1,5 @@
 import { ConnectionConfig } from '../types';
 import { loadBundledRuntime } from '../runtime/runtimeLoader';
-import { findSqlParameters } from './sqlParameters';
 
 export type SqlFormatterDialect = 'postgresql' | 'redshift' | 'mysql' | 'sqlite' | 'transactsql' | 'plsql' | 'snowflake';
 
@@ -31,45 +30,10 @@ export async function formatSqlText(sql: string, dialect: SqlFormatterDialect): 
     return sql;
   }
   const { format } = await loadSqlFormatter();
-  const masked = maskSqlParameters(sql);
-  const formatted = format(masked.sql, {
+  return format(sql, {
     language: dialect,
     tabWidth: 2
   });
-  return masked.restore(formatted);
-}
-
-function maskSqlParameters(sql: string): { sql: string; restore: (formatted: string) => string } {
-  const parameters = findSqlParameters(sql);
-  if (parameters.length === 0) {
-    return {
-      sql,
-      restore: (formatted) => formatted
-    };
-  }
-
-  const replacements = parameters.map((parameter, index) => ({
-    placeholder: parameter.placeholder,
-    sentinel: `__querydeck_parameter_${index}_${safeSentinelPart(parameter.name)}__`,
-    start: parameter.start,
-    end: parameter.end
-  }));
-  let maskedSql = sql;
-  for (const replacement of [...replacements].reverse()) {
-    maskedSql = `${maskedSql.slice(0, replacement.start)}${replacement.sentinel}${maskedSql.slice(replacement.end)}`;
-  }
-
-  return {
-    sql: maskedSql,
-    restore: (formatted) => replacements.reduce(
-      (restored, replacement) => restored.split(replacement.sentinel).join(replacement.placeholder),
-      formatted
-    )
-  };
-}
-
-function safeSentinelPart(value: string): string {
-  return value.replace(/[^A-Za-z0-9_]/g, '_');
 }
 
 type SqlFormatterRuntime = {
