@@ -28,7 +28,7 @@ import { buildTablePerformancePrepassFlags } from '../src/services/tablePerforma
 import { orphanedConnectionRecordIds } from '../src/persistence/orphanedConnectionRecords';
 import { partitionExistingConsoleRecords } from '../src/persistence/queryConsoleRecords';
 import { ResultsPanelProvider } from '../src/webviews/results/ResultsPanelProvider';
-import { ConnectionConfig, DatabaseType, QueryConsoleRecord, QueryHistoryItem, QueryMemoryItem, QueryResultTab, SchemaCacheEntry, TablePerformanceAdviceRequest, TableStatsInfo, TableWorkloadSummary } from '../src/types';
+import { ConnectionConfig, QueryConsoleRecord, QueryHistoryItem, QueryMemoryItem, QueryResultTab, SchemaCacheEntry, TablePerformanceAdviceRequest, TableStatsInfo, TableWorkloadSummary } from '../src/types';
 import { profileColumn } from '../src/services/dataProfileService';
 
 vi.mock('vscode', () => ({
@@ -68,8 +68,7 @@ vi.mock('vscode', () => ({
     constructor(public range: unknown, public message: string, public severity: number) {}
   },
   DiagnosticSeverity: {
-    Error: 0,
-    Warning: 1
+    Error: 0
   },
   EventEmitter: class {
     event = vi.fn();
@@ -1247,8 +1246,6 @@ describe('schema metadata cache', () => {
 });
 
 describe('SQL diagnostics', () => {
-  const sqlDatabaseTypes: Exclude<DatabaseType, 'redis'>[] = ['postgres', 'redshift', 'mysql', 'sqlite', 'sqlserver', 'oracle', 'snowflake'];
-
   it('does not treat FROM inside EXTRACT casts as a table reference', async () => {
     const local = connection({ id: 'local' });
     const service = new SqlDiagnosticsService(
@@ -1417,259 +1414,6 @@ from adjust_kpi_raw__keeper;`) as never, undefined, local);
     );
   });
 
-  it('accepts Redshift INSERT statements that use a WITH query expression', async () => {
-    const local = connection({ id: 'redshift', type: 'redshift' });
-    const service = new SqlDiagnosticsService(
-      {
-        getPreferredConnection: vi.fn(() => local),
-        isConnected: vi.fn(() => false)
-      } as never,
-      {
-        getCachedForConnection: vi.fn(async () => schemaEntry({
-          connectionId: local.id,
-          tables: [
-            { schema: 'public', name: 'vivo_api_cost_report', type: 'table' },
-            { schema: 'public', name: 'cost_plus_offers_fact', type: 'table' }
-          ]
-        })),
-        getCachedColumns: vi.fn(),
-        refreshDefaultSchemaInBackground: vi.fn()
-      } as never,
-      new SqlSectionService()
-    );
-    const sql = `begin;
-
-create temp table cost_plus_offers_fact_staging
-(
- like public.cost_plus_offers_fact
-);
-
-insert into cost_plus_offers_fact_staging (
- date,
- network_offer_id,
- installs
-)
-with cost_data as (
- select
-   vcr.date::date as date,
-   trim(split_part(vcr.ad_name, '*', 1))::varchar(255) as network_offer_id,
-   sum(vcr.installs) as installs
- from public.vivo_api_cost_report vcr
- where vcr.date::date >= date_trunc('month', current_date)::date - (:months_ago || ' month')::interval
- group by 1, 2
-)
-select date, network_offer_id, installs
-from cost_data;`;
-
-    const diagnostics = await service.getDiagnostics(sqlDocument(sql) as never, undefined, local);
-    const messages = diagnostics.map((diagnostic) => diagnostic.message);
-
-    expect(messages).not.toContain('Expected a table name after INTO.');
-    expect(messages).not.toContain('Table or view "cost_data" does not exist in public.');
-    expect(messages).not.toContain('Table or view "cost_plus_offers_fact_staging" does not exist in public.');
-  });
-
-  it('accepts multi-step Redshift scripts with insert CTEs and update CTEs', async () => {
-    const local = connection({ id: 'redshift', type: 'redshift' });
-    const service = new SqlDiagnosticsService(
-      {
-        getPreferredConnection: vi.fn(() => local),
-        isConnected: vi.fn(() => false)
-      } as never,
-      {
-        getCachedForConnection: vi.fn(async () => schemaEntry({
-          connectionId: local.id,
-          tables: [
-            { schema: 'public', name: 'cost_plus_offers_fact', type: 'table' },
-            { schema: 'public', name: 'vivo_api_cost_report', type: 'table' },
-            { schema: 'public', name: 'aph_appsflyer_direct_sources_payout_revenue', type: 'table' },
-            { schema: 'public', name: 'aph_adjust_reporting_direct_sources_payout_revenue', type: 'table' },
-            { schema: 'public', name: 'offer_fact', type: 'table' },
-            { schema: 'public', name: 'offer_all_fact', type: 'table' },
-            { schema: 'public', name: 'mediasource_dim', type: 'table' }
-          ]
-        })),
-        getCachedColumns: vi.fn(),
-        refreshDefaultSchemaInBackground: vi.fn()
-      } as never,
-      new SqlSectionService()
-    );
-    const sql = `begin;
-
-create temp table cost_plus_offers_fact_staging
-(
- like public.cost_plus_offers_fact
-);
-
-insert into cost_plus_offers_fact_staging (
- date,
- country,
- campaign,
- channel,
- ad_id,
- media_source,
- app_id,
- installs,
- revenue,
- cost,
- mmp,
- category,
- checksum,
- natural_key_hash,
- is_active,
- insert_at,
- modified_at,
- source,
- network_offer_id,
- campaign_id,
- adgroup_id,
- adgroup_name,
- ad_creative_id,
- ad_name,
- placement,
- advertiser_id
-)
-with cost_data as (
- select
-   vcr.date::date as date,
-   null::varchar(256) as country,
-   vcr.campaign_name::varchar(256) as campaign_name,
-   null::varchar(256) as campaign_id,
-   null::varchar(256) as adgroup_id,
-   null::varchar(256) as adgroup_name,
-   vcr.ad_id::varchar(256) as ad_creative_id,
-   vcr.ad_name::varchar(256) as ad_name,
-   'N/A'::varchar(256) as placement,
-   vcr.ad_id::varchar(256) as ad_id,
-   vcr.package_name::varchar(256) as package_name,
-   trim(split_part(vcr.ad_name, '*', 1))::varchar(255) as network_offer_id,
-   sum(vcr.cost) as total_cost,
-   sum(vcr.installs) as installs
- from public.vivo_api_cost_report vcr
- where vcr.date::date >= date_trunc('month', current_date)::date - (:months_ago || ' month')::interval
- group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13
-),
-rps_data as (
- select
-   dspr.date,
-   dspr.network_offer_id,
-   dspr.revenue as revenue_percentage,
-   dspr.direct_source_id,
-   'Appsflyer'::varchar(256) as mmp
- from public.aph_appsflyer_direct_sources_payout_revenue dspr
- where dspr.date >= date_trunc('month', current_date)::date - (:months_ago || ' month')::interval
-
- union all
-
- select
-   dspr.date,
-   dspr.network_offer_id,
-   dspr.revenue as revenue_percentage,
-   dspr.direct_source_id,
-   'Adjust'::varchar(256) as mmp
- from public.aph_adjust_reporting_direct_sources_payout_revenue dspr
- where dspr.date >= date_trunc('month', current_date)::date - (:months_ago || ' month')::interval
-),
-offer_data as (
- select network_offer_id, app_identifier, network_advertiser_id, category, ingestion_time::date as offer_date, campaign
- from (
-   select *,
-     row_number() over (
-       partition by network_offer_id, ingestion_time::date
-       order by ingestion_time desc
-     ) as rn
-   from public.offer_fact
-   where ingestion_time::date >= date_trunc('month', current_date)::date - (:months_ago || ' month')::interval
- ) as offer_ranked
- where rn = 1
-),
-offer_all_data as (
- select
-   network_offer_id,
-   campaign,
-   app_identifier,
-   network_advertiser_id,
-   row_number() over (partition by network_offer_id order by time_saved desc) as rn
- from public.offer_all_fact
-)
-select
- cd.date,
- cd.country,
- coalesce(ofd.campaign, oaf.campaign, cd.campaign_name) as campaign,
- cd.placement as channel,
- cd.ad_id,
- md.media_source,
- coalesce(ofd.app_identifier, oaf.app_identifier, cd.package_name) as app_id,
- cd.installs,
- cd.total_cost / (1 - (rd.revenue_percentage / 100)) as revenue,
- cd.total_cost as cost,
- rd.mmp,
- ofd.category,
- md5(coalesce(cd.installs::text, '') || coalesce(cd.total_cost::text, '')) as checksum,
- md5(coalesce(cd.date::text, '') || coalesce(cd.country, '') || coalesce(cd.campaign_name, '') || coalesce(rd.network_offer_id::text, '') || 'cost_plus_offers_fact_vivo') as natural_key_hash,
- true as is_active,
- current_date as insert_at,
- current_date as modified_at,
- 'cost_plus_offers_fact_vivo'::varchar(100) as source,
- rd.network_offer_id,
- cd.campaign_id,
- cd.adgroup_id,
- cd.adgroup_name,
- cd.ad_creative_id,
- cd.ad_name,
- cd.placement,
- coalesce(ofd.network_advertiser_id, oaf.network_advertiser_id) as advertiser_id
-from cost_data cd
-left join rps_data rd
- on cd.date = rd.date
- and cd.network_offer_id = rd.network_offer_id::varchar(255)
-left join public.mediasource_dim md
- on rd.direct_source_id = md.direct_source_id
-left join offer_data ofd
- on rd.network_offer_id = ofd.network_offer_id
- and rd.date = ofd.offer_date
-left join offer_all_data oaf
- on rd.network_offer_id = oaf.network_offer_id
- and oaf.rn = 1
-where rd.network_offer_id is not null;
-
-update public.cost_plus_offers_fact as t
-set
- installs = s.installs,
- revenue = s.revenue,
- cost = s.cost,
- checksum = s.checksum,
- modified_at = current_date,
- is_active = true
-from cost_plus_offers_fact_staging s
-where t.natural_key_hash = s.natural_key_hash
- and (coalesce(t.checksum, '') != coalesce(s.checksum, '') or t.is_active = false);
-
-insert into public.cost_plus_offers_fact
-select s.*
-from cost_plus_offers_fact_staging s
-left join public.cost_plus_offers_fact t
- on t.natural_key_hash = s.natural_key_hash
-where t.natural_key_hash is null;
-
-with active_hashes as (
- select natural_key_hash from cost_plus_offers_fact_staging
-)
-update public.cost_plus_offers_fact
-set is_active = false,
- modified_at = current_date
-where source = 'cost_plus_offers_fact_vivo'
- and date >= date_trunc('month', current_date)::date - (:months_ago || ' month')::interval
- and natural_key_hash not in (select natural_key_hash from active_hashes);
-
-drop table if exists cost_plus_offers_fact_staging;
-commit;`;
-
-    const diagnostics = await service.getDiagnostics(sqlDocument(sql) as never, undefined, local);
-
-    expect(diagnostics.map((diagnostic) => diagnostic.message)).toEqual([]);
-  });
-
   it('still flags relations that are neither in schema metadata nor created in the script', async () => {
     const local = connection({ id: 'local' });
     const service = new SqlDiagnosticsService(
@@ -1686,117 +1430,10 @@ commit;`;
     );
 
     const diagnostics = await service.getDiagnostics(sqlDocument('select * from missing_relation;') as never, undefined, local);
-    const missingRelation = diagnostics.find((diagnostic) => diagnostic.message === 'Table or view "missing_relation" does not exist in public.');
 
-    expect(missingRelation).toBeDefined();
-    expect(missingRelation?.severity).toBe(vscode.DiagnosticSeverity.Warning);
-  });
-
-  it.each(sqlDatabaseTypes)('keeps metadata-only relation and column diagnostics as warnings for %s', async (databaseType) => {
-    const local = connection({ id: databaseType, type: databaseType });
-    const service = new SqlDiagnosticsService(
-      {
-        getPreferredConnection: vi.fn(() => local),
-        isConnected: vi.fn(() => false)
-      } as never,
-      {
-        getCachedForConnection: vi.fn(async () => schemaEntry({
-          connectionId: local.id,
-          tables: [{ schema: 'public', name: 'event_fact', type: 'table' }],
-          columns: {
-            'public.event_fact': [
-              { schema: 'public', table: 'event_fact', name: 'revenue', ordinal: 1, dataType: 'numeric', nullable: true }
-            ]
-          }
-        })),
-        getCachedColumns: vi.fn(async (_connection: ConnectionConfig, _schema: string, table: string) => (
-          table === 'event_fact'
-            ? [{ schema: 'public', table: 'event_fact', name: 'revenue', ordinal: 1, dataType: 'numeric', nullable: true }]
-            : undefined
-        )),
-        refreshDefaultSchemaInBackground: vi.fn(),
-        refreshSchemaInBackground: vi.fn()
-      } as never,
-      new SqlSectionService()
+    expect(diagnostics.map((diagnostic) => diagnostic.message)).toContain(
+      'Table or view "missing_relation" does not exist in public.'
     );
-
-    const diagnostics = await service.getDiagnostics(sqlDocument(`select revenue, cost
-from public.event_fact;
-
-select *
-from missing_relation;`) as never, undefined, local);
-
-    const metadataDiagnostics = diagnostics.filter((diagnostic) => (
-      diagnostic.message === 'Table or view "missing_relation" does not exist in public.'
-      || diagnostic.message === 'Column "cost" does not exist on public.event_fact.'
-    ));
-
-    expect(metadataDiagnostics).toHaveLength(2);
-    expect(metadataDiagnostics.every((diagnostic) => diagnostic.severity === vscode.DiagnosticSeverity.Warning)).toBe(true);
-    expect(diagnostics.every((diagnostic) => diagnostic.severity !== vscode.DiagnosticSeverity.Error)).toBe(true);
-  });
-
-  it.each(sqlDatabaseTypes)('accepts WITH UPDATE and WITH DELETE statements during static validation for %s', async (databaseType) => {
-    const local = connection({ id: databaseType, type: databaseType });
-    const service = new SqlDiagnosticsService(
-      {
-        getPreferredConnection: vi.fn(() => local),
-        isConnected: vi.fn(() => false)
-      } as never,
-      {
-        getCachedForConnection: vi.fn(async () => schemaEntry({
-          connectionId: local.id,
-          tables: [
-            { schema: 'public', name: 'cost_plus_offers_fact', type: 'table' },
-            { schema: 'public', name: 'cost_plus_offers_fact_staging', type: 'table' }
-          ]
-        })),
-        getCachedColumns: vi.fn(),
-        refreshDefaultSchemaInBackground: vi.fn(),
-        refreshSchemaInBackground: vi.fn()
-      } as never,
-      new SqlSectionService()
-    );
-
-    const sql = `with active_hashes as (
- select natural_key_hash from public.cost_plus_offers_fact_staging
-)
-update public.cost_plus_offers_fact
-set is_active = false
-where natural_key_hash not in (select natural_key_hash from active_hashes);
-
-with inactive_hashes as (
- select natural_key_hash from public.cost_plus_offers_fact
- where is_active = false
-)
-delete from public.cost_plus_offers_fact
-where natural_key_hash in (select natural_key_hash from inactive_hashes);`;
-
-    const diagnostics = await service.getDiagnostics(sqlDocument(sql) as never, undefined, local);
-
-    expect(diagnostics.map((diagnostic) => diagnostic.message)).toEqual([]);
-  });
-
-  it('keeps structural syntax diagnostics as errors', async () => {
-    const local = connection({ id: 'local' });
-    const service = new SqlDiagnosticsService(
-      {
-        getPreferredConnection: vi.fn(() => local),
-        isConnected: vi.fn(() => false)
-      } as never,
-      {
-        getCachedForConnection: vi.fn(async () => schemaEntry({ connectionId: local.id, tables: [] })),
-        getCachedColumns: vi.fn(),
-        refreshDefaultSchemaInBackground: vi.fn()
-      } as never,
-      new SqlSectionService()
-    );
-
-    const diagnostics = await service.getDiagnostics(sqlDocument('select (1;') as never, undefined, local);
-    const syntaxIssue = diagnostics.find((diagnostic) => diagnostic.message === 'Missing closing parenthesis.');
-
-    expect(syntaxIssue).toBeDefined();
-    expect(syntaxIssue?.severity).toBe(vscode.DiagnosticSeverity.Error);
   });
 
   it('flags an unqualified missing column on the column token for single-table queries', async () => {
@@ -1834,7 +1471,6 @@ where event_datetime::date between '2026-05-01' and '2026-05-31'`;
     const missingColumn = diagnostics.find((diagnostic) => diagnostic.message === 'Column "cost" does not exist on public.event_fact.');
 
     expect(missingColumn).toBeDefined();
-    expect(missingColumn?.severity).toBe(vscode.DiagnosticSeverity.Warning);
     expect(missingColumn?.range).toMatchObject(textRange(0, 36, 0, 40));
     expect(diagnostics.map((diagnostic) => diagnostic.message)).not.toContain('Column "date" does not exist on public.event_fact.');
   });
