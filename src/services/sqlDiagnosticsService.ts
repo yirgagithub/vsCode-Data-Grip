@@ -4,6 +4,10 @@ import { ColumnInfo, ConnectionConfig, QueryError } from '../types';
 import { SchemaContextService } from './schemaContextService';
 import { SqlSection, SqlSectionService } from './sqlSectionService';
 import { findSqlParameters, hasSqlParameters, sqlParameterSpansContain } from './sqlParameters';
+import { normalizeGroupByError } from './sqlGroupByError';
+
+export const SQL_GROUP_BY_DIAGNOSTIC_SOURCE = 'QueryDeck planner';
+export const SQL_GROUP_BY_DIAGNOSTIC_CODE = 'querydeck.planner.groupBy';
 
 const SQL_COLUMN_CONTEXT_KEYWORDS = new Set([
   'all',
@@ -253,11 +257,17 @@ export class SqlDiagnosticsService {
     if (result.ok || !result.error) {
       return undefined;
     }
-    return new vscode.Diagnostic(
+    const diagnostic = new vscode.Diagnostic(
       this.errorRange(document, section, result.error),
       this.errorMessage(result.error),
       vscode.DiagnosticSeverity.Error
     );
+    const groupBy = normalizeGroupByError(connection.type, result.error);
+    if (groupBy) {
+      diagnostic.source = SQL_GROUP_BY_DIAGNOSTIC_SOURCE;
+      diagnostic.code = `${SQL_GROUP_BY_DIAGNOSTIC_CODE}:${encodeURIComponent(groupBy.expression)}`;
+    }
+    return diagnostic;
   }
 
   private metadataDiagnostic(
