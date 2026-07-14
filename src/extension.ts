@@ -19,6 +19,7 @@ import { SchemaMetadataCacheStore } from './services/schemaMetadataCacheStore';
 import { relationCompletionCandidates, relationCompletionContext, unqualifiedColumnCompletionContext } from './services/sqlMetadataCompletion';
 import { connectAndRefreshSqlMetadata } from './services/sqlMetadataWarmup';
 import { SqlMetadataCodeActionProvider, SQL_METADATA_REFRESH_COMMAND } from './services/sqlMetadataCodeActionProvider';
+import { SqlGroupByCodeActionProvider } from './services/sqlGroupByCodeActionProvider';
 import { refreshSqlMetadata } from './services/sqlMetadataRefresh';
 import { SqlDiagnosticsService } from './services/sqlDiagnosticsService';
 import { SqlParameterPrompt } from './services/sqlParameterPrompt';
@@ -268,6 +269,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.languages.registerDocumentRangeFormattingEditProvider('sql', sqlFormatter),
     vscode.languages.registerCodeActionsProvider('sql', new SqlMetadataCodeActionProvider(), {
       providedCodeActionKinds: SqlMetadataCodeActionProvider.providedCodeActionKinds
+    }),
+    vscode.languages.registerCodeActionsProvider('sql', new SqlGroupByCodeActionProvider(), {
+      providedCodeActionKinds: SqlGroupByCodeActionProvider.providedCodeActionKinds
     })
   );
   refreshQueryMap();

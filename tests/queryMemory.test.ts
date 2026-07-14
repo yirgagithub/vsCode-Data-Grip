@@ -21,6 +21,7 @@ import { relationCompletionCandidates, relationCompletionContext, selectListColu
 import { connectAndRefreshSqlMetadata } from '../src/services/sqlMetadataWarmup';
 import { refreshSqlMetadata } from '../src/services/sqlMetadataRefresh';
 import { SqlMetadataCodeActionProvider } from '../src/services/sqlMetadataCodeActionProvider';
+import { SqlGroupByCodeActionProvider } from '../src/services/sqlGroupByCodeActionProvider';
 import { SqlParameterPrompt } from '../src/services/sqlParameterPrompt';
 import { applySqlParameterValues, findSqlParameters, uniqueSqlParameterNames } from '../src/services/sqlParameters';
 import { SqlSafetyClassifier } from '../src/services/sqlSafetyClassifier';
@@ -80,8 +81,15 @@ vi.mock('vscode', () => ({
     diagnostics?: unknown[];
     isPreferred?: boolean;
     command?: unknown;
+    edit?: unknown;
 
     constructor(public title: string, public kind: unknown) {}
+  },
+  WorkspaceEdit: class {
+    replacements: unknown[] = [];
+    replace(uri: unknown, range: unknown, newText: string) {
+      this.replacements.push({ uri, range, newText });
+    }
   },
   EventEmitter: class {
     event = vi.fn();
@@ -1551,6 +1559,33 @@ from missing_relation;`) as never, undefined, local);
     expect(diagnostic?.severity).toBe(vscode.DiagnosticSeverity.Error);
   });
 
+  it('tags recognized GROUP BY planner diagnostics for a quick fix', async () => {
+    const local = connection({ id: 'local', type: 'postgres' });
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => true),
+        getDriver: vi.fn(() => ({
+          validateQuery: vi.fn(async () => ({
+            ok: false,
+            error: { message: 'column "sales.region" must appear in the GROUP BY clause or be used in an aggregate function', position: 8 }
+          }))
+        }))
+      } as never,
+      {
+        getCachedForConnection: vi.fn(),
+        getCachedColumns: vi.fn(),
+        refreshDefaultSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+    const diagnostics = await service.getDiagnostics(sqlDocument('select sales.region, count(*) from sales;') as never, undefined, local);
+    const diagnostic = diagnostics.find(item => item.source === 'QueryDeck planner');
+
+    expect(diagnostic?.code).toBe('querydeck.planner.groupBy:sales.region');
+    expect(diagnostic?.severity).toBe(vscode.DiagnosticSeverity.Error);
+  });
+
   it('flags an unqualified missing column on the column token for single-table queries', async () => {
     const local = connection({ id: 'local' });
     const service = new SqlDiagnosticsService(
@@ -1882,6 +1917,32 @@ describe('SQL metadata code actions', () => {
     );
 
     expect(actions).toEqual([]);
+  });
+});
+
+describe('GROUP BY code actions', () => {
+  it('offers a preferred direct edit for a recognized planner diagnostic', () => {
+    const text = 'select sales.region, count(*) from sales;';
+    const document = sqlDocument(text);
+    const start = text.indexOf('sales.region');
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(document.positionAt(start), document.positionAt(start + 12)),
+      'column "sales.region" must appear in the GROUP BY clause',
+      vscode.DiagnosticSeverity.Error
+    );
+    diagnostic.source = 'QueryDeck planner';
+    diagnostic.code = 'querydeck.planner.groupBy:sales.region';
+
+    const actions = new SqlGroupByCodeActionProvider().provideCodeActions(
+      document as never,
+      diagnostic.range,
+      { diagnostics: [diagnostic] } as never
+    );
+
+    expect(actions).toHaveLength(1);
+    expect(actions[0].title).toBe('Add sales.region to GROUP BY');
+    expect(actions[0].isPreferred).toBe(true);
+    expect((actions[0].edit as unknown as { replacements: Array<{ newText: string }> }).replacements[0].newText).toBe(' GROUP BY sales.region');
   });
 });
 
