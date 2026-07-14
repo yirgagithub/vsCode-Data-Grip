@@ -28,7 +28,7 @@ import { buildTablePerformancePrepassFlags } from '../src/services/tablePerforma
 import { orphanedConnectionRecordIds } from '../src/persistence/orphanedConnectionRecords';
 import { partitionExistingConsoleRecords } from '../src/persistence/queryConsoleRecords';
 import { ResultsPanelProvider } from '../src/webviews/results/ResultsPanelProvider';
-import { ConnectionConfig, QueryConsoleRecord, QueryHistoryItem, QueryMemoryItem, QueryResultTab, SchemaCacheEntry, TablePerformanceAdviceRequest, TableStatsInfo, TableWorkloadSummary } from '../src/types';
+import { ConnectionConfig, DatabaseType, QueryConsoleRecord, QueryHistoryItem, QueryMemoryItem, QueryResultTab, SchemaCacheEntry, TablePerformanceAdviceRequest, TableStatsInfo, TableWorkloadSummary } from '../src/types';
 import { profileColumn } from '../src/services/dataProfileService';
 
 vi.mock('vscode', () => ({
@@ -68,7 +68,8 @@ vi.mock('vscode', () => ({
     constructor(public range: unknown, public message: string, public severity: number) {}
   },
   DiagnosticSeverity: {
-    Error: 0
+    Error: 0,
+    Warning: 1
   },
   EventEmitter: class {
     event = vi.fn();
@@ -1246,6 +1247,8 @@ describe('schema metadata cache', () => {
 });
 
 describe('SQL diagnostics', () => {
+  const sqlDatabaseTypes: Exclude<DatabaseType, 'redis'>[] = ['postgres', 'redshift', 'mysql', 'sqlite', 'sqlserver', 'oracle', 'snowflake'];
+
   it('does not treat FROM inside EXTRACT casts as a table reference', async () => {
     const local = connection({ id: 'local' });
     const service = new SqlDiagnosticsService(
@@ -1434,6 +1437,54 @@ from adjust_kpi_raw__keeper;`) as never, undefined, local);
     expect(diagnostics.map((diagnostic) => diagnostic.message)).toContain(
       'Table or view "missing_relation" does not exist in public.'
     );
+  });
+
+  it.each(sqlDatabaseTypes)('identifies metadata-only relation and column warnings for %s', async (databaseType) => {
+    const local = connection({ id: databaseType, type: databaseType });
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => false)
+      } as never,
+      {
+        getCachedForConnection: vi.fn(async () => schemaEntry({
+          connectionId: local.id,
+          tables: [{ schema: 'public', name: 'event_fact', type: 'table' }]
+        })),
+        getCachedColumns: vi.fn(async (_connection: ConnectionConfig, _schema: string, table: string) => (
+          table === 'event_fact'
+            ? [{ schema: 'public', table: 'event_fact', name: 'revenue', ordinal: 1, dataType: 'numeric', nullable: true }]
+            : undefined
+        )),
+        refreshDefaultSchemaInBackground: vi.fn(),
+        refreshSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+
+    const diagnostics = await service.getDiagnostics(sqlDocument(`select revenue, cost
+from public.event_fact;
+
+select *
+from missing_relation;`) as never, undefined, local);
+    const metadataDiagnostics = diagnostics.filter((diagnostic) => (
+      diagnostic.message === 'Table or view "missing_relation" does not exist in public.'
+      || diagnostic.message === 'Column "cost" does not exist on public.event_fact.'
+    ));
+
+    expect(metadataDiagnostics).toHaveLength(2);
+    expect(metadataDiagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        severity: vscode.DiagnosticSeverity.Warning,
+        source: 'QueryDeck metadata',
+        code: 'querydeck.metadata.missingColumn:public'
+      }),
+      expect.objectContaining({
+        severity: vscode.DiagnosticSeverity.Warning,
+        source: 'QueryDeck metadata',
+        code: 'querydeck.metadata.missingRelation:public'
+      })
+    ]));
   });
 
   it('flags an unqualified missing column on the column token for single-table queries', async () => {
