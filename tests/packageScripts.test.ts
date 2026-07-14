@@ -93,4 +93,16 @@ describe('package scripts', () => {
     expect(testIndex).toBeGreaterThan(-1);
     expect(buildIndex).toBeLessThan(testIndex);
   });
+
+  it('uses package.json as the only publish version', () => {
+    const workflow = readFileSync(join(root, '.github', 'workflows', 'publish-extension.yml'), 'utf8');
+
+    expect(workflow).toContain('workflow_dispatch:');
+    expect(workflow).toContain("require('./package.json').version");
+    expect(workflow).toContain('querydeck-${{ steps.package.outputs.version }}-vsix');
+    expect(workflow).not.toContain('inputs:');
+    expect(workflow).not.toContain('REQUESTED_VERSION');
+    expect(workflow).not.toContain('${{ inputs.version }}');
+    expect(workflow).not.toContain('Verify requested version');
+  });
 });
