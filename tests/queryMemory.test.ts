@@ -1499,6 +1499,58 @@ from missing_relation;`) as never, undefined, local);
     ]));
   });
 
+  it('keeps structural SQL diagnostics as errors', async () => {
+    const local = connection({ id: 'local' });
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => false)
+      } as never,
+      {
+        getCachedForConnection: vi.fn(),
+        getCachedColumns: vi.fn(),
+        refreshDefaultSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+
+    const diagnostics = await service.getDiagnostics(sqlDocument('select (1;') as never, undefined, local);
+    const diagnostic = diagnostics.find((item) => item.message === 'Missing closing parenthesis.');
+
+    expect(diagnostic?.severity).toBe(vscode.DiagnosticSeverity.Error);
+  });
+
+  it('keeps live database planner diagnostics as errors', async () => {
+    const local = connection({ id: 'local' });
+    const service = new SqlDiagnosticsService(
+      {
+        getPreferredConnection: vi.fn(() => local),
+        isConnected: vi.fn(() => true),
+        getDriver: vi.fn(() => ({
+          validateQuery: vi.fn(async () => ({
+            ok: false,
+            error: { message: 'Database planner rejected this query.' }
+          }))
+        }))
+      } as never,
+      {
+        getCachedForConnection: vi.fn(async () => schemaEntry({
+          connectionId: local.id,
+          tables: [{ schema: 'public', name: 'event_fact', type: 'table' }]
+        })),
+        getCachedColumns: vi.fn(),
+        refreshDefaultSchemaInBackground: vi.fn(),
+        refreshSchemaInBackground: vi.fn()
+      } as never,
+      new SqlSectionService()
+    );
+
+    const diagnostics = await service.getDiagnostics(sqlDocument('select * from public.event_fact;') as never, undefined, local);
+    const diagnostic = diagnostics.find((item) => item.message === 'Database planner rejected this query.');
+
+    expect(diagnostic?.severity).toBe(vscode.DiagnosticSeverity.Error);
+  });
+
   it('flags an unqualified missing column on the column token for single-table queries', async () => {
     const local = connection({ id: 'local' });
     const service = new SqlDiagnosticsService(
