@@ -105,4 +105,24 @@ describe('package scripts', () => {
     expect(workflow).not.toContain('${{ inputs.version }}');
     expect(workflow).not.toContain('Verify requested version');
   });
+
+  it('bumps and records the patch version before marketplace publishing', () => {
+    const workflow = readFileSync(join(root, '.github', 'workflows', 'publish-extension.yml'), 'utf8');
+    const bumpIndex = workflow.indexOf('npm version patch --no-git-tag-version');
+    const testIndex = workflow.indexOf('run: npm test');
+    const pushIndex = workflow.indexOf('git push origin HEAD:main');
+    const marketplaceIndex = workflow.indexOf('Publish to Visual Studio Marketplace');
+    const openVsxIndex = workflow.indexOf('Publish to Open VSX');
+
+    expect(workflow).toContain('contents: write');
+    expect(workflow).toContain('ref: main');
+    expect(bumpIndex).toBeGreaterThan(-1);
+    expect(testIndex).toBeGreaterThan(bumpIndex);
+    expect(pushIndex).toBeGreaterThan(testIndex);
+    expect(marketplaceIndex).toBeGreaterThan(pushIndex);
+    expect(openVsxIndex).toBeGreaterThan(marketplaceIndex);
+    expect(workflow).toContain('git add package.json package-lock.json');
+    expect(workflow).toContain('git commit -m "Bump version to $VERSION [skip ci]"');
+    expect(workflow).not.toMatch(/revert|reset --hard/i);
+  });
 });
