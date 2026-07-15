@@ -678,6 +678,7 @@ export interface SchemaCacheEntry {
   columns: Record<string, ColumnInfo[]>;
   indexes: Record<string, IndexInfo[]>;
   keys: Record<string, KeyInfo[]>;
+  foreignKeys: Record<string, ForeignKeyInfo[]>;
   loadedAt?: number;
   status: SchemaCacheStatus;
   errorMessage?: string;

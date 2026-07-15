@@ -22,7 +22,7 @@ interface DatabaseObjectSchemaContext {
   getCachedColumns(connection: ConnectionConfig, schemaName: string, tableName: string): Promise<ColumnInfo[] | undefined>;
   getColumns(connection: ConnectionConfig, schemaName: string, tableName: string): Promise<ColumnInfo[]>;
   getPrimaryKeys(connection: ConnectionConfig, schemaName: string, tableName: string): Promise<KeyInfo[]>;
-  getForeignKeys?(connection: ConnectionConfig, schemaName: string, tableName: string): Promise<ForeignKeyInfo[]>;
+  getForeignKeys(connection: ConnectionConfig, schemaName: string, tableName: string): Promise<ForeignKeyInfo[]>;
 }
 
 export async function resolveDatabaseObject(
@@ -40,32 +40,31 @@ export async function resolveDatabaseObject(
   const metadata = hasUsableMetadata(cached) ? cached : await schemaContext.loadSchema(connection, schemaName);
 
   if (reference.context === 'relation') {
-    const tables = metadata.tables.filter((item) => identifiersEqual(item.name, requestedName, connection.type));
-    const views = metadata.views.filter((item) => identifiersEqual(item.name, requestedName, connection.type));
-    if (tables.length + views.length !== 1) return undefined;
-    const relation = (tables[0] ?? views[0]);
+    const relations = preferExactMatches([
+      ...metadata.tables.map((item) => ({ item, kind: 'table' as const })),
+      ...metadata.views.map((item) => ({ item, kind: 'view' as const }))
+    ], requestedName, connection.type, (candidate) => candidate.item.name);
+    if (relations.length !== 1) return undefined;
+    const { item: relation, kind } = relations[0];
     const columns = await cachedOrEmpty(() => schemaContext.getCachedColumns(connection, relation.schema, relation.name), [] as ColumnInfo[])
       ?? await cachedOrEmpty(() => schemaContext.getColumns(connection, relation.schema, relation.name), [] as ColumnInfo[]);
-    if (tables[0]) {
+    if (kind === 'table') {
       const primaryKeys = await cachedOrEmpty(() => schemaContext.getPrimaryKeys(connection, relation.schema, relation.name), [] as KeyInfo[]);
-      const foreignKeys = schemaContext.getForeignKeys
-        ? await cachedOrEmpty(() => schemaContext.getForeignKeys!(connection, relation.schema, relation.name), [] as ForeignKeyInfo[])
-        : [];
+      const foreignKeys = await cachedOrEmpty(() => schemaContext.getForeignKeys(connection, relation.schema, relation.name), [] as ForeignKeyInfo[]);
       return { kind: 'table', schema: relation.schema, name: relation.name, columns, primaryKeys, foreignKeys };
     }
     return { kind: 'view', schema: relation.schema, name: relation.name, columns };
   }
 
   if (reference.context === 'trigger') {
-    const matches = metadata.triggers.filter((item) => identifiersEqual(item.name, requestedName, connection.type));
+    const matches = preferExactMatches(metadata.triggers, requestedName, connection.type, (item) => item.name);
     if (matches.length !== 1) return undefined;
     const trigger = matches[0];
     return { kind: 'trigger', schema: trigger.schema, name: trigger.name, table: trigger.table,
       timing: trigger.timing, events: trigger.events, orientation: trigger.orientation, enabled: trigger.enabled };
   }
 
-  const routines = [...metadata.functions, ...metadata.procedures]
-    .filter((item) => identifiersEqual(item.name, requestedName, connection.type))
+  const routines = preferExactMatches([...metadata.functions, ...metadata.procedures], requestedName, connection.type, (item) => item.name)
     .filter((item) => reference.argumentCount === undefined || routineArgumentCount(item) === reference.argumentCount);
   if (routines.length !== 1) return undefined;
   const routine = routines[0];
@@ -87,6 +86,11 @@ function identifiersEqual(actual: string, requested: string, type: ConnectionCon
   return actual.toLowerCase() === requested.toLowerCase();
 }
 
+function preferExactMatches<T>(items: T[], requested: string, type: ConnectionConfig['type'], nameOf: (item: T) => string): T[] {
+  const exact = items.filter((item) => nameOf(item) === requested);
+  return exact.length ? exact : items.filter((item) => identifiersEqual(nameOf(item), requested, type));
+}
+
 function routineArgumentCount(routine: RoutineInfo): number | undefined {
   if (routine.arguments) return routine.arguments.length;
   if (!routine.signature) return undefined;
@@ -94,7 +98,21 @@ function routineArgumentCount(routine: RoutineInfo): number | undefined {
   const close = routine.signature.lastIndexOf(')');
   if (open < 0 || close < open) return undefined;
   const body = routine.signature.slice(open + 1, close).trim();
-  return body ? body.split(',').length : 0;
+  if (!body) return 0;
+  let depth = 0;
+  let commas = 0;
+  let quote = '';
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index];
+    if (quote) {
+      if (char === quote && body[index + 1] === quote) index += 1;
+      else if (char === quote) quote = '';
+    } else if (char === "'" || char === '"' || char === '`') quote = char;
+    else if (char === '(' || char === '[' || char === '<') depth += 1;
+    else if (char === ')' || char === ']' || char === '>') depth = Math.max(0, depth - 1);
+    else if (char === ',' && depth === 0) commas += 1;
+  }
+  return commas + 1;
 }
 
 async function cachedOrEmpty<T>(load: () => Promise<T>, fallback: T): Promise<T> {
