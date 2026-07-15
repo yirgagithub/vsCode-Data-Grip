@@ -120,7 +120,7 @@ export function parseStoredSchemaCacheEntry(connection: ConnectionConfig, raw: s
   } catch {
     return undefined;
   }
-  if (stored.version !== SCHEMA_METADATA_CACHE_VERSION || stored.fingerprint !== connectionMetadataFingerprint(connection)) {
+  if (![1, SCHEMA_METADATA_CACHE_VERSION].includes(stored.version) || stored.fingerprint !== connectionMetadataFingerprint(connection)) {
     return undefined;
   }
   if (!stored.entry || stored.entry.connectionId !== connection.id) {
@@ -128,8 +128,10 @@ export function parseStoredSchemaCacheEntry(connection: ConnectionConfig, raw: s
   }
   return {
     ...stored,
+    version: SCHEMA_METADATA_CACHE_VERSION,
     entry: {
       ...stored.entry,
+      cacheVersion: SCHEMA_METADATA_CACHE_VERSION,
       functions: stored.entry.functions ?? [],
       procedures: stored.entry.procedures ?? [],
       triggers: stored.entry.triggers ?? []
