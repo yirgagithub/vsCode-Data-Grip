@@ -476,23 +476,27 @@ export class PostgresDriver implements DatabaseDriver {
       return this.getTableDDL(connectionId, object.schema, object.name);
     }
     const pool = this.requirePool(connectionId);
-    if (object.kind === 'view') {
-      const result = await pool.query(
+    try {
+      if (object.kind === 'view') {
+        const result = await pool.query(
         `select pg_get_viewdef(c.oid, true) as definition from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relname = $2 and c.relkind in ('v', 'm')`,
+        [object.schema, object.name]
+        );
+        return nativeDefinition(result.rows[0]?.definition);
+      }
+      if (object.kind === 'function' || object.kind === 'procedure') {
+        const identity = object.signature ?? `${object.schema}.${object.name}`;
+        const result = await pool.query('select pg_get_functiondef(to_regprocedure($1)) as definition', [identity]);
+        return nativeDefinition(result.rows[0]?.definition);
+      }
+      const result = await pool.query(
+        `select pg_get_triggerdef(t.oid, true) as definition from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and t.tgname = $2 and not t.tgisinternal`,
         [object.schema, object.name]
       );
       return nativeDefinition(result.rows[0]?.definition);
+    } catch (error) {
+      throw this.toQueryError(error);
     }
-    if (object.kind === 'function' || object.kind === 'procedure') {
-      const identity = object.signature ?? `${object.schema}.${object.name}`;
-      const result = await pool.query('select pg_get_functiondef(to_regprocedure($1)) as definition', [identity]);
-      return nativeDefinition(result.rows[0]?.definition);
-    }
-    const result = await pool.query(
-      `select pg_get_triggerdef(t.oid, true) as definition from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and t.tgname = $2 and not t.tgisinternal`,
-      [object.schema, object.name]
-    );
-    return nativeDefinition(result.rows[0]?.definition);
   }
 
   async getTableStats(connectionId: string, schema: string, table: string): Promise<TableStatsInfo> {

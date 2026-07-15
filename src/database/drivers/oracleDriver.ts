@@ -146,15 +146,21 @@ export class OracleDriver extends BasicDatabaseDriver {
     try {
       const result = object.kind === 'function' || object.kind === 'procedure' || object.kind === 'trigger'
         ? await connection.execute(
-          `select listagg(text, '') within group (order by line) as "definition" from all_source where owner = upper(:owner) and name = upper(:name) and type = :type`,
+          `select text as "text" from all_source where owner = upper(:owner) and name = upper(:name) and type = :type order by line`,
           [object.schema, object.name, type], { outFormat: oracle.OUT_FORMAT_OBJECT }
         )
         : await connection.execute(
           `select dbms_metadata.get_ddl(:type, upper(:name), upper(:owner)) as "definition" from dual`,
           [type, object.name, object.schema], { outFormat: oracle.OUT_FORMAT_OBJECT }
         );
+      if (object.kind === 'function' || object.kind === 'procedure' || object.kind === 'trigger') {
+        const text = (result.rows ?? []).map((row) => String(row.text ?? row.TEXT ?? '')).join('');
+        return nativeDefinition(text);
+      }
       const row = result.rows?.[0];
       return nativeDefinition(row?.definition ?? row?.DEFINITION);
+    } catch (error) {
+      throw toQueryError(error);
     } finally {
       await connection.close();
     }

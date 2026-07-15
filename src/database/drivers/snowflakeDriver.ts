@@ -147,11 +147,16 @@ export class SnowflakeDriver extends BasicDatabaseDriver {
   }
 
   override async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
+    if (object.kind === 'trigger') return undefined;
     const type = object.kind === 'procedure' ? 'PROCEDURE' : object.kind.toUpperCase();
     const name = object.signature ?? qualifiedName(object.schema, object.name);
     const escapedName = name.replace(/'/g, "''");
-    const rows = await this.query(connectionId, `select GET_DDL('${type}', '${escapedName}') as "definition"`);
-    return nativeDefinition(rows[0]?.definition ?? rows[0]?.DEFINITION);
+    try {
+      const rows = await this.query(connectionId, `select GET_DDL('${type}', '${escapedName}') as "definition"`);
+      return nativeDefinition(rows[0]?.definition ?? rows[0]?.DEFINITION);
+    } catch (error) {
+      throw toQueryError(error);
+    }
   }
 
   private async getRoutines(connectionId: string, schema: string, kind: 'FUNCTION' | 'PROCEDURE'): Promise<RoutineInfo[]> {

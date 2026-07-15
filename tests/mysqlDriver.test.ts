@@ -3,6 +3,7 @@ import { ConnectionConfigWithPassword } from '../src/types';
 
 const mysqlMock = vi.hoisted(() => ({
   failSsl: false,
+  failDefinition: false,
   queries: [] as Array<{ sql: unknown; params: unknown[] }>,
   pools: [] as Array<{
     config: { ssl?: unknown };
@@ -30,6 +31,7 @@ vi.mock('mysql2/promise', () => {
       if (mysqlMock.failSsl && this.config.ssl) {
         throw new Error('SSL connection error');
       }
+      if (mysqlMock.failDefinition && String(sql).startsWith('SHOW CREATE')) throw { message: 'catalog failed', code: 'ER_ACCESS', password: 'secret' };
       return respond(sql, this.config, params);
     });
 
@@ -52,6 +54,7 @@ import { MySQLDriver } from '../src/database/drivers/mysqlDriver';
 describe('MySQLDriver', () => {
   beforeEach(() => {
     mysqlMock.failSsl = false;
+    mysqlMock.failDefinition = false;
     mysqlMock.queries.length = 0;
     mysqlMock.pools.length = 0;
   });
@@ -105,6 +108,22 @@ describe('MySQLDriver', () => {
     expect(definition).toBe('CREATE VIEW `active_users` AS SELECT 1\n');
     expect(String(mysqlMock.queries.at(-1)?.sql)).toBe('SHOW CREATE VIEW `odd``db`.`active``users`');
   });
+
+  it('uses safely quoted native SHOW CREATE TRIGGER and returns its full statement verbatim', async () => {
+    const driver = new MySQLDriver();
+    await driver.connect(config());
+    await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'odd`db', name: 'trg`name' }))
+      .resolves.toBe('CREATE DEFINER=`root`@`%` TRIGGER `trg_name` BEFORE INSERT ON `t` FOR EACH ROW SET NEW.x = 1\n');
+    expect(String(mysqlMock.queries.at(-1)?.sql)).toBe('SHOW CREATE TRIGGER `odd``db`.`trg``name`');
+  });
+
+  it('sanitizes SHOW CREATE errors', async () => {
+    mysqlMock.failDefinition = true;
+    const driver = new MySQLDriver();
+    await driver.connect(config());
+    await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'public', name: 'v' }))
+      .rejects.toEqual({ message: 'catalog failed', code: 'ER_ACCESS', detail: undefined, hint: undefined, position: undefined, where: undefined });
+  });
 });
 
 function respond(sql: unknown, config: { ssl?: unknown }, _params: unknown[]) {
@@ -123,6 +142,9 @@ function respond(sql: unknown, config: { ssl?: unknown }, _params: unknown[]) {
   }
   if (text.startsWith('SHOW CREATE VIEW')) {
     return [[{ View: 'active_users', 'Create View': 'CREATE VIEW `active_users` AS SELECT 1\n' }], []];
+  }
+  if (text.startsWith('SHOW CREATE TRIGGER')) {
+    return [[{ Trigger: 'trg_name', 'SQL Original Statement': 'CREATE DEFINER=`root`@`%` TRIGGER `trg_name` BEFORE INSERT ON `t` FOR EACH ROW SET NEW.x = 1\n' }], []];
   }
   if (text.includes('show full processlist')) {
     return [[{ Id: 321, User: 'app', db: 'aph', Command: 'Query', Host: '127.0.0.1', State: 'running', Info: 'select 1' }], []];
