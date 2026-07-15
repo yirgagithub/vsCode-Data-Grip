@@ -31,6 +31,7 @@ vite.config.ts
 .vscode/**
 .claude/**
 .gstack/**
+.superpowers/**
 CLAUDE.md
 goa.txt
 goal*.txt
