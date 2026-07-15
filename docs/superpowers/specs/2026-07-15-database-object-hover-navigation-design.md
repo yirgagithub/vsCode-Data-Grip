@@ -26,7 +26,7 @@ The popup is intentionally compact. Indexes, row counts, and storage sizes are o
 
 ### Ctrl+click and Go to Definition
 
-Ctrl+click, F12, or **Go to Definition** on a resolved object reference opens a generated read-only SQL document containing the exact definition returned by that connection's database driver. For tables this is `CREATE TABLE`; for views, routines, and triggers it is the engine's corresponding creation or source definition. The document title identifies the connection, object type, and qualified object name. Repeating navigation for the same connection and object reuses the same virtual document URI while refreshing its content.
+Ctrl+click, F12, or **Go to Definition** on a resolved object reference opens a generated read-only SQL document containing an engine-native definition returned by that connection's database driver. Stored native creation text is preserved verbatim. Where an engine such as PostgreSQL or SQL Server does not retain original table creation text, only that engine's driver may generate `CREATE TABLE` from its catalogs using engine-specific syntax; this feature never uses the shared normalized cross-database DDL generator. PostgreSQL views use an engine-specific `CREATE VIEW` wrapper around the preserved `pg_get_viewdef` body. The document title identifies the connection, object type, and qualified object name. Repeating navigation for the same connection and object reuses the same virtual document URI while refreshing its content.
 
 The generated document is informational and cannot execute or modify the database.
 
@@ -59,7 +59,7 @@ Only the object identifier itself is interactive. For `sales.orders AS o`, `sale
 3. A schema-qualified identifier loads or reads that schema's metadata. An unqualified identifier uses the connection's configured/default schema.
 4. The identifier is matched against cached tables/views or driver-supplied routines/triggers using the database's existing identifier comparison rules.
 5. The hover provider formats the resolved object's metadata.
-6. The definition provider asks a generalized database-driver object-definition API for the exact definition and exposes it through a virtual read-only document provider. Existing `getTableDDL` behavior is preserved behind this generalized contract.
+6. The definition provider asks a generalized database-driver object-definition API for a native definition and exposes it through a virtual read-only document provider. Catalog-based generation, when unavoidable, stays inside the relevant engine driver and never delegates to shared normalized DDL code.
 
 The parser/resolver is independent of VS Code UI types so its behavior can be unit tested directly and reused by both providers.
 

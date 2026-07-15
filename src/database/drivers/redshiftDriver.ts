@@ -14,13 +14,9 @@ export class RedshiftDriver extends PostgresDriver {
         const result = await this.requirePool(connectionId).query('select definition from pg_views where schemaname = $1 and viewname = $2', [object.schema, object.name]);
         return nativeDefinition(result.rows[0]?.definition);
       }
-      if (object.kind === 'function' || object.kind === 'procedure') {
-        const result = await this.requirePool(connectionId).query(
-          `select p.prosrc as definition from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = $1 and p.proname = $2`,
-          [object.schema, object.name]
-        );
-        return nativeDefinition(result.rows[0]?.definition);
-      }
+      // Redshift exposes routine bodies in pg_proc, but not an unambiguous native
+      // CREATE statement. A body selected by name alone is unsafe for overloads.
+      if (object.kind === 'function' || object.kind === 'procedure') return undefined;
       return undefined;
     } catch (error) {
       throw toQueryError(error);
