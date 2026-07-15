@@ -1,5 +1,29 @@
 import { insertBatchSql } from '../../../services/sqlDialect';
-import { DatabaseType } from '../../../types';
+import { DatabaseType, QueryField } from '../../../types';
+
+type FieldFormat = Pick<QueryField, 'dataTypeId' | 'dataTypeName'>;
+
+export function formatFieldValue(value: unknown, field?: FieldFormat): string {
+  if (isDateOnlyField(field)) {
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return value;
+    }
+    if (value instanceof Date) {
+      return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+    }
+    if (typeof value === 'string') {
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) {
+        return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+      }
+    }
+  }
+  return formatValue(value);
+}
+
+function isDateOnlyField(field?: FieldFormat): boolean {
+  return field?.dataTypeId === 1082 || field?.dataTypeName?.trim().toLowerCase() === 'date';
+}
 
 export function formatValue(value: unknown): string {
   if (value === null || value === undefined) {
