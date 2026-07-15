@@ -54,7 +54,83 @@ const tableRefs: Record<Exclude<DatabaseType, 'redis'>, string> = {
   snowflake: '"app"."users"'
 };
 
+type Capability = 'supported' | 'unsupported';
+type ObjectCapability = { enumerate: Capability; define: Capability };
+type EngineObjectCapabilities = Record<DatabaseType, Record<'table' | 'view' | 'function' | 'procedure' | 'trigger', ObjectCapability>>;
+
+const engineObjectCapabilities: EngineObjectCapabilities = {
+  postgres: capabilityRow(true, true, true, true, true, true, true, true, true, true),
+  redshift: capabilityRow(true, false, true, true, true, true, true, true, true, false),
+  mysql: capabilityRow(true, true, true, true, true, true, true, true, true, true),
+  sqlite: capabilityRow(true, true, true, true, false, false, false, false, true, true),
+  sqlserver: capabilityRow(true, true, true, true, true, true, true, true, false, true),
+  oracle: capabilityRow(true, true, true, true, true, true, true, true, false, true),
+  redis: capabilityRow(false, false, false, false, false, false, false, false, false, false),
+  snowflake: capabilityRow(true, true, true, true, true, true, true, true, false, false)
+};
+
 describe('database engine functional matrix', () => {
+  it('documents enumeration and native-definition support for every database object kind', () => {
+    expect(engineObjectCapabilities).toEqual({
+      postgres: {
+        table: { enumerate: 'supported', define: 'supported' },
+        view: { enumerate: 'supported', define: 'supported' },
+        function: { enumerate: 'supported', define: 'supported' },
+        procedure: { enumerate: 'supported', define: 'supported' },
+        trigger: { enumerate: 'supported', define: 'supported' }
+      },
+      redshift: {
+        table: { enumerate: 'supported', define: 'unsupported' },
+        view: { enumerate: 'supported', define: 'supported' },
+        function: { enumerate: 'supported', define: 'supported' },
+        procedure: { enumerate: 'supported', define: 'supported' },
+        trigger: { enumerate: 'supported', define: 'unsupported' }
+      },
+      mysql: {
+        table: { enumerate: 'supported', define: 'supported' },
+        view: { enumerate: 'supported', define: 'supported' },
+        function: { enumerate: 'supported', define: 'supported' },
+        procedure: { enumerate: 'supported', define: 'supported' },
+        trigger: { enumerate: 'supported', define: 'supported' }
+      },
+      sqlite: {
+        table: { enumerate: 'supported', define: 'supported' },
+        view: { enumerate: 'supported', define: 'supported' },
+        function: { enumerate: 'unsupported', define: 'unsupported' },
+        procedure: { enumerate: 'unsupported', define: 'unsupported' },
+        trigger: { enumerate: 'supported', define: 'supported' }
+      },
+      sqlserver: {
+        table: { enumerate: 'supported', define: 'supported' },
+        view: { enumerate: 'supported', define: 'supported' },
+        function: { enumerate: 'supported', define: 'supported' },
+        procedure: { enumerate: 'supported', define: 'supported' },
+        trigger: { enumerate: 'unsupported', define: 'supported' }
+      },
+      oracle: {
+        table: { enumerate: 'supported', define: 'supported' },
+        view: { enumerate: 'supported', define: 'supported' },
+        function: { enumerate: 'supported', define: 'supported' },
+        procedure: { enumerate: 'supported', define: 'supported' },
+        trigger: { enumerate: 'unsupported', define: 'supported' }
+      },
+      redis: {
+        table: { enumerate: 'unsupported', define: 'unsupported' },
+        view: { enumerate: 'unsupported', define: 'unsupported' },
+        function: { enumerate: 'unsupported', define: 'unsupported' },
+        procedure: { enumerate: 'unsupported', define: 'unsupported' },
+        trigger: { enumerate: 'unsupported', define: 'unsupported' }
+      },
+      snowflake: {
+        table: { enumerate: 'supported', define: 'supported' },
+        view: { enumerate: 'supported', define: 'supported' },
+        function: { enumerate: 'supported', define: 'supported' },
+        procedure: { enumerate: 'supported', define: 'supported' },
+        trigger: { enumerate: 'unsupported', define: 'unsupported' }
+      }
+    });
+  });
+
   it('has connection defaults and registered drivers for every supported engine', () => {
     expect(Object.keys(DEFAULTS_BY_DATABASE_TYPE).sort()).toEqual([...supportedEngines].sort());
 
@@ -532,4 +608,26 @@ function expectExplicitSql(sql: string): void {
   expect(sql).not.toMatch(/\bundefined\b/i);
   expect(sql).not.toMatch(/\bNaN\b/i);
   expect(sql).not.toContain('[object Object]');
+}
+
+function capabilityRow(
+  tableEnumerate: boolean,
+  tableDefine: boolean,
+  viewEnumerate: boolean,
+  viewDefine: boolean,
+  functionEnumerate: boolean,
+  functionDefine: boolean,
+  procedureEnumerate: boolean,
+  procedureDefine: boolean,
+  triggerEnumerate: boolean,
+  triggerDefine: boolean
+): EngineObjectCapabilities[DatabaseType] {
+  const state = (value: boolean): Capability => value ? 'supported' : 'unsupported';
+  return {
+    table: { enumerate: state(tableEnumerate), define: state(tableDefine) },
+    view: { enumerate: state(viewEnumerate), define: state(viewDefine) },
+    function: { enumerate: state(functionEnumerate), define: state(functionDefine) },
+    procedure: { enumerate: state(procedureEnumerate), define: state(procedureDefine) },
+    trigger: { enumerate: state(triggerEnumerate), define: state(triggerDefine) }
+  };
 }

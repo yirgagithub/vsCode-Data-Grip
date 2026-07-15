@@ -1,5 +1,5 @@
 import { Database } from 'sqlite3';
-import { ConnectionConfigWithPassword, DbConnection, ExecuteQueryParams, ColumnInfo, DatabaseObjectIdentity, SchemaInfo, TableInfo, QueryExecutionResult, TablePreviewOptions, ViewInfo, IndexInfo, KeyInfo, ForeignKeyInfo } from '../../types';
+import { ConnectionConfigWithPassword, DbConnection, ExecuteQueryParams, ColumnInfo, DatabaseObjectIdentity, SchemaInfo, TableInfo, QueryExecutionResult, TablePreviewOptions, ViewInfo, IndexInfo, KeyInfo, ForeignKeyInfo, TriggerInfo } from '../../types';
 import { qualifiedName, quoteIdentifier } from '../../utils/identifiers';
 import { loadBundledRuntime } from '../../runtime/runtimeLoader';
 import { BasicDatabaseDriver, clientLimit, emptyExecutionResult, executionResultFromRows, numberFromDb, optionalString, safeFilterClause, toQueryError } from './driverUtils';
@@ -62,6 +62,11 @@ export class SQLiteDriver extends BasicDatabaseDriver {
   override async getViews(connectionId: string, schema: string): Promise<ViewInfo[]> {
     const rows = await all(this.requireDatabase(connectionId), `select name from ${quoteIdentifier(schema)}.sqlite_master where type = 'view' order by name`);
     return rows.map((row) => ({ schema, name: String(row.name), type: 'view' }));
+  }
+
+  override async getTriggers(connectionId: string, schema: string): Promise<TriggerInfo[]> {
+    const rows = await all(this.requireDatabase(connectionId), `select name, tbl_name as "table" from ${quoteIdentifier(schema)}.sqlite_master where type = 'trigger' order by tbl_name, name`);
+    return rows.map((row) => ({ schema, table: String(row.table), name: String(row.name) }));
   }
 
   async getColumns(connectionId: string, schema: string, table: string): Promise<ColumnInfo[]> {
