@@ -2,24 +2,29 @@ import { PostgresDriver } from './postgresDriver';
 import { ActiveSessionInfo, ColumnInfo, ConnectionConfigWithPassword, DatabaseObjectIdentity, ExecuteQueryParams, ExplainQueryOptions, QueryPlanResult, SchemaInfo, TableInfo, TableStatsInfo, ViewInfo } from '../../types';
 import { textExplainPlan } from '../../services/queryPlanService';
 import { qualifiedName } from '../../utils/identifiers';
+import { toQueryError } from './driverUtils';
 
 export class RedshiftDriver extends PostgresDriver {
   override readonly id = 'redshift' as const;
   override readonly displayName = 'Amazon Redshift';
 
   override async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
-    if (object.kind === 'view') {
-      const result = await this.requirePool(connectionId).query('select definition from pg_views where schemaname = $1 and viewname = $2', [object.schema, object.name]);
-      return nativeDefinition(result.rows[0]?.definition);
+    try {
+      if (object.kind === 'view') {
+        const result = await this.requirePool(connectionId).query('select definition from pg_views where schemaname = $1 and viewname = $2', [object.schema, object.name]);
+        return nativeDefinition(result.rows[0]?.definition);
+      }
+      if (object.kind === 'function' || object.kind === 'procedure') {
+        const result = await this.requirePool(connectionId).query(
+          `select p.prosrc as definition from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = $1 and p.proname = $2`,
+          [object.schema, object.name]
+        );
+        return nativeDefinition(result.rows[0]?.definition);
+      }
+      return undefined;
+    } catch (error) {
+      throw toQueryError(error);
     }
-    if (object.kind === 'function' || object.kind === 'procedure') {
-      const result = await this.requirePool(connectionId).query(
-        `select p.prosrc as definition from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = $1 and p.proname = $2`,
-        [object.schema, object.name]
-      );
-      return nativeDefinition(result.rows[0]?.definition);
-    }
-    return undefined;
   }
 
   override async getSchemas(connectionId: string): Promise<SchemaInfo[]> {

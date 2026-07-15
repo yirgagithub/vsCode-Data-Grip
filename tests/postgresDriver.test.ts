@@ -3,6 +3,7 @@ import { ColumnInfo, ConnectionConfigWithPassword } from '../src/types';
 
 const pgMock = vi.hoisted(() => ({
   failSsl: false,
+  failDefinition: false,
   queries: [] as Array<{ sql: unknown; params: unknown[] }>,
   pools: [] as Array<{
     config: { ssl?: unknown };
@@ -17,6 +18,9 @@ vi.mock('pg', () => {
       pgMock.queries.push({ sql, params });
       if (pgMock.failSsl && this.config.ssl) {
         throw new Error('The server does not support SSL connections');
+      }
+      if (pgMock.failDefinition && String(sql).includes('pg_get_')) {
+        throw { message: 'catalog failed', code: 'XX001', password: 'secret' };
       }
       return respond(sql);
     });
@@ -44,6 +48,7 @@ import { RedshiftDriver } from '../src/database/drivers/redshiftDriver';
 describe('PostgresDriver SSL mode', () => {
   beforeEach(() => {
     pgMock.failSsl = false;
+    pgMock.failDefinition = false;
     pgMock.queries.length = 0;
     pgMock.pools.length = 0;
   });
@@ -92,6 +97,15 @@ describe('PostgresDriver DDL generation', () => {
     await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'public', name: 'users_trg' })).resolves.toBe('CREATE TRIGGER users_trg\n');
     expect(pgMock.queries.some((entry) => String(entry.sql).includes('pg_get_functiondef'))).toBe(true);
     expect(pgMock.queries.some((entry) => String(entry.sql).includes('pg_get_triggerdef'))).toBe(true);
+  });
+
+  it('sanitizes native catalog errors', async () => {
+    pgMock.failDefinition = true;
+    const driver = new PostgresDriver();
+    await driver.connect(config());
+    await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'public', name: 'v' }))
+      .rejects.toEqual({ message: 'catalog failed', code: 'XX001', detail: undefined, hint: undefined, position: undefined, where: undefined });
+    pgMock.failDefinition = false;
   });
   it('quotes column identifiers with the shared identifier rules', async () => {
     class DdlDriver extends PostgresDriver {

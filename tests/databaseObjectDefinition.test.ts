@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BasicDatabaseDriver } from '../src/database/drivers/driverUtils';
+import { RedisDriver } from '../src/database/drivers/redisDriver';
 import { ColumnInfo, ConnectionConfigWithPassword, DbConnection, ExecuteQueryParams, QueryExecutionResult, SchemaInfo, TableInfo, TablePreviewOptions } from '../src/types';
 
 class ContractDriver extends BasicDatabaseDriver {
@@ -27,5 +28,9 @@ describe('database object definition contract', () => {
     const driver = new ContractDriver();
     await expect(driver.getObjectDefinition('local', { kind, schema: 'main', name: 'thing' }))
       .resolves.toBeUndefined();
+  });
+
+  it.each(['table', 'view', 'function', 'procedure', 'trigger'] as const)('keeps Redis %s definitions unsupported', async (kind) => {
+    await expect(new RedisDriver().getObjectDefinition('missing', { kind, schema: 'db0', name: 'keys' })).resolves.toBeUndefined();
   });
 });

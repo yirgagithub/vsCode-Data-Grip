@@ -143,9 +143,13 @@ export class SqlServerDriver extends BasicDatabaseDriver {
 
   override async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
     if (object.kind === 'table') return this.getTableDDL(connectionId, object.schema, object.name);
-    const qualified = `${object.schema}.${object.name}`.replace(/'/g, "''");
-    const rows = await this.query(connectionId, `select OBJECT_DEFINITION(OBJECT_ID(N'${qualified}')) as definition`);
-    return nativeDefinition(rows[0]?.definition);
+    try {
+      const qualified = qualifiedSqlName(this.id, object.schema, object.name).replace(/'/g, "''");
+      const rows = await this.query(connectionId, `select OBJECT_DEFINITION(OBJECT_ID(N'${qualified}')) as definition`);
+      return nativeDefinition(rows[0]?.definition);
+    } catch (error) {
+      throw toQueryError(error);
+    }
   }
 
   private async getRoutines(connectionId: string, schema: string, type: 'FUNCTION' | 'PROCEDURE'): Promise<RoutineInfo[]> {

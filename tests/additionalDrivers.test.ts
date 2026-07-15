@@ -2,7 +2,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { ConnectionConfigWithPassword } from '../src/types';
 
 const mssqlMock = vi.hoisted(() => ({
-  queries: [] as string[]
+  queries: [] as string[],
+  failDefinition: false
 }));
 
 vi.mock('mssql', () => {
@@ -13,6 +14,7 @@ vi.mock('mssql', () => {
     request = () => ({
       query: vi.fn(async (sql: string) => {
         mssqlMock.queries.push(sql);
+        if (mssqlMock.failDefinition && sql.includes('OBJECT_DEFINITION')) throw { message: 'catalog failed', code: 'MSSQL', password: 'secret' };
         if (sql.includes('@@version')) {
           return { recordset: [{ version: 'Microsoft SQL Server 2022' }], rowsAffected: [0] };
         }
@@ -39,13 +41,15 @@ vi.mock('mssql', () => {
 });
 
 const oracleMock = vi.hoisted(() => ({
-  queries: [] as string[]
+  queries: [] as string[],
+  failDefinition: false
 }));
 
 vi.mock('oracledb', () => {
   const connection = {
     execute: vi.fn(async (sql: string) => {
       oracleMock.queries.push(sql);
+      if (oracleMock.failDefinition && (sql.includes('all_source') || sql.includes('dbms_metadata'))) throw { message: 'catalog failed', code: 'ORA-00942', password: 'secret' };
       if (sql.includes('v$version')) {
         return { rows: [{ VERSION: 'Oracle Database 23ai' }], metaData: [{ name: 'VERSION', dbTypeName: 'VARCHAR2' }] };
       }
@@ -59,7 +63,7 @@ vi.mock('oracledb', () => {
         };
       }
       if (sql.includes('all_source')) {
-        return { rows: [{ definition: 'PROCEDURE P AS\nBEGIN NULL; END;\n' }], metaData: [] };
+        return { rows: [{ TEXT: 'PROCEDURE P AS\n' }, { TEXT: 'BEGIN\n' }, { TEXT: `${'x'.repeat(5000)}\n` }, { TEXT: 'END;\n' }], metaData: [] };
       }
       if (sql.includes('dbms_metadata.get_ddl')) {
         return { rows: [{ definition: 'CREATE VIEW "HR"."V" AS SELECT 1\n' }], metaData: [] };
@@ -120,7 +124,8 @@ vi.mock('redis', () => {
 });
 
 const snowflakeMock = vi.hoisted(() => ({
-  queries: [] as string[]
+  queries: [] as string[],
+  failDefinition: false
 }));
 
 vi.mock('snowflake-sdk', () => {
@@ -134,6 +139,10 @@ vi.mock('snowflake-sdk', () => {
     destroy: vi.fn((callback: (error: unknown, connection: unknown) => void) => callback(undefined, connection)),
     execute: vi.fn((options: { sqlText: string; complete?: (error: unknown, statement: typeof statement, rows?: Record<string, unknown>[]) => void }) => {
       snowflakeMock.queries.push(options.sqlText);
+      if (snowflakeMock.failDefinition && options.sqlText.includes('GET_DDL')) {
+        options.complete?.({ message: 'catalog failed', code: 'SF001', password: 'secret' }, statement);
+        return statement;
+      }
       if (options.sqlText.includes('information_schema.columns')) {
         options.complete?.(undefined, statement, [
           { schema: 'PUBLIC', table: 'USERS', name: 'ID', ordinal: 1, dataType: 'NUMBER', nullable: 'NO', defaultValue: null }
@@ -161,9 +170,12 @@ import { SnowflakeDriver } from '../src/database/drivers/snowflakeDriver';
 describe('additional database drivers', () => {
   beforeEach(() => {
     mssqlMock.queries.length = 0;
+    mssqlMock.failDefinition = false;
     oracleMock.queries.length = 0;
+    oracleMock.failDefinition = false;
     redisMock.commands.length = 0;
     snowflakeMock.queries.length = 0;
+    snowflakeMock.failDefinition = false;
   });
 
   it('executes and introspects SQLite databases', async () => {
@@ -206,6 +218,8 @@ describe('additional database drivers', () => {
     expect(previewSql).toContain('order by [name] asc');
     expect(previewSql).not.toContain('undefined');
     await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'dbo', name: 'active_users' })).resolves.toBe('CREATE VIEW [dbo].[active_users] AS\nSELECT 1\n');
+    await driver.getObjectDefinition('local', { kind: 'view', schema: 'odd.schema', name: 'na]me' });
+    expect(mssqlMock.queries.at(-1)).toContain("OBJECT_ID(N'[odd.schema].[na]]me]')");
   });
 
   it('normalizes Oracle metadata into DDL', async () => {
@@ -223,7 +237,8 @@ describe('additional database drivers', () => {
     expect(previewSql).toContain('offset 0 rows fetch next 11 rows only');
     expect(previewSql).not.toContain('undefined');
     await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'HR', name: 'V' })).resolves.toBe('CREATE VIEW "HR"."V" AS SELECT 1\n');
-    await expect(driver.getObjectDefinition('local', { kind: 'procedure', schema: 'HR', name: 'P' })).resolves.toBe('PROCEDURE P AS\nBEGIN NULL; END;\n');
+    await expect(driver.getObjectDefinition('local', { kind: 'procedure', schema: 'HR', name: 'P' })).resolves.toBe(`PROCEDURE P AS\nBEGIN\n${'x'.repeat(5000)}\nEND;\n`);
+    expect(oracleMock.queries.at(-1)).toContain('order by line');
   });
 
   it('runs Redis commands and previews key-type views', async () => {
@@ -263,6 +278,24 @@ describe('additional database drivers', () => {
     expect(previewSql).toContain('limit 11');
     expect(previewSql).not.toContain('undefined');
     await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'PUBLIC', name: 'V' })).resolves.toBe('CREATE OR REPLACE VIEW "PUBLIC"."V" AS SELECT 1\n');
+    await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'PUBLIC', name: 'T' })).resolves.toBeUndefined();
+  });
+
+  it('sanitizes direct catalog failures', async () => {
+    const sqlServer = new SqlServerDriver();
+    await sqlServer.connect(config({ type: 'sqlserver', port: 1433, database: 'master' }));
+    mssqlMock.failDefinition = true;
+    await expect(sqlServer.getObjectDefinition('local', { kind: 'view', schema: 'dbo', name: 'v' })).rejects.toEqual(expect.objectContaining({ message: 'catalog failed', code: 'MSSQL' }));
+
+    const oracle = new OracleDriver();
+    await oracle.connect(config({ type: 'oracle', port: 1521, database: 'ORCLPDB1' }));
+    oracleMock.failDefinition = true;
+    await expect(oracle.getObjectDefinition('local', { kind: 'view', schema: 'HR', name: 'V' })).rejects.toEqual(expect.objectContaining({ message: 'catalog failed', code: 'ORA-00942' }));
+
+    const snowflake = new SnowflakeDriver();
+    await snowflake.connect(config({ type: 'snowflake', host: 'acme.snowflakecomputing.com', port: 443, database: 'DB' }));
+    snowflakeMock.failDefinition = true;
+    await expect(snowflake.getObjectDefinition('local', { kind: 'view', schema: 'PUBLIC', name: 'V' })).rejects.toEqual(expect.objectContaining({ message: 'catalog failed', code: 'SF001' }));
   });
 });
 
