@@ -1,0 +1,54 @@
+import { describe, expect, it, vi } from 'vitest';
+import { connectionMetadataFingerprint, parseStoredSchemaCacheEntry, SCHEMA_METADATA_CACHE_VERSION, serializeSchemaCacheEntry } from '../src/services/schemaMetadataCacheStore';
+import type { ConnectionConfig, SchemaCacheEntry } from '../src/types';
+
+vi.mock('vscode', () => ({
+  Uri: { joinPath: vi.fn() },
+  workspace: { fs: {} },
+  FileSystemError: class extends Error {}
+}));
+
+const connection: ConnectionConfig = {
+  id: 'local', name: 'Local', type: 'postgres', host: 'localhost', port: 5432,
+  database: 'app', username: 'postgres', sslMode: 'prefer', color: 'green', defaultSchema: 'public'
+};
+
+describe('schema metadata cache store object metadata', () => {
+  it('serializes routine and trigger metadata in the versioned snapshot', () => {
+    const entry = schemaEntry({
+      functions: [{ schema: 'public', name: 'lookup', kind: 'function', signature: 'lookup(integer)', arguments: ['integer'] }],
+      procedures: [{ schema: 'public', name: 'rebuild', kind: 'procedure' }],
+      triggers: [{ schema: 'public', table: 'users', name: 'audit_users' }]
+    });
+
+    const parsed = parseStoredSchemaCacheEntry(connection, serializeSchemaCacheEntry(connection, entry));
+
+    expect(parsed?.entry.functions).toEqual(entry.functions);
+    expect(parsed?.entry.procedures).toEqual(entry.procedures);
+    expect(parsed?.entry.triggers).toEqual(entry.triggers);
+  });
+
+  it('hydrates snapshots without routine and trigger fields using empty arrays', () => {
+    const legacyEntry = schemaEntry({}) as Partial<SchemaCacheEntry>;
+    delete legacyEntry.functions;
+    delete legacyEntry.procedures;
+    delete legacyEntry.triggers;
+    const raw = JSON.stringify({
+      version: SCHEMA_METADATA_CACHE_VERSION,
+      fingerprint: connectionMetadataFingerprint(connection),
+      savedAt: Date.now(),
+      entry: legacyEntry
+    });
+
+    expect(parseStoredSchemaCacheEntry(connection, raw)?.entry).toEqual(expect.objectContaining({
+      functions: [], procedures: [], triggers: []
+    }));
+  });
+});
+
+function schemaEntry(overrides: Partial<SchemaCacheEntry>): SchemaCacheEntry {
+  return {
+    connectionId: 'local', schemaName: 'public', schemas: [{ name: 'public' }], tables: [], views: [],
+    functions: [], procedures: [], triggers: [], columns: {}, indexes: {}, keys: {}, status: 'ready', ...overrides
+  };
+}
