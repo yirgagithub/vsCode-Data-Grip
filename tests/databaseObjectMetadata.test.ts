@@ -56,6 +56,14 @@ describe('resolveDatabaseObject', () => {
     expect(result).toEqual(expect.objectContaining({ kind: 'function', signature: 'price(numeric(10,2))' }));
   });
 
+  it('falls back to a unique routine name when argument metadata is unavailable', async () => {
+    const context = schemaContext(entry({ functions: [
+      { schema: 'public', name: 'legacy_lookup', kind: 'function', returnType: 'text' }
+    ] }));
+    const result = await resolveDatabaseObject({ ...reference(['legacy_lookup'], 'routine'), argumentCount: 2 }, connection, context as never);
+    expect(result).toEqual(expect.objectContaining({ kind: 'function', name: 'legacy_lookup' }));
+  });
+
   it('prefers one exact name over case-folded variants', async () => {
     const context = schemaContext(entry({ tables: [
       { schema: 'public', name: 'users', type: 'table' },
@@ -90,6 +98,25 @@ describe('resolveDatabaseObject', () => {
 
     expect(result).toEqual(expect.objectContaining({ kind: 'table', name: 'users' }));
     expect(context.loadSchema).not.toHaveBeenCalled();
+  });
+
+  it('models unavailable metadata distinctly from a missing object', async () => {
+    const context = schemaContext(entry({ status: 'error', errorMessage: 'Connection is not active.' }));
+    const result = await resolveDatabaseObject(reference(['users'], 'relation'), connection, context as never);
+    expect(result).toEqual({ kind: 'metadata-unavailable', schema: 'public' });
+  });
+
+  it('fetches primary and foreign keys concurrently', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started = 0;
+    const context = schemaContext(entry({ tables: [{ schema: 'public', name: 'users', type: 'table' }] }));
+    context.getPrimaryKeys.mockImplementation(async () => { started += 1; await gate; return []; });
+    context.getForeignKeys.mockImplementation(async () => { started += 1; await gate; return []; });
+    const resolving = resolveDatabaseObject(reference(['users'], 'relation'), connection, context as never);
+    await vi.waitFor(() => expect(started).toBe(2));
+    release();
+    await resolving;
   });
 
   it('returns undefined for aliases, built-ins, Redis, and missing objects', async () => {

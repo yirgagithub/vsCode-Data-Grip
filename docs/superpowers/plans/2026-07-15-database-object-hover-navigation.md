@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Support tables, views, functions, stored procedures, and triggers on SQL connections; exclude Redis.
-- Retrieve and display each engine's native object definition verbatim; never normalize, translate, or synthesize a cross-database DDL format.
+- Use stored native definition text verbatim whenever the engine exposes it. Where original table creation text is unavailable, generate only inside that engine's driver from its catalog with engine-specific syntax. Never use shared normalized cross-database `createTableSql` for this feature.
 - Passive hover never emits notifications or guesses ambiguous objects.
 - Generated definition documents are read-only and never execute SQL.
 - Keep hover compact; indexes, row counts, and storage sizes remain out of scope.
@@ -113,7 +113,7 @@ expect(findSqlObjectReference('with orders as (select 1) select * from orders', 
 
 **Interfaces:**
 - Produces: `getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined>`.
-- Preserves: `getTableDDL(...)` for existing callers, delegated by the table branch.
+- Preserves: `getTableDDL(...)` for existing callers, while object-definition table handling remains engine-owned and does not delegate to shared normalized DDL.
 
 - [ ] **Step 1: Add failing contract tests** with fake drivers for every object kind and engine capability, requiring undefined for unsupported definitions and sanitized thrown errors.
 - [ ] **Step 2: Run `npx vitest run tests/databaseObjectDefinition.test.ts tests/postgresDriver.test.ts tests/mysqlDriver.test.ts tests/additionalDrivers.test.ts`** and verify interface/query failures.

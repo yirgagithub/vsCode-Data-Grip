@@ -36,6 +36,11 @@ export class DatabaseObjectLanguageProviders implements vscode.HoverProvider, vs
       if (token.isCancellationRequested || !object) return undefined;
       const markdown = this.dependencies.renderHover(object);
       if (token.isCancellationRequested) return undefined;
+      if (object.kind === 'metadata-unavailable') {
+        const trusted = new vscode.MarkdownString(markdown);
+        trusted.isTrusted = { enabledCommands: ['querydeck.refreshDatabaseMetadata'] };
+        return new vscode.Hover(trusted, this.range(document, context.reference));
+      }
       return new vscode.Hover(markdown, this.range(document, context.reference));
     } catch {
       return undefined;
@@ -49,6 +54,10 @@ export class DatabaseObjectLanguageProviders implements vscode.HoverProvider, vs
     try {
       const object = await this.dependencies.resolveObject(context.reference, context.connection);
       if (token.isCancellationRequested || !object) return undefined;
+      if (object.kind === 'metadata-unavailable') {
+        this.dependencies.notify('Database metadata is unavailable. Refresh database metadata and try again.');
+        return undefined;
+      }
       const identity = databaseObjectIdentity(object);
       const definition = await this.dependencies.getDefinition(context.connection.id, identity);
       if (token.isCancellationRequested) return undefined;
@@ -131,7 +140,7 @@ function sanitizeDefinitionBasename(value: string): string {
   return sanitized || 'database-object';
 }
 
-function databaseObjectIdentity(object: ResolvedDatabaseObject): DatabaseObjectIdentity {
+function databaseObjectIdentity(object: Exclude<ResolvedDatabaseObject, { kind: 'metadata-unavailable' }>): DatabaseObjectIdentity {
   return {
     kind: object.kind,
     schema: object.schema,

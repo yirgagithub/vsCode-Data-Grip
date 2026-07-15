@@ -10,6 +10,7 @@ import type {
 } from '../types';
 
 export type ResolvedDatabaseObject =
+  | { kind: 'metadata-unavailable'; schema: string }
   | { kind: 'table'; schema: string; name: string; columns: ColumnInfo[]; primaryKeys: KeyInfo[]; foreignKeys: ForeignKeyInfo[] }
   | { kind: 'view'; schema: string; name: string; columns: ColumnInfo[] }
   | ({ kind: 'function'; schema: string; name: string } & Pick<RoutineInfo, 'signature' | 'arguments' | 'returnType' | 'language' | 'comment'>)
@@ -38,6 +39,7 @@ export async function resolveDatabaseObject(
   const requestedName = reference.parts[reference.parts.length - 1];
   const cached = await schemaContext.getCachedForConnection(connection, schemaName);
   const metadata = hasUsableMetadata(cached) ? cached : await schemaContext.loadSchema(connection, schemaName);
+  if (!hasUsableMetadata(metadata)) return { kind: 'metadata-unavailable', schema: schemaName };
 
   if (reference.context === 'relation') {
     const relations = preferExactMatches([
@@ -49,8 +51,10 @@ export async function resolveDatabaseObject(
     const columns = await cachedOrEmpty(() => schemaContext.getCachedColumns(connection, relation.schema, relation.name), [] as ColumnInfo[])
       ?? await cachedOrEmpty(() => schemaContext.getColumns(connection, relation.schema, relation.name), [] as ColumnInfo[]);
     if (kind === 'table') {
-      const primaryKeys = await cachedOrEmpty(() => schemaContext.getPrimaryKeys(connection, relation.schema, relation.name), [] as KeyInfo[]);
-      const foreignKeys = await cachedOrEmpty(() => schemaContext.getForeignKeys(connection, relation.schema, relation.name), [] as ForeignKeyInfo[]);
+      const [primaryKeys, foreignKeys] = await Promise.all([
+        cachedOrEmpty(() => schemaContext.getPrimaryKeys(connection, relation.schema, relation.name), [] as KeyInfo[]),
+        cachedOrEmpty(() => schemaContext.getForeignKeys(connection, relation.schema, relation.name), [] as ForeignKeyInfo[])
+      ]);
       return { kind: 'table', schema: relation.schema, name: relation.name, columns, primaryKeys, foreignKeys };
     }
     return { kind: 'view', schema: relation.schema, name: relation.name, columns };
@@ -64,8 +68,10 @@ export async function resolveDatabaseObject(
       timing: trigger.timing, events: trigger.events, orientation: trigger.orientation, enabled: trigger.enabled };
   }
 
-  const routines = preferExactMatches([...metadata.functions, ...metadata.procedures], requestedName, connection.type, (item) => item.name)
-    .filter((item) => reference.argumentCount === undefined || routineArgumentCount(item) === reference.argumentCount);
+  const namedRoutines = preferExactMatches([...metadata.functions, ...metadata.procedures], requestedName, connection.type, (item) => item.name);
+  const countMatches = namedRoutines.filter((item) => reference.argumentCount === undefined || routineArgumentCount(item) === reference.argumentCount);
+  const routines = countMatches.length > 0 ? countMatches
+    : namedRoutines.length === 1 && routineArgumentCount(namedRoutines[0]) === undefined ? namedRoutines : [];
   if (routines.length !== 1) return undefined;
   const routine = routines[0];
   if (routine.kind === 'function') {

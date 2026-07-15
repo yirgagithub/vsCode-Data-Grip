@@ -557,13 +557,15 @@ export class MySQLDriver implements DatabaseDriver {
 
   private async getRoutines(connectionId: string, schema: string, type: 'FUNCTION' | 'PROCEDURE'): Promise<RoutineInfo[]> {
     const [rows] = await this.requirePool(connectionId).query<RowDataPacket[]>(
-      `select routine_schema as \`schema\`,
-              routine_name as name,
-              routine_type as kind,
-              dtd_identifier as "returnType",
-              security_type as language,
-              routine_comment as comment
-       from information_schema.routines
+      `select r.routine_schema as \`schema\`,
+              r.routine_name as name,
+              r.routine_type as kind,
+              r.dtd_identifier as "returnType",
+              r.security_type as language,
+              r.routine_comment as comment,
+              concat(r.routine_schema, '.', r.routine_name, '(', coalesce((select group_concat(p.dtd_identifier order by p.ordinal_position separator ', ') from information_schema.parameters p where p.specific_schema = r.specific_schema and p.specific_name = r.specific_name and p.ordinal_position > 0), ''), ')') as signature,
+              (select group_concat(p.dtd_identifier order by p.ordinal_position separator '\\x1f') from information_schema.parameters p where p.specific_schema = r.specific_schema and p.specific_name = r.specific_name and p.ordinal_position > 0) as arguments
+       from information_schema.routines r
        where routine_schema = ? and routine_type = ?
        order by routine_name`,
       [schema, type]
@@ -574,7 +576,9 @@ export class MySQLDriver implements DatabaseDriver {
       kind: optionalString(row.kind)?.toLowerCase() === 'procedure' ? 'procedure' : 'function',
       returnType: optionalString(row.returnType),
       language: optionalString(row.language),
-      comment: optionalString(row.comment)
+      comment: optionalString(row.comment),
+      signature: optionalString(row.signature),
+      arguments: optionalString(row.arguments)?.split('\\x1f').filter(Boolean)
     }));
   }
 

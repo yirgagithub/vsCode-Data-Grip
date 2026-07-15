@@ -121,9 +121,7 @@ export abstract class BasicDatabaseDriver implements DatabaseDriver {
   }
 
   async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
-    return object.kind === 'table'
-      ? this.getTableDDL(connectionId, object.schema, object.name)
-      : undefined;
+    return undefined;
   }
 
   async getTableStats(_connectionId: string, schema: string, table: string): Promise<TableStatsInfo> {
