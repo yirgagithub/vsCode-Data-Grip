@@ -78,3 +78,34 @@ npm run lint
 tsc -p ./ --noEmit
 exit 0
 ```
+
+## URI title follow-up
+
+The previous follow-up still called `encodeURIComponent()` before `Uri.from()`. That made VS Code's `Uri.path` basename itself percent-encoded even though URI serialization was valid.
+
+- `Uri.from()` now receives a raw, readable sanitized path; VS Code performs serialization encoding.
+- The display basename remains recognizable as `<schema>.<object> (<kind> @ <connection>).sql`.
+- ASCII controls and basename-illegal `< > : " / \\ | ? *` runs are deterministically replaced with `_`, and trailing dots/spaces are removed.
+- Exact collision identity is raw JSON in `Uri.query`, including connection, kind, schema, name, optional signature, and optional table.
+- Tests model the distinction between readable `Uri.path` and encoded `Uri.toString()`.
+
+URI-title RED:
+
+```text
+npx vitest run tests/databaseObjectLanguageProviders.test.ts
+Tests 2 failed | 6 passed
+expected 'sales%20data.orders%2F%231...' to be 'sales data.orders_#1...'
+expected 'sales%00%3Awest.order...' to be 'sales_west.order_new_daily...'
+```
+
+URI-title GREEN and focused verification:
+
+```text
+npx vitest run tests/databaseObjectLanguageProviders.test.ts tests/commandSurface.test.ts
+Test Files 2 passed (2)
+Tests 14 passed (14)
+
+npm run lint
+tsc -p ./ --noEmit
+exit 0
+```
