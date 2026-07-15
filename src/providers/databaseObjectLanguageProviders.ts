@@ -110,10 +110,13 @@ export function registerDatabaseObjectLanguageProviders(
 }
 
 export function definitionUri(connectionId: string, object: DatabaseObjectIdentity): vscode.Uri {
-  const components = [connectionId, object.kind, object.schema, object.name, object.signature ?? '', object.table ?? ''];
+  const identity = [connectionId, object.kind, object.schema, object.name];
+  if (object.signature !== undefined) identity.push(`signature=${object.signature}`);
+  if (object.table !== undefined) identity.push(`table=${object.table}`);
+  const title = `${object.schema}.${object.name} (${object.kind} @ ${connectionId}).sql`;
   return vscode.Uri.from({
     scheme: DATABASE_OBJECT_DEFINITION_SCHEME,
-    path: `/${components.map((component) => encodeURIComponent(component)).join('/')}`
+    path: `/${[...identity, title].map((component) => encodeURIComponent(component)).join('/')}`
   });
 }
 
