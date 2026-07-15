@@ -195,6 +195,9 @@ describe('additional database drivers', () => {
     expect(result.rows).toEqual([{ id: 1, name: 'Ada' }]);
     expect(columns.map((column) => column.name)).toEqual(['id', 'name']);
     expect(ddl.toLowerCase()).toContain('create table users');
+    await expect(driver.getTriggers('local', 'main')).resolves.toEqual([
+      { schema: 'main', table: 'users', name: 'users_trg' }
+    ]);
     await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'main', name: 'active_users' })).resolves.toBe('CREATE VIEW active_users as select * from users');
     await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'main', name: 'users_trg' })).resolves.toContain('CREATE TRIGGER users_trg');
     await expect(driver.getObjectDefinition('local', { kind: 'function', schema: 'main', name: 'f' })).resolves.toBeUndefined();
