@@ -28,6 +28,19 @@ describe('schema metadata cache store object metadata', () => {
     expect(parsed?.entry.triggers).toEqual(entry.triggers);
   });
 
+  it('serializes foreign-key metadata and hydrates older snapshots with an empty map', () => {
+    const entry = schemaEntry({ foreignKeys: {
+      'public.users': [{ name: 'users_team_fk', columns: ['team_id'], foreignSchema: 'public', foreignTable: 'teams', foreignColumns: ['id'] }]
+    } });
+    expect(parseStoredSchemaCacheEntry(connection, serializeSchemaCacheEntry(connection, entry))?.entry.foreignKeys)
+      .toEqual(entry.foreignKeys);
+
+    const legacy = schemaEntry({}) as SchemaCacheEntry & { foreignKeys?: SchemaCacheEntry['foreignKeys'] };
+    delete legacy.foreignKeys;
+    const raw = JSON.stringify({ version: 2, fingerprint: connectionMetadataFingerprint(connection), savedAt: Date.now(), entry: legacy });
+    expect(parseStoredSchemaCacheEntry(connection, raw)?.entry.foreignKeys).toEqual({});
+  });
+
   it('migrates version 1 snapshots without routine and trigger fields using empty arrays', () => {
     const legacyEntry = schemaEntry({}) as Partial<SchemaCacheEntry>;
     delete legacyEntry.functions;
@@ -60,6 +73,6 @@ describe('schema metadata cache store object metadata', () => {
 function schemaEntry(overrides: Partial<SchemaCacheEntry>): SchemaCacheEntry {
   return {
     connectionId: 'local', schemaName: 'public', schemas: [{ name: 'public' }], tables: [], views: [],
-    functions: [], procedures: [], triggers: [], columns: {}, indexes: {}, keys: {}, status: 'ready', ...overrides
+    functions: [], procedures: [], triggers: [], columns: {}, indexes: {}, keys: {}, foreignKeys: {}, status: 'ready', ...overrides
   };
 }

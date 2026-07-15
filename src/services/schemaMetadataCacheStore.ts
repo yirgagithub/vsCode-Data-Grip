@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { ConnectionConfig, SchemaCacheEntry } from '../types';
 
-export const SCHEMA_METADATA_CACHE_VERSION = 2;
+export const SCHEMA_METADATA_CACHE_VERSION = 3;
 
 interface StoredSchemaCacheEntry {
   version: number;
@@ -120,7 +120,7 @@ export function parseStoredSchemaCacheEntry(connection: ConnectionConfig, raw: s
   } catch {
     return undefined;
   }
-  if (![1, SCHEMA_METADATA_CACHE_VERSION].includes(stored.version) || stored.fingerprint !== connectionMetadataFingerprint(connection)) {
+  if (![1, 2, SCHEMA_METADATA_CACHE_VERSION].includes(stored.version) || stored.fingerprint !== connectionMetadataFingerprint(connection)) {
     return undefined;
   }
   if (!stored.entry || stored.entry.connectionId !== connection.id) {
@@ -134,7 +134,8 @@ export function parseStoredSchemaCacheEntry(connection: ConnectionConfig, raw: s
       cacheVersion: SCHEMA_METADATA_CACHE_VERSION,
       functions: stored.entry.functions ?? [],
       procedures: stored.entry.procedures ?? [],
-      triggers: stored.entry.triggers ?? []
+      triggers: stored.entry.triggers ?? [],
+      foreignKeys: stored.entry.foreignKeys ?? {}
     }
   };
 }
