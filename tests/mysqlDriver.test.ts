@@ -133,6 +133,15 @@ describe('MySQLDriver', () => {
     await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'public', name: 'v' }))
       .rejects.toEqual({ message: 'catalog failed', code: 'ER_ACCESS', detail: undefined, hint: undefined, position: undefined, where: undefined });
   });
+
+  it('returns ordered two-argument routine metadata without delimiter parsing', async () => {
+    const driver = new MySQLDriver();
+    await driver.connect(config());
+    await expect(driver.getFunctions('local', 'public')).resolves.toContainEqual(expect.objectContaining({
+      name: 'lookup', signature: 'public.lookup(integer, varchar(255))', arguments: ['integer', 'varchar(255)']
+    }));
+    expect(String(mysqlMock.queries.at(-1)?.sql)).toContain('json_objectagg');
+  });
 });
 
 function respond(sql: unknown, config: { ssl?: unknown }, _params: unknown[]) {
@@ -176,8 +185,8 @@ function respond(sql: unknown, config: { ssl?: unknown }, _params: unknown[]) {
   if (text.includes('information_schema.views')) {
     return [[{ schema: 'public', name: 'active_users', type: 'view' }], []];
   }
-  if (text.includes("routine_type = 'FUNCTION'")) {
-    return [[{ schema: 'public', name: 'demo_fn', kind: 'FUNCTION' }], []];
+  if (text.includes('information_schema.routines r')) {
+    return [[{ schema: 'public', name: 'lookup', kind: 'FUNCTION', signature: 'public.lookup(integer, varchar(255))', arguments: '{"2":"varchar(255)","1":"integer"}' }], []];
   }
   if (text.includes("routine_type = 'PROCEDURE'")) {
     return [[{ schema: 'public', name: 'demo_proc', kind: 'PROCEDURE' }], []];

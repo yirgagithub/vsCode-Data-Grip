@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { ConnectionConfig, DatabaseObjectIdentity } from '../types';
 import type { SqlObjectReference } from '../services/sqlObjectReference';
 import type { ResolvedDatabaseObject } from '../services/databaseObjectMetadata';
+import { SQL_METADATA_REFRESH_COMMAND, SQL_METADATA_REFRESH_TITLE } from '../services/sqlMetadataCommands';
 
 export const DATABASE_OBJECT_DEFINITION_SCHEME = 'querydeck-definition';
 
@@ -37,8 +38,9 @@ export class DatabaseObjectLanguageProviders implements vscode.HoverProvider, vs
       const markdown = this.dependencies.renderHover(object);
       if (token.isCancellationRequested) return undefined;
       if (object.kind === 'metadata-unavailable') {
-        const trusted = new vscode.MarkdownString(markdown);
-        trusted.isTrusted = { enabledCommands: ['querydeck.refreshDatabaseMetadata'] };
+        const args = encodeURIComponent(JSON.stringify([document.uri, object.schema]));
+        const trusted = new vscode.MarkdownString(`${markdown} [${SQL_METADATA_REFRESH_TITLE}](command:${SQL_METADATA_REFRESH_COMMAND}?${args})`);
+        trusted.isTrusted = { enabledCommands: [SQL_METADATA_REFRESH_COMMAND] };
         return new vscode.Hover(trusted, this.range(document, context.reference));
       }
       return new vscode.Hover(markdown, this.range(document, context.reference));

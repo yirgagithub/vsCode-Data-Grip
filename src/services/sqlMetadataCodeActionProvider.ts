@@ -5,8 +5,8 @@ import {
   SQL_METADATA_MISSING_RELATION
 } from './sqlDiagnosticsService';
 
-export const SQL_METADATA_REFRESH_COMMAND = 'database.refreshSqlMetadata';
-export const SQL_METADATA_REFRESH_TITLE = 'Refresh database metadata';
+export { SQL_METADATA_REFRESH_COMMAND, SQL_METADATA_REFRESH_TITLE } from './sqlMetadataCommands';
+import { SQL_METADATA_REFRESH_COMMAND, SQL_METADATA_REFRESH_TITLE } from './sqlMetadataCommands';
 
 export class SqlMetadataCodeActionProvider implements vscode.CodeActionProvider {
   static readonly providedCodeActionKinds = [vscode.CodeActionKind.QuickFix];
