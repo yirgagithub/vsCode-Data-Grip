@@ -1,4 +1,4 @@
-import { ConnectionConfigWithPassword, DbConnection, ExecuteQueryParams, ColumnInfo, SchemaInfo, TableInfo, QueryExecutionResult, TablePreviewOptions, ViewInfo, RoutineInfo } from '../../types';
+import { ConnectionConfigWithPassword, DbConnection, ExecuteQueryParams, ColumnInfo, DatabaseObjectIdentity, SchemaInfo, TableInfo, QueryExecutionResult, TablePreviewOptions, ViewInfo, RoutineInfo } from '../../types';
 import { qualifiedName, quoteIdentifier } from '../../utils/identifiers';
 import { loadBundledRuntime } from '../../runtime/runtimeLoader';
 import { BasicDatabaseDriver, emptyExecutionResult, executionResultFromRows, optionalString, safeFilterClause, toQueryError } from './driverUtils';
@@ -139,6 +139,27 @@ export class OracleDriver extends BasicDatabaseDriver {
     return this.executeQuery({ connectionId, sql, maxRows: 0 });
   }
 
+  override async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
+    const type = object.kind === 'procedure' ? 'PROCEDURE' : object.kind.toUpperCase();
+    const oracle = await loadOracle();
+    const connection = await this.requirePool(connectionId).getConnection();
+    try {
+      const result = object.kind === 'function' || object.kind === 'procedure' || object.kind === 'trigger'
+        ? await connection.execute(
+          `select listagg(text, '') within group (order by line) as "definition" from all_source where owner = upper(:owner) and name = upper(:name) and type = :type`,
+          [object.schema, object.name, type], { outFormat: oracle.OUT_FORMAT_OBJECT }
+        )
+        : await connection.execute(
+          `select dbms_metadata.get_ddl(:type, upper(:name), upper(:owner)) as "definition" from dual`,
+          [type, object.name, object.schema], { outFormat: oracle.OUT_FORMAT_OBJECT }
+        );
+      const row = result.rows?.[0];
+      return nativeDefinition(row?.definition ?? row?.DEFINITION);
+    } finally {
+      await connection.close();
+    }
+  }
+
   private async getRoutines(connectionId: string, schema: string, kind: 'FUNCTION' | 'PROCEDURE'): Promise<RoutineInfo[]> {
     const rows = await this.query(connectionId, `select owner as "schema", object_name as "name" from all_objects where owner = upper('${escapeSql(schema)}') and object_type = '${kind}' order by object_name`);
     return rows.map((row) => ({ schema: String(row.schema ?? row.SCHEMA), name: String(row.name ?? row.NAME), kind: kind === 'PROCEDURE' ? 'procedure' : 'function' }));
@@ -171,4 +192,8 @@ async function loadOracle(): Promise<OracleRuntime> {
 
 function escapeSql(value: string): string {
   return value.replace(/'/g, "''");
+}
+
+function nativeDefinition(value: unknown): string | undefined {
+  return value === null || value === undefined || value === '' ? undefined : String(value);
 }

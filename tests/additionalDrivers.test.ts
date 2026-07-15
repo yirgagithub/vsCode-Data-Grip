@@ -25,6 +25,9 @@ vi.mock('mssql', () => {
             rowsAffected: [0]
           };
         }
+        if (sql.includes('OBJECT_DEFINITION')) {
+          return { recordset: [{ definition: 'CREATE VIEW [dbo].[active_users] AS\nSELECT 1\n' }], rowsAffected: [0] };
+        }
         if (sql.includes('information_schema.tables')) {
           return { recordset: [{ schema: 'dbo', name: 'users', type: 'table' }], rowsAffected: [0] };
         }
@@ -54,6 +57,12 @@ vi.mock('oracledb', () => {
           ],
           metaData: []
         };
+      }
+      if (sql.includes('all_source')) {
+        return { rows: [{ definition: 'PROCEDURE P AS\nBEGIN NULL; END;\n' }], metaData: [] };
+      }
+      if (sql.includes('dbms_metadata.get_ddl')) {
+        return { rows: [{ definition: 'CREATE VIEW "HR"."V" AS SELECT 1\n' }], metaData: [] };
       }
       return { rows: [{ OK: 1 }], metaData: [{ name: 'OK', dbTypeName: 'NUMBER' }] };
     }),
@@ -131,6 +140,8 @@ vi.mock('snowflake-sdk', () => {
         ]);
       } else if (options.sqlText.includes('current_version')) {
         options.complete?.(undefined, statement, [{ VERSION: '8.0' }]);
+      } else if (options.sqlText.includes('GET_DDL')) {
+        options.complete?.(undefined, statement, [{ definition: 'CREATE OR REPLACE VIEW "PUBLIC"."V" AS SELECT 1\n' }]);
       } else {
         options.complete?.(undefined, statement, [{ VERSION: '8.0' }]);
       }
@@ -161,6 +172,8 @@ describe('additional database drivers', () => {
 
     await driver.executeStatements({ connectionId: 'local', sql: '' }, [
       'create table users (id integer primary key, name text not null)',
+      'create view active_users as select * from users',
+      'create trigger users_trg after insert on users begin update users set name = name; end',
       "insert into users (name) values ('Ada')"
     ]);
     const result = await driver.executeQuery({ connectionId: 'local', sql: 'select * from users' });
@@ -170,6 +183,9 @@ describe('additional database drivers', () => {
     expect(result.rows).toEqual([{ id: 1, name: 'Ada' }]);
     expect(columns.map((column) => column.name)).toEqual(['id', 'name']);
     expect(ddl.toLowerCase()).toContain('create table users');
+    await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'main', name: 'active_users' })).resolves.toBe('CREATE VIEW active_users as select * from users');
+    await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'main', name: 'users_trg' })).resolves.toContain('CREATE TRIGGER users_trg');
+    await expect(driver.getObjectDefinition('local', { kind: 'function', schema: 'main', name: 'f' })).resolves.toBeUndefined();
     await driver.disconnect('local');
   });
 
@@ -189,6 +205,7 @@ describe('additional database drivers', () => {
     expect(previewSql).toContain('select top (11) * from [dbo].[users]');
     expect(previewSql).toContain('order by [name] asc');
     expect(previewSql).not.toContain('undefined');
+    await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'dbo', name: 'active_users' })).resolves.toBe('CREATE VIEW [dbo].[active_users] AS\nSELECT 1\n');
   });
 
   it('normalizes Oracle metadata into DDL', async () => {
@@ -205,6 +222,8 @@ describe('additional database drivers', () => {
     expect(previewSql).toContain('order by "ID" desc');
     expect(previewSql).toContain('offset 0 rows fetch next 11 rows only');
     expect(previewSql).not.toContain('undefined');
+    await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'HR', name: 'V' })).resolves.toBe('CREATE VIEW "HR"."V" AS SELECT 1\n');
+    await expect(driver.getObjectDefinition('local', { kind: 'procedure', schema: 'HR', name: 'P' })).resolves.toBe('PROCEDURE P AS\nBEGIN NULL; END;\n');
   });
 
   it('runs Redis commands and previews key-type views', async () => {
@@ -243,6 +262,7 @@ describe('additional database drivers', () => {
     expect(previewSql).toContain('order by "ID" desc');
     expect(previewSql).toContain('limit 11');
     expect(previewSql).not.toContain('undefined');
+    await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'PUBLIC', name: 'V' })).resolves.toBe('CREATE OR REPLACE VIEW "PUBLIC"."V" AS SELECT 1\n');
   });
 });
 

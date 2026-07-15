@@ -5,6 +5,7 @@ import {
   ActiveSessionInfo,
   ColumnInfo,
   ConnectionConfigWithPassword,
+  DatabaseObjectIdentity,
   DbConnection,
   ExplainQueryOptions,
   ExecuteQueryParams,
@@ -432,6 +433,24 @@ export class MySQLDriver implements DatabaseDriver {
     return createTableSql(this.id, schema, table, columns);
   }
 
+  async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
+    if (object.kind === 'trigger') {
+      const [rows] = await this.requirePool(connectionId).query<RowDataPacket[]>(
+        'select action_statement as definition from information_schema.triggers where trigger_schema = ? and trigger_name = ?',
+        [object.schema, object.name]
+      );
+      return nativeDefinition((rows as Array<Record<string, unknown>>)[0]?.definition);
+    }
+    const command = object.kind === 'table' ? 'TABLE' : object.kind === 'view' ? 'VIEW' : object.kind === 'function' ? 'FUNCTION' : 'PROCEDURE';
+    const [rows] = await this.requirePool(connectionId).query<RowDataPacket[]>(
+      `SHOW CREATE ${command} ${qualifiedName(object.schema, object.name, '`')}`
+    );
+    const row = (rows as Array<Record<string, unknown>>)[0];
+    if (!row) return undefined;
+    const key = Object.keys(row).find((candidate) => candidate.toLowerCase().startsWith('create '));
+    return key ? nativeDefinition(row[key]) : undefined;
+  }
+
   async getTableStats(connectionId: string, schema: string, table: string): Promise<TableStatsInfo> {
     const [rows] = await this.requirePool(connectionId).query<RowDataPacket[]>(
       `select table_rows as "rowEstimate",
@@ -658,4 +677,8 @@ function optionalString(value: unknown): string | undefined {
   }
   const next = String(value).trim();
   return next || undefined;
+}
+
+function nativeDefinition(value: unknown): string | undefined {
+  return value === null || value === undefined || value === '' ? undefined : String(value);
 }

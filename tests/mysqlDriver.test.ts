@@ -97,6 +97,14 @@ describe('MySQLDriver', () => {
 
     expect(String(mysqlMock.queries.at(-1)?.sql)).toContain('limit 11 offset 20');
   });
+
+  it('uses safely quoted SHOW CREATE and returns the native field verbatim', async () => {
+    const driver = new MySQLDriver();
+    await driver.connect(config());
+    const definition = await driver.getObjectDefinition('local', { kind: 'view', schema: 'odd`db', name: 'active`users' });
+    expect(definition).toBe('CREATE VIEW `active_users` AS SELECT 1\n');
+    expect(String(mysqlMock.queries.at(-1)?.sql)).toBe('SHOW CREATE VIEW `odd``db`.`active``users`');
+  });
 });
 
 function respond(sql: unknown, config: { ssl?: unknown }, _params: unknown[]) {
@@ -112,6 +120,9 @@ function respond(sql: unknown, config: { ssl?: unknown }, _params: unknown[]) {
   }
   if (text.includes('select connection_id() as id')) {
     return [[{ id: 321 }], []];
+  }
+  if (text.startsWith('SHOW CREATE VIEW')) {
+    return [[{ View: 'active_users', 'Create View': 'CREATE VIEW `active_users` AS SELECT 1\n' }], []];
   }
   if (text.includes('show full processlist')) {
     return [[{ Id: 321, User: 'app', db: 'aph', Command: 'Query', Host: '127.0.0.1', State: 'running', Info: 'select 1' }], []];
