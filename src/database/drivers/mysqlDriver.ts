@@ -564,7 +564,7 @@ export class MySQLDriver implements DatabaseDriver {
               r.security_type as language,
               r.routine_comment as comment,
               concat(r.routine_schema, '.', r.routine_name, '(', coalesce((select group_concat(p.dtd_identifier order by p.ordinal_position separator ', ') from information_schema.parameters p where p.specific_schema = r.specific_schema and p.specific_name = r.specific_name and p.ordinal_position > 0), ''), ')') as signature,
-              (select group_concat(p.dtd_identifier order by p.ordinal_position separator '\\x1f') from information_schema.parameters p where p.specific_schema = r.specific_schema and p.specific_name = r.specific_name and p.ordinal_position > 0) as arguments
+              (select json_objectagg(p.ordinal_position, p.dtd_identifier) from information_schema.parameters p where p.specific_schema = r.specific_schema and p.specific_name = r.specific_name and p.ordinal_position > 0) as arguments
        from information_schema.routines r
        where routine_schema = ? and routine_type = ?
        order by routine_name`,
@@ -578,7 +578,7 @@ export class MySQLDriver implements DatabaseDriver {
       language: optionalString(row.language),
       comment: optionalString(row.comment),
       signature: optionalString(row.signature),
-      arguments: optionalString(row.arguments)?.split('\\x1f').filter(Boolean)
+      arguments: routineArguments(row.arguments)
     }));
   }
 
@@ -678,6 +678,12 @@ function optionalString(value: unknown): string | undefined {
   }
   const next = String(value).trim();
   return next || undefined;
+}
+
+function routineArguments(value: unknown): string[] | undefined {
+  if (value === null || value === undefined) return undefined;
+  const parsed = typeof value === 'string' ? JSON.parse(value) as Record<string, unknown> : value as Record<string, unknown>;
+  return Object.entries(parsed).sort(([left], [right]) => Number(left) - Number(right)).map(([, argument]) => String(argument));
 }
 
 function nativeDefinition(value: unknown): string | undefined {

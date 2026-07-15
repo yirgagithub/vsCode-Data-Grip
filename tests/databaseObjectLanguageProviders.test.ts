@@ -96,6 +96,15 @@ describe('DatabaseObjectLanguageProviders', () => {
     expect(notifications).toEqual([]);
   });
 
+  it('offers the registered refresh command with document and schema arguments', async () => {
+    const provider = providers({ resolveObject: vi.fn(async () => ({ kind: 'metadata-unavailable', schema: 'sales' })) });
+    const hover = await provider.provideHover(document(), new vscode.Position(0, 20), token()) as vscode.Hover;
+    const markdown = hover.contents as { value: string; isTrusted: { enabledCommands: string[] } };
+    expect(markdown.isTrusted.enabledCommands).toEqual(['database.refreshSqlMetadata']);
+    const match = markdown.value.match(/command:database\.refreshSqlMetadata\?([^)]*)/)!;
+    expect(JSON.parse(decodeURIComponent(match[1]))).toEqual([{}, 'sales']);
+  });
+
   it('honors cancellation before and after asynchronous work', async () => {
     const getDefinition = vi.fn(async () => 'DDL');
     const before = providers({ getDefinition });

@@ -15,7 +15,7 @@ export function markdownCodeSpan(value: string): string {
 
 export function renderDatabaseObjectHover(object: ResolvedDatabaseObject): string {
   if (object.kind === 'metadata-unavailable') {
-    return `Database metadata is unavailable for ${markdownCodeSpan(object.schema)}. [Refresh database metadata](command:querydeck.refreshDatabaseMetadata)`;
+    return `Database metadata is unavailable for ${markdownCodeSpan(object.schema)}.`;
   }
   const title = `**${capitalize(object.kind)}** ${qualified(object.schema, object.name)}`;
   switch (object.kind) {
