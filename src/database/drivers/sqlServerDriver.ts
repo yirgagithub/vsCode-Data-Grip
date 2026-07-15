@@ -1,4 +1,4 @@
-import { ConnectionConfigWithPassword, DbConnection, ExecuteQueryParams, ColumnInfo, SchemaInfo, TableInfo, QueryExecutionResult, TablePreviewOptions, ViewInfo, RoutineInfo } from '../../types';
+import { ConnectionConfigWithPassword, DbConnection, ExecuteQueryParams, ColumnInfo, DatabaseObjectIdentity, SchemaInfo, TableInfo, QueryExecutionResult, TablePreviewOptions, ViewInfo, RoutineInfo } from '../../types';
 import { loadBundledRuntime } from '../../runtime/runtimeLoader';
 import { BasicDatabaseDriver, emptyExecutionResult, executionResultFromRows, optionalString, safeFilterClause, toQueryError } from './driverUtils';
 import { qualifiedSqlName, quoteSqlIdentifier } from '../../services/sqlDialect';
@@ -141,6 +141,13 @@ export class SqlServerDriver extends BasicDatabaseDriver {
     return this.executeQuery({ connectionId, sql, maxRows: 0 });
   }
 
+  override async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
+    if (object.kind === 'table') return this.getTableDDL(connectionId, object.schema, object.name);
+    const qualified = `${object.schema}.${object.name}`.replace(/'/g, "''");
+    const rows = await this.query(connectionId, `select OBJECT_DEFINITION(OBJECT_ID(N'${qualified}')) as definition`);
+    return nativeDefinition(rows[0]?.definition);
+  }
+
   private async getRoutines(connectionId: string, schema: string, type: 'FUNCTION' | 'PROCEDURE'): Promise<RoutineInfo[]> {
     const rows = await this.query(connectionId, `select routine_schema as [schema], routine_name as name, routine_type as kind, data_type as returnType from information_schema.routines where routine_schema = '${escapeSql(schema)}' and routine_type = '${type}' order by routine_name`);
     return rows.map((row) => ({
@@ -178,4 +185,8 @@ async function loadMssql(): Promise<MssqlRuntime> {
 
 function escapeSql(value: string): string {
   return value.replace(/'/g, "''");
+}
+
+function nativeDefinition(value: unknown): string | undefined {
+  return value === null || value === undefined || value === '' ? undefined : String(value);
 }

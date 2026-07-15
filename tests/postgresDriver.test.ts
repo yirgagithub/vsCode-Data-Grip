@@ -74,6 +74,25 @@ describe('PostgresDriver SSL mode', () => {
 });
 
 describe('PostgresDriver DDL generation', () => {
+  it('returns native catalog definitions verbatim with bound object identity', async () => {
+    const driver = new PostgresDriver();
+    await driver.connect(config());
+
+    const definition = await driver.getObjectDefinition('local', { kind: 'view', schema: 'odd schema', name: 'active_users' });
+
+    expect(definition).toBe(' SELECT * FROM users;\n');
+    const query = pgMock.queries.find((entry) => String(entry.sql).includes('pg_get_viewdef'));
+    expect(query?.params).toEqual([['odd schema', 'active_users']]);
+  });
+
+  it('uses native routine and trigger definition functions', async () => {
+    const driver = new PostgresDriver();
+    await driver.connect(config());
+    await expect(driver.getObjectDefinition('local', { kind: 'function', schema: 'public', name: 'f', signature: 'public.f(integer)' })).resolves.toBe('CREATE FUNCTION f(integer)\n');
+    await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'public', name: 'users_trg' })).resolves.toBe('CREATE TRIGGER users_trg\n');
+    expect(pgMock.queries.some((entry) => String(entry.sql).includes('pg_get_functiondef'))).toBe(true);
+    expect(pgMock.queries.some((entry) => String(entry.sql).includes('pg_get_triggerdef'))).toBe(true);
+  });
   it('quotes column identifiers with the shared identifier rules', async () => {
     class DdlDriver extends PostgresDriver {
       override async getColumns(): Promise<ColumnInfo[]> {
@@ -199,6 +218,9 @@ describe('RedshiftDriver metadata', () => {
 
 function respond(sql: unknown) {
   const text = String(sql);
+  if (text.includes('pg_get_viewdef')) return { rows: [{ definition: ' SELECT * FROM users;\n' }], fields: [], rowCount: 1 };
+  if (text.includes('pg_get_functiondef')) return { rows: [{ definition: 'CREATE FUNCTION f(integer)\n' }], fields: [], rowCount: 1 };
+  if (text.includes('pg_get_triggerdef')) return { rows: [{ definition: 'CREATE TRIGGER users_trg\n' }], fields: [], rowCount: 1 };
   if (text.includes('information_schema.columns')) {
     return {
       rows: [
