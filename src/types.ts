@@ -204,6 +204,8 @@ export interface RoutineInfo {
   returnType?: string;
   language?: string;
   comment?: string;
+  signature?: string;
+  arguments?: string[];
 }
 
 export interface TriggerInfo {
@@ -214,6 +216,16 @@ export interface TriggerInfo {
   events?: string[];
   orientation?: string;
   enabled?: string;
+}
+
+export type DatabaseObjectKind = 'table' | 'view' | 'function' | 'procedure' | 'trigger';
+
+export interface DatabaseObjectIdentity {
+  kind: DatabaseObjectKind;
+  schema: string;
+  name: string;
+  signature?: string;
+  table?: string;
 }
 
 export interface ActiveSessionInfo {
@@ -660,9 +672,13 @@ export interface SchemaCacheEntry {
   schemas: SchemaInfo[];
   tables: TableInfo[];
   views: ViewInfo[];
+  functions: RoutineInfo[];
+  procedures: RoutineInfo[];
+  triggers: TriggerInfo[];
   columns: Record<string, ColumnInfo[]>;
   indexes: Record<string, IndexInfo[]>;
   keys: Record<string, KeyInfo[]>;
+  foreignKeys: Record<string, ForeignKeyInfo[]>;
   loadedAt?: number;
   status: SchemaCacheStatus;
   errorMessage?: string;

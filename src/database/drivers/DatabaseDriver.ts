@@ -1,5 +1,6 @@
 import {
   ColumnInfo,
+  DatabaseObjectIdentity,
   ConnectionConfigWithPassword,
   DbConnection,
   ExplainQueryOptions,
@@ -53,5 +54,6 @@ export interface DatabaseDriver {
   getForeignKeys(connectionId: string, schema: string, table: string): Promise<ForeignKeyInfo[]>;
   getTablePreview(connectionId: string, schema: string, table: string, limit: number, options?: TablePreviewOptions): Promise<QueryExecutionResult>;
   getTableDDL(connectionId: string, schema: string, table: string): Promise<string>;
+  getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined>;
   getTableStats(connectionId: string, schema: string, table: string): Promise<TableStatsInfo>;
 }

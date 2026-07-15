@@ -4,6 +4,7 @@ import { DatabaseDriver } from './DatabaseDriver';
 import {
   ColumnInfo,
   ConnectionConfigWithPassword,
+  DatabaseObjectIdentity,
   DbConnection,
   ExplainQueryOptions,
   ExecuteQueryParams,
@@ -27,7 +28,6 @@ import {
 import { qualifiedName, quoteIdentifier } from '../../utils/identifiers';
 import { normalizeExplainJsonPlan } from '../../services/queryPlanService';
 import { loadBundledRuntime } from '../../runtime/runtimeLoader';
-import { createTableSql } from '../../services/sqlDialect';
 import { canApplyClientLimit } from './driverUtils';
 
 interface ActiveExecution {
@@ -274,6 +274,8 @@ export class PostgresDriver implements DatabaseDriver {
       `select n.nspname as schema,
               p.proname as name,
               'function' as kind,
+              format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) as signature,
+              array(select format_type(arg, null) from unnest(p.proargtypes::oid[]) arg) as arguments,
               pg_get_function_result(p.oid) as "returnType",
               l.lanname as language,
               obj_description(p.oid, 'pg_proc') as comment
@@ -292,6 +294,8 @@ export class PostgresDriver implements DatabaseDriver {
       `select n.nspname as schema,
               p.proname as name,
               'procedure' as kind,
+              format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) as signature,
+              array(select format_type(arg, null) from unnest(p.proargtypes::oid[]) arg) as arguments,
               pg_get_function_result(p.oid) as "returnType",
               l.lanname as language,
               obj_description(p.oid, 'pg_proc') as comment
@@ -467,7 +471,41 @@ export class PostgresDriver implements DatabaseDriver {
 
   async getTableDDL(connectionId: string, schema: string, table: string): Promise<string> {
     const columns = await this.getColumns(connectionId, schema, table);
-    return createTableSql(this.id, schema, table, columns);
+    const body = columns.map((column) => {
+      const nullable = column.nullable ? '' : ' not null';
+      const defaultValue = column.defaultValue == null ? '' : ` default ${column.defaultValue}`;
+      return `  ${quoteIdentifier(column.name)} ${column.dataType}${defaultValue}${nullable}`;
+    }).join(',\n');
+    return `create table ${qualifiedName(schema, table)} (\n${body}\n);`;
+  }
+
+  async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
+    if (object.kind === 'table') {
+      return this.getTableDDL(connectionId, object.schema, object.name);
+    }
+    const pool = this.requirePool(connectionId);
+    try {
+      if (object.kind === 'view') {
+        const result = await pool.query(
+        `select pg_get_viewdef(c.oid, true) as definition from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relname = $2 and c.relkind in ('v', 'm')`,
+        [object.schema, object.name]
+        );
+        const body = nativeDefinition(result.rows[0]?.definition);
+        return body === undefined ? undefined : `CREATE VIEW ${qualifiedName(object.schema, object.name)} AS\n${body}`;
+      }
+      if (object.kind === 'function' || object.kind === 'procedure') {
+        const identity = object.signature ?? `${object.schema}.${object.name}`;
+        const result = await pool.query('select pg_get_functiondef(to_regprocedure($1)) as definition', [identity]);
+        return nativeDefinition(result.rows[0]?.definition);
+      }
+      const result = await pool.query(
+        `select pg_get_triggerdef(t.oid, true) as definition from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and t.tgname = $2 and not t.tgisinternal`,
+        [object.schema, object.name]
+      );
+      return nativeDefinition(result.rows[0]?.definition);
+    } catch (error) {
+      throw this.toQueryError(error);
+    }
   }
 
   async getTableStats(connectionId: string, schema: string, table: string): Promise<TableStatsInfo> {
@@ -666,6 +704,10 @@ function optionalString(value: unknown): string | undefined {
   }
   const next = String(value).trim();
   return next || undefined;
+}
+
+function nativeDefinition(value: unknown): string | undefined {
+  return value === null || value === undefined || value === '' ? undefined : String(value);
 }
 
 function triggerEvents(definition?: string): string[] | undefined {

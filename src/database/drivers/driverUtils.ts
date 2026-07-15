@@ -3,6 +3,7 @@ import {
   ActiveSessionInfo,
   ColumnInfo,
   ConnectionConfigWithPassword,
+  DatabaseObjectIdentity,
   DbConnection,
   ExecuteQueryParams,
   ForeignKeyInfo,
@@ -117,6 +118,10 @@ export abstract class BasicDatabaseDriver implements DatabaseDriver {
   async getTableDDL(connectionId: string, schema: string, table: string): Promise<string> {
     const columns = await this.getColumns(connectionId, schema, table);
     return createTableSql(this.id, schema, table, columns);
+  }
+
+  async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
+    return undefined;
   }
 
   async getTableStats(_connectionId: string, schema: string, table: string): Promise<TableStatsInfo> {
