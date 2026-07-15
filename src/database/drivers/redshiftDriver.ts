@@ -10,6 +10,11 @@ export class RedshiftDriver extends PostgresDriver {
 
   override async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
     try {
+      if (object.kind === 'table') {
+        const result = await this.requirePool(connectionId).query(`show table ${qualifiedName(object.schema, object.name)}`);
+        const row = result.rows[0];
+        return row ? nativeDefinition(Object.values(row)[0]) : undefined;
+      }
       if (object.kind === 'view') {
         const result = await this.requirePool(connectionId).query('select definition from pg_views where schemaname = $1 and viewname = $2', [object.schema, object.name]);
         return nativeDefinition(result.rows[0]?.definition);

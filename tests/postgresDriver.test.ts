@@ -19,7 +19,7 @@ vi.mock('pg', () => {
       if (pgMock.failSsl && this.config.ssl) {
         throw new Error('The server does not support SSL connections');
       }
-      if (pgMock.failDefinition && /pg_get_|pg_views|pg_proc/.test(String(sql))) {
+      if (pgMock.failDefinition && /pg_get_|pg_views|pg_proc|show table/i.test(String(sql))) {
         throw { message: 'catalog failed', code: 'XX001', password: 'secret' };
       }
       return respond(sql);
@@ -135,7 +135,9 @@ describe('PostgresDriver DDL generation', () => {
     await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'public', name: 'v' })).resolves.toBe('CREATE VIEW v AS SELECT 1\n');
     await expect(driver.getObjectDefinition('local', { kind: 'function', schema: 'public', name: 'f' })).resolves.toBeUndefined();
     await expect(driver.getObjectDefinition('local', { kind: 'procedure', schema: 'public', name: 'p' })).resolves.toBeUndefined();
-    await expect(driver.getObjectDefinition('local', { kind: 'table', schema: 'public', name: 't' })).resolves.toBeUndefined();
+    await expect(driver.getObjectDefinition('local', { kind: 'table', schema: 'odd schema', name: 'sales"table' }))
+      .resolves.toBe('CREATE TABLE "odd schema"."sales""table" (id integer);');
+    expect(pgMock.queries.some((entry) => String(entry.sql) === 'show table "odd schema"."sales""table"')).toBe(true);
     await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'public', name: 'trg' })).resolves.toBeUndefined();
     pgMock.failDefinition = true;
     await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'public', name: 'v' })).rejects.toEqual({ message: 'catalog failed', code: 'XX001', detail: undefined, hint: undefined, position: undefined, where: undefined });
@@ -284,6 +286,7 @@ function respond(sql: unknown) {
   if (text.includes('pg_get_triggerdef')) return { rows: [{ definition: 'CREATE TRIGGER users_trg\n' }], fields: [], rowCount: 1 };
   if (text.includes('pg_views')) return { rows: [{ definition: 'CREATE VIEW v AS SELECT 1\n' }], fields: [], rowCount: 1 };
   if (text.includes('pg_proc')) return { rows: [{ definition: 'return 1;\n' }], fields: [], rowCount: 1 };
+  if (/^show table /i.test(text)) return { rows: [{ ddl: 'CREATE TABLE "odd schema"."sales""table" (id integer);' }], fields: [], rowCount: 1 };
   if (text.includes('information_schema.columns')) {
     return {
       rows: [

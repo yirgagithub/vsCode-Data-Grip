@@ -1217,6 +1217,21 @@ input:disabled {
   font-weight: 600;
 }
 
+.filter-cardinality-warning {
+  display: grid;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  color: var(--text-main);
+  border: 1px solid var(--vscode-inputValidation-warningBorder, var(--border));
+  background: var(--vscode-inputValidation-warningBackground, var(--bg-panel));
+}
+
+.filter-cardinality-warning > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+}
+
 .cell-inspector {
   min-width: 0;
   border-left: 1px solid var(--border);
