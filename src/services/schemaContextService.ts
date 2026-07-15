@@ -1,5 +1,5 @@
 import { CancellationTokenSource } from 'vscode';
-import { ColumnInfo, ConnectionConfig, KeyInfo, SchemaCacheEntry, TableInfo, ViewInfo } from '../types';
+import { ColumnInfo, ConnectionConfig, ForeignKeyInfo, KeyInfo, SchemaCacheEntry, TableInfo, ViewInfo } from '../types';
 import { ConnectionManager } from '../database/connectionManager';
 import { connectionMetadataFingerprint, SCHEMA_METADATA_CACHE_VERSION, SchemaMetadataCacheStore } from './schemaMetadataCacheStore';
 
@@ -107,6 +107,19 @@ export class SchemaContextService {
     entry.source = 'live';
     await this.persistentCache?.persist(connection, entry);
     return keys;
+  }
+
+  async getForeignKeys(connection: ConnectionConfig, schemaName: string, tableName: string): Promise<ForeignKeyInfo[]> {
+    const entry = await this.loadSchema(connection, schemaName);
+    const tableKey = this.tableKey(schemaName, tableName);
+    if (entry.foreignKeys[tableKey]) return entry.foreignKeys[tableKey];
+    const foreignKeys = await this.connectionManager.getDriver(connection.type).getForeignKeys(connection.id, schemaName, tableName);
+    entry.foreignKeys[tableKey] = foreignKeys;
+    entry.loadedAt = Date.now();
+    entry.status = 'ready';
+    entry.source = 'live';
+    await this.persistentCache?.persist(connection, entry);
+    return foreignKeys;
   }
 
   async getCachedColumns(connection: ConnectionConfig, schemaName: string, tableName: string): Promise<ColumnInfo[] | undefined> {
@@ -265,6 +278,7 @@ export class SchemaContextService {
       columns: {},
       indexes: {},
       keys: {},
+      foreignKeys: {},
       status,
       errorMessage
     };

@@ -440,6 +440,7 @@ function schemaCacheEntry(connectionId: string): SchemaCacheEntry {
     },
     indexes: {},
     keys: {},
+    foreignKeys: {},
     status: 'ready'
   };
 }

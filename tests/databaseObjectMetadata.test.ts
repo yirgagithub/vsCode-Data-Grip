@@ -46,6 +46,27 @@ describe('resolveDatabaseObject', () => {
     expect(ambiguous).toBeUndefined();
   });
 
+  it('counts only top-level signature arguments when structured arguments are unavailable', async () => {
+    const context = schemaContext(entry({ functions: [
+      { schema: 'public', name: 'price', kind: 'function', signature: 'price(numeric(10,2))', returnType: 'numeric' }
+    ] }));
+
+    const result = await resolveDatabaseObject({ ...reference(['price'], 'routine'), argumentCount: 1 }, connection, context as never);
+
+    expect(result).toEqual(expect.objectContaining({ kind: 'function', signature: 'price(numeric(10,2))' }));
+  });
+
+  it('prefers one exact name over case-folded variants', async () => {
+    const context = schemaContext(entry({ tables: [
+      { schema: 'public', name: 'users', type: 'table' },
+      { schema: 'public', name: 'Users', type: 'table' }
+    ] }));
+
+    const result = await resolveDatabaseObject(reference(['Users'], 'relation'), connection, context as never);
+
+    expect(result).toEqual(expect.objectContaining({ kind: 'table', name: 'Users' }));
+  });
+
   it('resolves procedures and triggers only in their matching contexts', async () => {
     const context = schemaContext(entry({
       procedures: [{ schema: 'public', name: 'rebuild', kind: 'procedure', signature: 'rebuild()' }],
@@ -86,7 +107,7 @@ function reference(parts: string[], context: 'relation' | 'routine' | 'trigger')
 function entry(overrides: Partial<SchemaCacheEntry> = {}): SchemaCacheEntry {
   return {
     connectionId: 'db', schemaName: 'public', source: 'memory', schemas: [], tables: [], views: [],
-    functions: [], procedures: [], triggers: [], columns: {}, indexes: {}, keys: {}, status: 'ready', ...overrides
+    functions: [], procedures: [], triggers: [], columns: {}, indexes: {}, keys: {}, foreignKeys: {}, status: 'ready', ...overrides
   };
 }
 
