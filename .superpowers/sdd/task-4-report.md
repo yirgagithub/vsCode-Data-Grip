@@ -64,3 +64,18 @@ Result: exit 0. A repository-wide `git diff --check` still reports pre-existing 
 
 - PostgreSQL has no built-in `pg_get_tabledef`; the binding plan explicitly requires the table branch to preserve/delegate to current `getTableDDL`, so table behavior remains the existing generated DDL while all newly supported object kinds return native catalog text.
 - The focused tests use driver mocks (and an in-memory SQLite database). Live engine validation belongs to Task 6.
+
+## Important review fixes
+
+Follow-up RED command used the same required focused suite. It exited 1 with 8 expected failures: Redis table definitions leaked the legacy logical-view text; MySQL trigger retrieval did not use `SHOW CREATE TRIGGER`; PostgreSQL/MySQL errors leaked a `password` property; SQL Server did not bracket-quote dotted/special identifiers; Oracle expected an aggregate row and lost ordered multi-row source; and Snowflake attempted unsupported trigger DDL.
+
+The fixes now:
+
+- return `undefined` for every Redis object kind and Snowflake triggers;
+- retrieve MySQL triggers with safely quoted `SHOW CREATE TRIGGER` and return `SQL Original Statement` unchanged;
+- bracket-quote each SQL Server identifier part before passing the qualified identity to `OBJECT_ID`;
+- convert direct catalog errors through the existing `toQueryError`/driver conversion, removing arbitrary sensitive properties;
+- fetch Oracle `ALL_SOURCE.TEXT` ordered by `LINE` and concatenate rows in JavaScript, avoiding `LISTAGG` length limits while preserving source text;
+- exercise all five object kinds through contract/capability tests plus native query shape, quoting, unsupported, error, and long Oracle source cases.
+
+Follow-up GREEN result: 4 files passed, 34 tests passed. `npm run lint` exited 0.

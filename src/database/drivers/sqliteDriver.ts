@@ -2,7 +2,7 @@ import { Database } from 'sqlite3';
 import { ConnectionConfigWithPassword, DbConnection, ExecuteQueryParams, ColumnInfo, DatabaseObjectIdentity, SchemaInfo, TableInfo, QueryExecutionResult, TablePreviewOptions, ViewInfo, IndexInfo, KeyInfo, ForeignKeyInfo } from '../../types';
 import { qualifiedName, quoteIdentifier } from '../../utils/identifiers';
 import { loadBundledRuntime } from '../../runtime/runtimeLoader';
-import { BasicDatabaseDriver, clientLimit, emptyExecutionResult, executionResultFromRows, numberFromDb, optionalString, safeFilterClause } from './driverUtils';
+import { BasicDatabaseDriver, clientLimit, emptyExecutionResult, executionResultFromRows, numberFromDb, optionalString, safeFilterClause, toQueryError } from './driverUtils';
 
 export class SQLiteDriver extends BasicDatabaseDriver {
   readonly id = 'sqlite' as const;
@@ -132,13 +132,17 @@ export class SQLiteDriver extends BasicDatabaseDriver {
 
   override async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
     if (object.kind === 'function' || object.kind === 'procedure') return undefined;
-    const rows = await all(
-      this.requireDatabase(connectionId),
-      `select sql from ${quoteIdentifier(object.schema)}.sqlite_master where name = ? and type = ?`,
-      [object.name, object.kind]
-    );
-    const value = rows[0]?.sql;
-    return value === null || value === undefined || value === '' ? undefined : String(value);
+    try {
+      const rows = await all(
+        this.requireDatabase(connectionId),
+        `select sql from ${quoteIdentifier(object.schema)}.sqlite_master where name = ? and type = ?`,
+        [object.name, object.kind]
+      );
+      const value = rows[0]?.sql;
+      return value === null || value === undefined || value === '' ? undefined : String(value);
+    } catch (error) {
+      throw toQueryError(error);
+    }
   }
 
   private requireDatabase(connectionId: string): Database {
