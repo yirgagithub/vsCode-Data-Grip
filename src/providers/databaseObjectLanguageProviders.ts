@@ -110,14 +110,25 @@ export function registerDatabaseObjectLanguageProviders(
 }
 
 export function definitionUri(connectionId: string, object: DatabaseObjectIdentity): vscode.Uri {
-  const identity = [connectionId, object.kind, object.schema, object.name];
-  if (object.signature !== undefined) identity.push(`signature=${object.signature}`);
-  if (object.table !== undefined) identity.push(`table=${object.table}`);
-  const title = `${object.schema}.${object.name} (${object.kind} @ ${connectionId}).sql`;
+  const identity = JSON.stringify({
+    connectionId,
+    kind: object.kind,
+    schema: object.schema,
+    name: object.name,
+    ...(object.signature !== undefined ? { signature: object.signature } : {}),
+    ...(object.table !== undefined ? { table: object.table } : {})
+  });
+  const title = sanitizeDefinitionBasename(`${object.schema}.${object.name} (${object.kind} @ ${connectionId})`) + '.sql';
   return vscode.Uri.from({
     scheme: DATABASE_OBJECT_DEFINITION_SCHEME,
-    path: `/${[...identity, title].map((component) => encodeURIComponent(component)).join('/')}`
+    path: `/definition/${title}`,
+    query: identity
   });
+}
+
+function sanitizeDefinitionBasename(value: string): string {
+  const sanitized = value.replace(/[\u0000-\u001f\u007f<>:"/\\|?*]+/g, '_').replace(/[ .]+$/g, '');
+  return sanitized || 'database-object';
 }
 
 function databaseObjectIdentity(object: ResolvedDatabaseObject): DatabaseObjectIdentity {
