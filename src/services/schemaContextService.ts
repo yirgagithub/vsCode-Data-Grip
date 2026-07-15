@@ -1,5 +1,5 @@
 import { CancellationTokenSource } from 'vscode';
-import { ColumnInfo, ConnectionConfig, KeyInfo, SchemaCacheEntry, TableInfo, ViewInfo } from '../types';
+import { ColumnInfo, ConnectionConfig, ForeignKeyInfo, KeyInfo, SchemaCacheEntry, TableInfo, ViewInfo } from '../types';
 import { ConnectionManager } from '../database/connectionManager';
 import { connectionMetadataFingerprint, SCHEMA_METADATA_CACHE_VERSION, SchemaMetadataCacheStore } from './schemaMetadataCacheStore';
 
@@ -109,6 +109,19 @@ export class SchemaContextService {
     return keys;
   }
 
+  async getForeignKeys(connection: ConnectionConfig, schemaName: string, tableName: string): Promise<ForeignKeyInfo[]> {
+    const entry = await this.loadSchema(connection, schemaName);
+    const tableKey = this.tableKey(schemaName, tableName);
+    if (entry.foreignKeys[tableKey]) return entry.foreignKeys[tableKey];
+    const foreignKeys = await this.connectionManager.getDriver(connection.type).getForeignKeys(connection.id, schemaName, tableName);
+    entry.foreignKeys[tableKey] = foreignKeys;
+    entry.loadedAt = Date.now();
+    entry.status = 'ready';
+    entry.source = 'live';
+    await this.persistentCache?.persist(connection, entry);
+    return foreignKeys;
+  }
+
   async getCachedColumns(connection: ConnectionConfig, schemaName: string, tableName: string): Promise<ColumnInfo[] | undefined> {
     const entry = await this.getCachedForConnection(connection, schemaName);
     return entry?.columns[this.tableKey(schemaName, tableName)];
@@ -175,10 +188,13 @@ export class SchemaContextService {
   private async loadSchemaNow(connection: ConnectionConfig, schemaName: string, base: SchemaCacheEntry): Promise<SchemaCacheEntry> {
     try {
       const driver = this.connectionManager.getDriver(connection.type);
-      const [schemas, tables, views] = await Promise.all([
+      const [schemas, tables, views, functions, procedures, triggers] = await Promise.all([
         driver.getSchemas(connection.id),
         driver.getTables(connection.id, schemaName),
-        driver.getViews(connection.id, schemaName)
+        driver.getViews(connection.id, schemaName),
+        driver.getFunctions(connection.id, schemaName),
+        driver.getProcedures(connection.id, schemaName),
+        driver.getTriggers(connection.id, schemaName)
       ]);
       const columns = await this.loadColumnsForRelations(connection, schemaName, [...tables, ...views]);
       const entry: SchemaCacheEntry = {
@@ -186,6 +202,9 @@ export class SchemaContextService {
         schemas,
         tables,
         views,
+        functions,
+        procedures,
+        triggers,
         columns,
         loadedAt: Date.now(),
         cacheVersion: SCHEMA_METADATA_CACHE_VERSION,
@@ -253,9 +272,13 @@ export class SchemaContextService {
       schemas: [],
       tables: [],
       views: [],
+      functions: [],
+      procedures: [],
+      triggers: [],
       columns: {},
       indexes: {},
       keys: {},
+      foreignKeys: {},
       status,
       errorMessage
     };

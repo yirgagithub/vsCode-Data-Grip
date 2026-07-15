@@ -1,4 +1,4 @@
-import { ConnectionConfigWithPassword, DbConnection, ExecuteQueryParams, ColumnInfo, SchemaInfo, TableInfo, QueryExecutionResult, TablePreviewOptions, ViewInfo, RoutineInfo } from '../../types';
+import { ConnectionConfigWithPassword, DbConnection, ExecuteQueryParams, ColumnInfo, DatabaseObjectIdentity, SchemaInfo, TableInfo, QueryExecutionResult, TablePreviewOptions, ViewInfo, RoutineInfo } from '../../types';
 import { qualifiedName, quoteIdentifier } from '../../utils/identifiers';
 import { loadBundledRuntime } from '../../runtime/runtimeLoader';
 import { BasicDatabaseDriver, emptyExecutionResult, executionResultFromRows, numberFromDb, optionalString, safeFilterClause, toQueryError } from './driverUtils';
@@ -146,6 +146,19 @@ export class SnowflakeDriver extends BasicDatabaseDriver {
     return this.executeQuery({ connectionId, sql, maxRows: 0 });
   }
 
+  override async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
+    if (object.kind === 'trigger') return undefined;
+    const type = object.kind === 'procedure' ? 'PROCEDURE' : object.kind.toUpperCase();
+    const name = object.signature ?? qualifiedName(object.schema, object.name);
+    const escapedName = name.replace(/'/g, "''");
+    try {
+      const rows = await this.query(connectionId, `select GET_DDL('${type}', '${escapedName}') as "definition"`);
+      return nativeDefinition(rows[0]?.definition ?? rows[0]?.DEFINITION);
+    } catch (error) {
+      throw toQueryError(error);
+    }
+  }
+
   private async getRoutines(connectionId: string, schema: string, kind: 'FUNCTION' | 'PROCEDURE'): Promise<RoutineInfo[]> {
     const rows = await this.query(connectionId, `select routine_schema as "schema", routine_name as "name", data_type as "returnType" from information_schema.routines where routine_schema = upper('${escapeSql(schema)}') and routine_type = '${kind}' order by routine_name`);
     return rows.map((row) => ({
@@ -223,4 +236,8 @@ function snowflakeAccount(host: string): string {
 
 function escapeSql(value: string): string {
   return value.replace(/'/g, "''");
+}
+
+function nativeDefinition(value: unknown): string | undefined {
+  return value === null || value === undefined || value === '' ? undefined : String(value);
 }

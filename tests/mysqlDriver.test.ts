@@ -3,6 +3,7 @@ import { ConnectionConfigWithPassword } from '../src/types';
 
 const mysqlMock = vi.hoisted(() => ({
   failSsl: false,
+  failDefinition: false,
   queries: [] as Array<{ sql: unknown; params: unknown[] }>,
   pools: [] as Array<{
     config: { ssl?: unknown };
@@ -30,6 +31,7 @@ vi.mock('mysql2/promise', () => {
       if (mysqlMock.failSsl && this.config.ssl) {
         throw new Error('SSL connection error');
       }
+      if (mysqlMock.failDefinition && String(sql).startsWith('SHOW CREATE')) throw { message: 'catalog failed', code: 'ER_ACCESS', password: 'secret' };
       return respond(sql, this.config, params);
     });
 
@@ -52,6 +54,7 @@ import { MySQLDriver } from '../src/database/drivers/mysqlDriver';
 describe('MySQLDriver', () => {
   beforeEach(() => {
     mysqlMock.failSsl = false;
+    mysqlMock.failDefinition = false;
     mysqlMock.queries.length = 0;
     mysqlMock.pools.length = 0;
   });
@@ -97,6 +100,48 @@ describe('MySQLDriver', () => {
 
     expect(String(mysqlMock.queries.at(-1)?.sql)).toContain('limit 11 offset 20');
   });
+
+  it('uses safely quoted SHOW CREATE and returns the native field verbatim', async () => {
+    const driver = new MySQLDriver();
+    await driver.connect(config());
+    const definition = await driver.getObjectDefinition('local', { kind: 'view', schema: 'odd`db', name: 'active`users' });
+    expect(definition).toBe('CREATE VIEW `active_users` AS SELECT 1\n');
+    expect(String(mysqlMock.queries.at(-1)?.sql)).toBe('SHOW CREATE VIEW `odd``db`.`active``users`');
+  });
+
+  it('covers SHOW CREATE for every supported object kind', async () => {
+    const driver = new MySQLDriver();
+    await driver.connect(config());
+    for (const kind of ['table', 'view', 'function', 'procedure'] as const) {
+      const expected = kind === 'view' ? 'CREATE VIEW `active_users` AS SELECT 1\n' : `native ${kind}\n`;
+      await expect(driver.getObjectDefinition('local', { kind, schema: 'public', name: 'thing' })).resolves.toBe(expected);
+    }
+  });
+
+  it('uses safely quoted native SHOW CREATE TRIGGER and returns its full statement verbatim', async () => {
+    const driver = new MySQLDriver();
+    await driver.connect(config());
+    await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'odd`db', name: 'trg`name' }))
+      .resolves.toBe('CREATE DEFINER=`root`@`%` TRIGGER `trg_name` BEFORE INSERT ON `t` FOR EACH ROW SET NEW.x = 1\n');
+    expect(String(mysqlMock.queries.at(-1)?.sql)).toBe('SHOW CREATE TRIGGER `odd``db`.`trg``name`');
+  });
+
+  it('sanitizes SHOW CREATE errors', async () => {
+    mysqlMock.failDefinition = true;
+    const driver = new MySQLDriver();
+    await driver.connect(config());
+    await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'public', name: 'v' }))
+      .rejects.toEqual({ message: 'catalog failed', code: 'ER_ACCESS', detail: undefined, hint: undefined, position: undefined, where: undefined });
+  });
+
+  it('returns ordered two-argument routine metadata without delimiter parsing', async () => {
+    const driver = new MySQLDriver();
+    await driver.connect(config());
+    await expect(driver.getFunctions('local', 'public')).resolves.toContainEqual(expect.objectContaining({
+      name: 'lookup', signature: 'public.lookup(integer, varchar(255))', arguments: ['integer', 'varchar(255)']
+    }));
+    expect(String(mysqlMock.queries.at(-1)?.sql)).toContain('json_objectagg');
+  });
 });
 
 function respond(sql: unknown, config: { ssl?: unknown }, _params: unknown[]) {
@@ -113,6 +158,15 @@ function respond(sql: unknown, config: { ssl?: unknown }, _params: unknown[]) {
   if (text.includes('select connection_id() as id')) {
     return [[{ id: 321 }], []];
   }
+  if (text.startsWith('SHOW CREATE VIEW')) {
+    return [[{ View: 'active_users', 'Create View': 'CREATE VIEW `active_users` AS SELECT 1\n' }], []];
+  }
+  if (text.startsWith('SHOW CREATE TRIGGER')) {
+    return [[{ Trigger: 'trg_name', 'SQL Original Statement': 'CREATE DEFINER=`root`@`%` TRIGGER `trg_name` BEFORE INSERT ON `t` FOR EACH ROW SET NEW.x = 1\n' }], []];
+  }
+  const showKind = text.match(/^SHOW CREATE (TABLE|FUNCTION|PROCEDURE) /)?.[1]?.toLowerCase();
+  if (showKind) return [[{ [`Create ${showKind}`]: `native ${showKind}\n` }], []];
+  if (text === 'SHOW CREATE VIEW `public`.`thing`') return [[{ 'Create View': 'native view\n' }], []];
   if (text.includes('show full processlist')) {
     return [[{ Id: 321, User: 'app', db: 'aph', Command: 'Query', Host: '127.0.0.1', State: 'running', Info: 'select 1' }], []];
   }
@@ -131,8 +185,8 @@ function respond(sql: unknown, config: { ssl?: unknown }, _params: unknown[]) {
   if (text.includes('information_schema.views')) {
     return [[{ schema: 'public', name: 'active_users', type: 'view' }], []];
   }
-  if (text.includes("routine_type = 'FUNCTION'")) {
-    return [[{ schema: 'public', name: 'demo_fn', kind: 'FUNCTION' }], []];
+  if (text.includes('information_schema.routines r')) {
+    return [[{ schema: 'public', name: 'lookup', kind: 'FUNCTION', signature: 'public.lookup(integer, varchar(255))', arguments: '{"2":"varchar(255)","1":"integer"}' }], []];
   }
   if (text.includes("routine_type = 'PROCEDURE'")) {
     return [[{ schema: 'public', name: 'demo_proc', kind: 'PROCEDURE' }], []];

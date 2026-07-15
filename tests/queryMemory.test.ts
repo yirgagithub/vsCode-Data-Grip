@@ -1160,6 +1160,9 @@ describe('schema metadata cache', () => {
       getSchemas: vi.fn(async () => [{ name: 'public' }]),
       getTables: vi.fn(async () => [{ schema: 'public', name: 'users', type: 'table' }]),
       getViews: vi.fn(async () => []),
+      getFunctions: vi.fn(async () => []),
+      getProcedures: vi.fn(async () => []),
+      getTriggers: vi.fn(async () => []),
       getColumns: vi.fn(async () => {
         throw new Error('column metadata unavailable');
       })
@@ -1199,6 +1202,9 @@ describe('schema metadata cache', () => {
       getSchemas: vi.fn(async () => [{ name: 'public' }]),
       getTables: vi.fn(async () => tables),
       getViews: vi.fn(async () => []),
+      getFunctions: vi.fn(async () => []),
+      getProcedures: vi.fn(async () => []),
+      getTriggers: vi.fn(async () => []),
       getColumns: vi.fn(async (_connectionId: string, schema: string, table: string) => {
         activeColumnLoads += 1;
         maxActiveColumnLoads = Math.max(maxActiveColumnLoads, activeColumnLoads);
@@ -1237,6 +1243,9 @@ describe('schema metadata cache', () => {
       getSchemas: vi.fn(async () => [{ name: 'public' }]),
       getTables: vi.fn(async () => tablesPending),
       getViews: vi.fn(async () => []),
+      getFunctions: vi.fn(async () => []),
+      getProcedures: vi.fn(async () => []),
+      getTriggers: vi.fn(async () => []),
       getColumns: vi.fn(async (_connectionId: string, schema: string, table: string) => [
         { schema, table, name: 'id', ordinal: 1, dataType: 'integer', nullable: false }
       ])
