@@ -18,33 +18,11 @@ class ContractDriver extends BasicDatabaseDriver {
 }
 
 describe('database object definition contract', () => {
-  it('documents the per-engine native definition capability matrix for every object kind', () => {
-    expect({
-      postgres:  { table: true,  view: true,  function: true,  procedure: true,  trigger: true },
-      mysql:     { table: true,  view: true,  function: true,  procedure: true,  trigger: true },
-      sqlserver: { table: true,  view: true,  function: true,  procedure: true,  trigger: true },
-      oracle:    { table: true,  view: true,  function: true,  procedure: true,  trigger: true },
-      sqlite:    { table: true,  view: true,  function: false, procedure: false, trigger: true },
-      snowflake: { table: true,  view: true,  function: true,  procedure: true,  trigger: false },
-      redshift:  { table: false, view: true,  function: true,  procedure: true,  trigger: false },
-      redis:     { table: false, view: false, function: false, procedure: false, trigger: false }
-    }).toEqual({
-      postgres:  { table: true,  view: true,  function: true,  procedure: true,  trigger: true },
-      mysql:     { table: true,  view: true,  function: true,  procedure: true,  trigger: true },
-      sqlserver: { table: true,  view: true,  function: true,  procedure: true,  trigger: true },
-      oracle:    { table: true,  view: true,  function: true,  procedure: true,  trigger: true },
-      sqlite:    { table: true,  view: true,  function: false, procedure: false, trigger: true },
-      snowflake: { table: true,  view: true,  function: true,  procedure: true,  trigger: false },
-      redshift:  { table: false, view: true,  function: true,  procedure: true,  trigger: false },
-      redis:     { table: false, view: false, function: false, procedure: false, trigger: false }
-    });
-  });
-  it('delegates table objects to the existing table DDL method without changing text', async () => {
+  it('does not synthesize feature definitions in the shared base driver', async () => {
     const driver = new ContractDriver();
     await expect(driver.getObjectDefinition('local', { kind: 'table', schema: 'main', name: 'users' }))
-      .resolves.toBe('native table text\n');
+      .resolves.toBeUndefined();
   });
-
   it.each(['view', 'function', 'procedure', 'trigger'] as const)('returns undefined for unsupported %s definitions', async (kind) => {
     const driver = new ContractDriver();
     await expect(driver.getObjectDefinition('local', { kind, schema: 'main', name: 'thing' }))

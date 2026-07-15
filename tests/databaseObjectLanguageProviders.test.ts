@@ -22,9 +22,10 @@ vi.mock('vscode', () => {
   class Position { constructor(public line: number, public character: number) {} }
   class Range { constructor(public start: Position, public end: Position) {} }
   class Hover { constructor(public contents: unknown, public range?: unknown) {} }
+  class MarkdownString { isTrusted: unknown; constructor(public value: string) {} }
   class Location { constructor(public uri: Uri, public range: Range) {} }
   return {
-    EventEmitter, Uri, Position, Range, Hover, Location,
+    EventEmitter, Uri, Position, Range, Hover, MarkdownString, Location,
     window: { showWarningMessage: (message: string) => { notifications.push(message); } },
     languages: {
       registerHoverProvider: vi.fn(() => ({ dispose: registrationDisposals[0] })),
