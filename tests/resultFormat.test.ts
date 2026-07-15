@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { rowsToInsertSql, rowsToMarkdown } from '../src/webviews/results/app/format';
+import { formatFieldValue, rowsToInsertSql, rowsToMarkdown } from '../src/webviews/results/app/format';
 
 describe('result format helpers', () => {
+  it('preserves date-only calendar values without UTC shifting', () => {
+    const localDate = new Date(2025, 10, 9);
+
+    expect(formatFieldValue(localDate, { dataTypeId: 1082, dataTypeName: 'date' })).toBe('2025-11-09');
+    expect(formatFieldValue(localDate, { dataTypeId: 1184, dataTypeName: 'timestamptz' })).toBe(localDate.toISOString());
+    expect(formatFieldValue('2025-11-09', { dataTypeName: 'date' })).toBe('2025-11-09');
+  });
   it('renders markdown tables', () => {
     expect(rowsToMarkdown([
       { id: 1, name: 'Ada' },

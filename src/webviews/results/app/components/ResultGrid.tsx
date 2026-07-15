@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { GridFilter, QueryField, QueryResultTab, ResultSet, SortSpec } from '../../../../types';
-import { formatValue } from '../format';
+import { formatFieldValue, formatValue } from '../format';
+import { analyzeFilterCardinality, buildColumnFilterOptions, filterKey, matchesColumnFilter as matchesFilter, rowsForColumnOptions, selectionState, toggleAllValues } from '../resultFilters';
 import { vscode } from '../vscode';
 import { rowsToCsv, rowsToTsv } from '../format';
 import { Icon } from './Icon';
@@ -10,7 +11,8 @@ const ROW_HEIGHT = 32;
 const BUFFER = 12;
 const DEFAULT_COLUMN_WIDTH = 220;
 const MIN_COLUMN_WIDTH = 112;
-const MAX_FILTER_OPTIONS = 250;
+const FILTER_OPTION_HEIGHT = 28;
+const FILTER_OPTION_WINDOW = 16;
 const FILTER_POPOVER_WIDTH = 448;
 const VIEWPORT_PADDING = 8;
 const NUMERIC_TYPE_IDS = new Set([20, 21, 23, 700, 701, 790, 1700]);
@@ -49,11 +51,6 @@ interface ColumnStats {
   numericCount: number;
 }
 
-interface FilterOption {
-  key: string;
-  label: string;
-  count: number;
-}
 
 type Selection =
   | { type: 'cell'; rowIndex: number; column: string; value: unknown }
@@ -101,13 +98,15 @@ export function ResultGrid({
   } as CSSProperties;
 
   const visibleRows = useMemo(() => {
-    const filtered = rows.filter((row) => filters.every((filter) => matchesColumnFilter(row[filter.column], filter)));
+    const fieldMap = new Map(fields.map((field) => [field.name, field]));
+    const filtered = rows.filter((row) => filters.every((filter) => matchesFilter(row[filter.column], filter, fieldMap.get(filter.column))));
     if (!sort) {
       return filtered;
     }
     return [...filtered].sort((a, b) => {
-      const av = formatValue(a[sort.column]);
-      const bv = formatValue(b[sort.column]);
+      const sortField = fields.find((field) => field.name === sort.column);
+      const av = formatFieldValue(a[sort.column], sortField);
+      const bv = formatFieldValue(b[sort.column], sortField);
       return sort.direction === 'asc'
         ? av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' })
         : bv.localeCompare(av, undefined, { numeric: true, sensitivity: 'base' });
@@ -371,7 +370,7 @@ export function ResultGrid({
                       <div
                         className={`cell data-cell ${value === null ? 'null' : ''} ${selectedColumn === field.name ? 'selected-column' : ''} ${isSelected ? 'selected' : ''}`}
                         key={field.name}
-                        title={formatValue(value) || 'NULL'}
+                        title={formatFieldValue(value, field) || 'NULL'}
                         onClick={() => setSelection({ type: 'cell', rowIndex, column: field.name, value })}
                         onContextMenu={(event) => {
                           setSelection({ type: 'cell', rowIndex, column: field.name, value });
@@ -380,7 +379,7 @@ export function ResultGrid({
                         role="gridcell"
                         aria-selected={isSelected}
                       >
-                        {value === null ? 'NULL' : formatValue(value)}
+                        {value === null ? 'NULL' : formatFieldValue(value, field)}
                       </div>
                     );
                   })}
@@ -439,8 +438,10 @@ export function ResultGrid({
       )}
       {columnFiltersVisible && openFilter && (
         <ColumnFilterPopover
+          key={openFilter.column}
           column={openFilter.column}
-          rows={rows}
+          rows={rowsForColumnOptions(rows, filters, openFilter.column, fields)}
+          field={fields.find((field) => field.name === openFilter.column) ?? { name: openFilter.column }}
           filter={filters.find((filter) => filter.column === openFilter.column)}
           style={openFilter.style}
           onApply={(filter) => {
@@ -449,6 +450,7 @@ export function ResultGrid({
           onClear={() => {
             updateFilters((current) => current.filter((item) => item.column !== openFilter.column));
           }}
+          onFilterInSql={() => setOpenFilter(undefined)}
         />
       )}
       {selection?.type === 'column' && (
@@ -551,29 +553,49 @@ function formatNumber(value: number): string {
 function ColumnFilterPopover({
   column,
   rows,
+  field,
   filter,
   style,
   onApply,
-  onClear
+  onClear,
+  onFilterInSql
 }: {
   column: string;
   rows: Record<string, unknown>[];
+  field: QueryField;
   filter?: GridFilter;
   style: CSSProperties;
   onApply: (filter: GridFilter) => void;
   onClear: () => void;
+  onFilterInSql: () => void;
 }) {
-  const options = useMemo(() => columnFilterOptions(rows, column), [rows, column]);
+  const analysis = useMemo(() => analyzeFilterCardinality(rows, field), [rows, field]);
+  const [allowLargeList, setAllowLargeList] = useState(false);
+  const options = useMemo(() => {
+    if (analysis.warned && !allowLargeList) return [];
+    const available = buildColumnFilterOptions(rows, field);
+    const keys = new Set(available.map((option) => option.key));
+    const unavailableSelections = (filter?.values ?? [])
+      .filter((key) => !keys.has(key))
+      .map((key) => ({ key, label: key, count: 0 }));
+    return [...available, ...unavailableSelections];
+  }, [rows, field, filter, analysis.warned, allowLargeList]);
   const allKeys = useMemo(() => options.map((option) => option.key), [options]);
-  const initialSelection = initialColumnFilterSelection(filter, allKeys);
+  const initialSelection = analysis.warned && !allowLargeList ? (filter?.values ?? []) : initialColumnFilterSelection(filter, allKeys);
   const [search, setSearch] = useState('');
   const [selectedValues, setSelectedValues] = useState(() => new Set(initialSelection));
+  const [listScrollTop, setListScrollTop] = useState(0);
+  const selectAllRef = useRef<HTMLInputElement>(null);
   const normalizedSearch = search.trim().toLowerCase();
   const matchingOptions = options.filter((option) => option.label.toLowerCase().includes(normalizedSearch));
-  const visibleOptions = matchingOptions.slice(0, MAX_FILTER_OPTIONS);
-  const matchingKeys = matchingOptions.map((option) => option.key);
-  const allMatchingSelected = matchingKeys.length > 0 && matchingKeys.every((key) => selectedValues.has(key));
+  const listStart = Math.max(0, Math.floor(listScrollTop / FILTER_OPTION_HEIGHT) - 2);
+  const visibleOptions = matchingOptions.slice(listStart, listStart + FILTER_OPTION_WINDOW);
+  const state = selectionState(selectedValues, allKeys);
   const activeCount = selectedValues.size;
+
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = state === 'partial';
+  }, [state]);
 
   const commitSelection = (next: Set<string>) => {
     if (next.size === allKeys.length) {
@@ -584,12 +606,7 @@ function ColumnFilterPopover({
   };
 
   const toggleVisible = () => {
-    const next = new Set(selectedValues);
-    if (allMatchingSelected) {
-      matchingKeys.forEach((key) => next.delete(key));
-    } else {
-      matchingKeys.forEach((key) => next.add(key));
-    }
+    const next = toggleAllValues(selectedValues, allKeys);
     setSelectedValues(next);
     commitSelection(next);
   };
@@ -608,44 +625,39 @@ function ColumnFilterPopover({
   return (
     <div className="filter-popover value-filter-popover" style={style} onClick={(event) => event.stopPropagation()}>
       <div className="filter-title">Local Filter For '{column}'</div>
+      {analysis.warned && !allowLargeList ? (
+        <div className="filter-cardinality-warning">
+          <strong>Large value list</strong>
+          <span>{analysis.truncated ? 'At least ' : ''}{analysis.uniqueCount.toLocaleString()} unique values may use about {(analysis.estimatedBytes / 1024 / 1024).toFixed(1)} MB.</span>
+          <span>Filter in SQL with a WHERE condition, or continue anyway.</span>
+          <div><button type="button" onClick={onFilterInSql}>Filter in SQL</button><button type="button" onClick={() => setAllowLargeList(true)}>Continue anyway</button></div>
+        </div>
+      ) : <>
       <label className="filter-search">
         <Icon name="search" />
         <input value={search} onChange={(event) => setSearch(event.target.value)} autoFocus />
       </label>
       <label className="filter-option filter-option-heading">
-        <input type="checkbox" checked={allMatchingSelected} onChange={toggleVisible} disabled={matchingKeys.length === 0} />
+        <input ref={selectAllRef} type="checkbox" checked={state === 'all'} onChange={toggleVisible} disabled={allKeys.length === 0} />
         <span>Value</span>
         <span className="filter-count">Count</span>
       </label>
-      <div className="filter-option-list">
+      <div className="filter-option-list" onScroll={(event) => setListScrollTop(event.currentTarget.scrollTop)}>
+        <div style={{ height: matchingOptions.length * FILTER_OPTION_HEIGHT, position: 'relative' }}>
+        <div style={{ transform: `translateY(${listStart * FILTER_OPTION_HEIGHT}px)` }}>
         {visibleOptions.length > 0 ? visibleOptions.map((option) => (
-          <label className="filter-option" key={option.key}>
+          <label className="filter-option" key={option.key} style={{ height: FILTER_OPTION_HEIGHT }}>
             <input type="checkbox" checked={selectedValues.has(option.key)} onChange={() => toggleValue(option.key)} />
             <span title={option.label}>{option.label}</span>
             <span className="filter-count">{option.count.toLocaleString()}</span>
           </label>
         )) : <div className="filter-empty">No values in fetched rows.</div>}
+        </div></div>
       </div>
-      {matchingOptions.length > visibleOptions.length && (
-        <div className="filter-list-note">Showing {visibleOptions.length.toLocaleString()} of {matchingOptions.length.toLocaleString()} values</div>
-      )}
       <div className="filter-live-status">{activeCount.toLocaleString()} selected</div>
+      </>}
     </div>
   );
-}
-
-function columnFilterOptions(rows: Record<string, unknown>[], column: string): FilterOption[] {
-  const counts = new Map<string, FilterOption>();
-  for (const row of rows) {
-    const key = filterKey(row[column]);
-    const existing = counts.get(key);
-    if (existing) {
-      existing.count += 1;
-    } else {
-      counts.set(key, { key, label: filterLabel(row[column]), count: 1 });
-    }
-  }
-  return [...counts.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
 export function initialColumnFilterSelection(filter: GridFilter | undefined, allKeys: string[]): string[] {
@@ -656,46 +668,8 @@ export function initialColumnFilterSelection(filter: GridFilter | undefined, all
   return filter.values.filter((value) => available.has(value));
 }
 
-function filterKey(value: unknown): string {
-  if (value === null || value === undefined) {
-    return '<NULL>';
-  }
-  return formatValue(value);
-}
-
-function filterLabel(value: unknown): string {
-  if (value === null || value === undefined) {
-    return 'NULL';
-  }
-  const next = formatValue(value);
-  return next === '' ? '(empty)' : next;
-}
-
 export function matchesColumnFilter(value: unknown, filter: GridFilter): boolean {
-  if (filter.operator === 'values') {
-    return filter.values ? filter.values.includes(filterKey(value)) : true;
-  }
-  const text = formatValue(value).toLowerCase();
-  const expected = (filter.value ?? '').toLowerCase();
-  if (filter.operator === 'is null') {
-    return value === null || value === undefined;
-  }
-  if (filter.operator === 'is not null') {
-    return value !== null && value !== undefined;
-  }
-  if (filter.operator === 'equals') {
-    return text === expected;
-  }
-  if (filter.operator === 'not equals') {
-    return text !== expected;
-  }
-  if (filter.operator === 'starts with') {
-    return text.startsWith(expected);
-  }
-  if (filter.operator === 'ends with') {
-    return text.endsWith(expected);
-  }
-  return text.includes(expected);
+  return matchesFilter(value, filter);
 }
 
 function parseOrderBy(value: string, columns: string[]): { column: string; direction: 'asc' | 'desc' } | undefined {
