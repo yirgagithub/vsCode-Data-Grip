@@ -14,7 +14,10 @@ vi.mock('vscode', () => {
   class Uri {
     constructor(public scheme: string, public path: string, public query = '') {}
     static from(value: { scheme: string; path: string; query?: string }) { return new Uri(value.scheme, value.path, value.query); }
-    toString() { return `${this.scheme}:${this.path}${this.query ? `?${this.query}` : ''}`; }
+    toString() {
+      const encodedPath = this.path.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+      return `${this.scheme}:${encodedPath}${this.query ? `?${encodeURIComponent(this.query)}` : ''}`;
+    }
   }
   class Position { constructor(public line: number, public character: number) {} }
   class Range { constructor(public start: Position, public end: Position) {} }
@@ -117,16 +120,17 @@ describe('DatabaseObjectLanguageProviders', () => {
   it('uses an object display basename while retaining optional identity fields', async () => {
     const provider = providers();
     const view = await provider.provideDefinition(document(), new vscode.Position(0, 20), token()) as vscode.Location;
-    const viewSegments = view.uri.path.split('/').filter(Boolean).map(decodeURIComponent);
-    expect(viewSegments.at(-1)).toBe('sales data.orders/#1 (view @ conn /?#).sql');
-    expect(viewSegments).not.toContain('');
+    const viewBasename = view.uri.path.split('/').at(-1);
+    expect(viewBasename).toBe('sales data.orders_#1 (view @ conn _#).sql');
+    expect(viewBasename).not.toMatch(/%[0-9a-f]{2}/i);
+    expect(view.uri.query).toContain('"name":"orders/#1"');
+    expect(view.uri.query).toContain('"connectionId":"conn /?#"');
 
     const routineObject = { kind: 'function' as const, schema: 'public', name: 'lookup', signature: 'lookup(integer)' };
     const routineProvider = providers({ resolveObject: vi.fn(async () => routineObject) });
     const routine = await routineProvider.provideDefinition(document(), new vscode.Position(0, 20), token()) as vscode.Location;
-    const routineSegments = routine.uri.path.split('/').filter(Boolean).map(decodeURIComponent);
-    expect(routineSegments).toContain('signature=lookup(integer)');
-    expect(routineSegments.at(-1)).toBe('public.lookup (function @ conn /?#).sql');
+    expect(routine.uri.query).toContain('"signature":"lookup(integer)"');
+    expect(routine.uri.path.split('/').at(-1)).toBe('public.lookup (function @ conn _#).sql');
     const overloadProvider = providers({ resolveObject: vi.fn(async () => ({ ...routineObject, signature: 'lookup(text)' })) });
     const overload = await overloadProvider.provideDefinition(document(), new vscode.Position(0, 20), token()) as vscode.Location;
     expect(overload.uri.toString()).not.toBe(routine.uri.toString());
@@ -134,14 +138,23 @@ describe('DatabaseObjectLanguageProviders', () => {
     const triggerObject = { kind: 'trigger' as const, schema: 'audit', name: 'capture_order', table: 'orders' };
     const triggerProvider = providers({ resolveObject: vi.fn(async () => triggerObject) });
     const trigger = await triggerProvider.provideDefinition(document(), new vscode.Position(0, 20), token()) as vscode.Location;
-    const triggerSegments = trigger.uri.path.split('/').filter(Boolean).map(decodeURIComponent);
-    expect(triggerSegments).toContain('table=orders');
-    expect(triggerSegments.at(-1)).toBe('audit.capture_order (trigger @ conn /?#).sql');
-    expect(triggerSegments.at(-1)).not.toContain('orders (trigger');
+    const triggerBasename = trigger.uri.path.split('/').at(-1);
+    expect(trigger.uri.query).toContain('"table":"orders"');
+    expect(triggerBasename).toBe('audit.capture_order (trigger @ conn _#).sql');
+    expect(triggerBasename).not.toContain('orders (trigger');
     const otherTableProvider = providers({ resolveObject: vi.fn(async () => ({ ...triggerObject, table: 'archived_orders' })) });
     const otherTable = await otherTableProvider.provideDefinition(document(), new vscode.Position(0, 20), token()) as vscode.Location;
     expect(otherTable.uri.toString()).not.toBe(trigger.uri.toString());
-    expect(otherTable.uri.path.split('/').filter(Boolean).map(decodeURIComponent).at(-1)).toBe(triggerSegments.at(-1));
+    expect(otherTable.uri.path.split('/').at(-1)).toBe(triggerBasename);
+  });
+
+  it('sanitizes controls and illegal basename characters deterministically', async () => {
+    const unsafe = { kind: 'view' as const, schema: 'sales\u0000:west', name: 'order<new>|*?\\daily', columns: [] };
+    const provider = providers({ resolveObject: vi.fn(async () => unsafe) });
+    const location = await provider.provideDefinition(document(), new vscode.Position(0, 20), token()) as vscode.Location;
+    expect(location.uri.path.split('/').at(-1)).toBe('sales_west.order_new_daily (view @ conn _#).sql');
+    expect(location.uri.query).toContain('"schema":"sales\\u0000:west"');
+    expect(location.uri.query).toContain('"name":"order<new>|*?\\\\daily"');
   });
 
   it('notifies on unsupported/errors and never exposes partial content', async () => {
