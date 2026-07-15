@@ -11,6 +11,7 @@
 ## Global Constraints
 
 - Support tables, views, functions, stored procedures, and triggers on SQL connections; exclude Redis.
+- Retrieve and display each engine's native object definition verbatim; never normalize, translate, or synthesize a cross-database DDL format.
 - Passive hover never emits notifications or guesses ambiguous objects.
 - Generated definition documents are read-only and never execute SQL.
 - Keep hover compact; indexes, row counts, and storage sizes remain out of scope.
