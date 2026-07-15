@@ -198,6 +198,8 @@ describe('additional database drivers', () => {
     await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'main', name: 'active_users' })).resolves.toBe('CREATE VIEW active_users as select * from users');
     await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'main', name: 'users_trg' })).resolves.toContain('CREATE TRIGGER users_trg');
     await expect(driver.getObjectDefinition('local', { kind: 'function', schema: 'main', name: 'f' })).resolves.toBeUndefined();
+    await expect(driver.getObjectDefinition('local', { kind: 'procedure', schema: 'main', name: 'p' })).resolves.toBeUndefined();
+    await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'missing schema', name: 'v' })).rejects.toEqual(expect.objectContaining({ message: expect.any(String), code: 'SQLITE_ERROR' }));
     await driver.disconnect('local');
   });
 
@@ -218,6 +220,9 @@ describe('additional database drivers', () => {
     expect(previewSql).toContain('order by [name] asc');
     expect(previewSql).not.toContain('undefined');
     await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'dbo', name: 'active_users' })).resolves.toBe('CREATE VIEW [dbo].[active_users] AS\nSELECT 1\n');
+    for (const kind of ['function', 'procedure', 'trigger'] as const) {
+      await expect(driver.getObjectDefinition('local', { kind, schema: 'dbo', name: 'thing' })).resolves.toBe('CREATE VIEW [dbo].[active_users] AS\nSELECT 1\n');
+    }
     await driver.getObjectDefinition('local', { kind: 'view', schema: 'odd.schema', name: 'na]me' });
     expect(mssqlMock.queries.at(-1)).toContain("OBJECT_ID(N'[odd.schema].[na]]me]')");
   });
@@ -237,7 +242,10 @@ describe('additional database drivers', () => {
     expect(previewSql).toContain('offset 0 rows fetch next 11 rows only');
     expect(previewSql).not.toContain('undefined');
     await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'HR', name: 'V' })).resolves.toBe('CREATE VIEW "HR"."V" AS SELECT 1\n');
+    await expect(driver.getObjectDefinition('local', { kind: 'table', schema: 'HR', name: 'T' })).resolves.toBe('CREATE VIEW "HR"."V" AS SELECT 1\n');
+    await expect(driver.getObjectDefinition('local', { kind: 'function', schema: 'HR', name: 'F' })).resolves.toBe(`PROCEDURE P AS\nBEGIN\n${'x'.repeat(5000)}\nEND;\n`);
     await expect(driver.getObjectDefinition('local', { kind: 'procedure', schema: 'HR', name: 'P' })).resolves.toBe(`PROCEDURE P AS\nBEGIN\n${'x'.repeat(5000)}\nEND;\n`);
+    await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'HR', name: 'TRG' })).resolves.toBe(`PROCEDURE P AS\nBEGIN\n${'x'.repeat(5000)}\nEND;\n`);
     expect(oracleMock.queries.at(-1)).toContain('order by line');
   });
 
@@ -278,6 +286,9 @@ describe('additional database drivers', () => {
     expect(previewSql).toContain('limit 11');
     expect(previewSql).not.toContain('undefined');
     await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'PUBLIC', name: 'V' })).resolves.toBe('CREATE OR REPLACE VIEW "PUBLIC"."V" AS SELECT 1\n');
+    for (const kind of ['table', 'function', 'procedure'] as const) {
+      await expect(driver.getObjectDefinition('local', { kind, schema: 'PUBLIC', name: 'THING' })).resolves.toBe('CREATE OR REPLACE VIEW "PUBLIC"."V" AS SELECT 1\n');
+    }
     await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'PUBLIC', name: 'T' })).resolves.toBeUndefined();
   });
 
