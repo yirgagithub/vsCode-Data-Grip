@@ -109,6 +109,15 @@ describe('MySQLDriver', () => {
     expect(String(mysqlMock.queries.at(-1)?.sql)).toBe('SHOW CREATE VIEW `odd``db`.`active``users`');
   });
 
+  it('covers SHOW CREATE for every supported object kind', async () => {
+    const driver = new MySQLDriver();
+    await driver.connect(config());
+    for (const kind of ['table', 'view', 'function', 'procedure'] as const) {
+      const expected = kind === 'view' ? 'CREATE VIEW `active_users` AS SELECT 1\n' : `native ${kind}\n`;
+      await expect(driver.getObjectDefinition('local', { kind, schema: 'public', name: 'thing' })).resolves.toBe(expected);
+    }
+  });
+
   it('uses safely quoted native SHOW CREATE TRIGGER and returns its full statement verbatim', async () => {
     const driver = new MySQLDriver();
     await driver.connect(config());
@@ -146,6 +155,9 @@ function respond(sql: unknown, config: { ssl?: unknown }, _params: unknown[]) {
   if (text.startsWith('SHOW CREATE TRIGGER')) {
     return [[{ Trigger: 'trg_name', 'SQL Original Statement': 'CREATE DEFINER=`root`@`%` TRIGGER `trg_name` BEFORE INSERT ON `t` FOR EACH ROW SET NEW.x = 1\n' }], []];
   }
+  const showKind = text.match(/^SHOW CREATE (TABLE|FUNCTION|PROCEDURE) /)?.[1]?.toLowerCase();
+  if (showKind) return [[{ [`Create ${showKind}`]: `native ${showKind}\n` }], []];
+  if (text === 'SHOW CREATE VIEW `public`.`thing`') return [[{ 'Create View': 'native view\n' }], []];
   if (text.includes('show full processlist')) {
     return [[{ Id: 321, User: 'app', db: 'aph', Command: 'Query', Host: '127.0.0.1', State: 'running', Info: 'select 1' }], []];
   }
