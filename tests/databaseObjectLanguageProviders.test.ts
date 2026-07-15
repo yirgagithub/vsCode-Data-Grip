@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const changed: string[] = [];
 const notifications: string[] = [];
+const registrationDisposals = [vi.fn(), vi.fn(), vi.fn()];
 
 vi.mock('vscode', () => {
   class EventEmitter<T> {
@@ -23,10 +24,13 @@ vi.mock('vscode', () => {
     EventEmitter, Uri, Position, Range, Hover, Location,
     window: { showWarningMessage: (message: string) => { notifications.push(message); } },
     languages: {
-      registerHoverProvider: vi.fn(() => ({ dispose() {} })),
-      registerDefinitionProvider: vi.fn(() => ({ dispose() {} }))
+      registerHoverProvider: vi.fn(() => ({ dispose: registrationDisposals[0] })),
+      registerDefinitionProvider: vi.fn(() => ({ dispose: registrationDisposals[1] }))
     },
-    workspace: { registerTextDocumentContentProvider: vi.fn(() => ({ dispose() {} })) }
+    workspace: {
+      registerTextDocumentContentProvider: vi.fn(() => ({ dispose: registrationDisposals[2] })),
+      registerFileSystemProvider: vi.fn()
+    }
   };
 });
 
@@ -68,6 +72,9 @@ describe('DatabaseObjectLanguageProviders', () => {
     expect(vscode.languages.registerDefinitionProvider).toHaveBeenCalledWith({ language: 'sql' }, instance);
     expect(vscode.workspace.registerTextDocumentContentProvider).toHaveBeenCalledWith('querydeck-definition', instance);
     expect(subscriptions).toContain(instance);
+    expect(vscode.workspace.registerFileSystemProvider).not.toHaveBeenCalled();
+    instance.dispose();
+    expect(registrationDisposals.map((dispose) => dispose.mock.calls.length)).toEqual([1, 1, 1]);
   });
 
   it('gates non-SQL and unbound documents', async () => {
@@ -105,6 +112,36 @@ describe('DatabaseObjectLanguageProviders', () => {
     expect(first.uri.toString()).not.toContain('sales data');
     expect(provider.provideTextDocumentContent(first.uri)).toBe('native replacement');
     expect(changed).toEqual([first.uri.toString(), second.uri.toString()]);
+  });
+
+  it('uses an object display basename while retaining optional identity fields', async () => {
+    const provider = providers();
+    const view = await provider.provideDefinition(document(), new vscode.Position(0, 20), token()) as vscode.Location;
+    const viewSegments = view.uri.path.split('/').filter(Boolean).map(decodeURIComponent);
+    expect(viewSegments.at(-1)).toBe('sales data.orders/#1 (view @ conn /?#).sql');
+    expect(viewSegments).not.toContain('');
+
+    const routineObject = { kind: 'function' as const, schema: 'public', name: 'lookup', signature: 'lookup(integer)' };
+    const routineProvider = providers({ resolveObject: vi.fn(async () => routineObject) });
+    const routine = await routineProvider.provideDefinition(document(), new vscode.Position(0, 20), token()) as vscode.Location;
+    const routineSegments = routine.uri.path.split('/').filter(Boolean).map(decodeURIComponent);
+    expect(routineSegments).toContain('signature=lookup(integer)');
+    expect(routineSegments.at(-1)).toBe('public.lookup (function @ conn /?#).sql');
+    const overloadProvider = providers({ resolveObject: vi.fn(async () => ({ ...routineObject, signature: 'lookup(text)' })) });
+    const overload = await overloadProvider.provideDefinition(document(), new vscode.Position(0, 20), token()) as vscode.Location;
+    expect(overload.uri.toString()).not.toBe(routine.uri.toString());
+
+    const triggerObject = { kind: 'trigger' as const, schema: 'audit', name: 'capture_order', table: 'orders' };
+    const triggerProvider = providers({ resolveObject: vi.fn(async () => triggerObject) });
+    const trigger = await triggerProvider.provideDefinition(document(), new vscode.Position(0, 20), token()) as vscode.Location;
+    const triggerSegments = trigger.uri.path.split('/').filter(Boolean).map(decodeURIComponent);
+    expect(triggerSegments).toContain('table=orders');
+    expect(triggerSegments.at(-1)).toBe('audit.capture_order (trigger @ conn /?#).sql');
+    expect(triggerSegments.at(-1)).not.toContain('orders (trigger');
+    const otherTableProvider = providers({ resolveObject: vi.fn(async () => ({ ...triggerObject, table: 'archived_orders' })) });
+    const otherTable = await otherTableProvider.provideDefinition(document(), new vscode.Position(0, 20), token()) as vscode.Location;
+    expect(otherTable.uri.toString()).not.toBe(trigger.uri.toString());
+    expect(otherTable.uri.path.split('/').filter(Boolean).map(decodeURIComponent).at(-1)).toBe(triggerSegments.at(-1));
   });
 
   it('notifies on unsupported/errors and never exposes partial content', async () => {
