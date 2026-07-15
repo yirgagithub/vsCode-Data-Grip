@@ -19,7 +19,7 @@ vi.mock('pg', () => {
       if (pgMock.failSsl && this.config.ssl) {
         throw new Error('The server does not support SSL connections');
       }
-      if (pgMock.failDefinition && String(sql).includes('pg_get_')) {
+      if (pgMock.failDefinition && /pg_get_|pg_views|pg_proc/.test(String(sql))) {
         throw { message: 'catalog failed', code: 'XX001', password: 'secret' };
       }
       return respond(sql);
@@ -94,9 +94,24 @@ describe('PostgresDriver DDL generation', () => {
     const driver = new PostgresDriver();
     await driver.connect(config());
     await expect(driver.getObjectDefinition('local', { kind: 'function', schema: 'public', name: 'f', signature: 'public.f(integer)' })).resolves.toBe('CREATE FUNCTION f(integer)\n');
+    await expect(driver.getObjectDefinition('local', { kind: 'procedure', schema: 'public', name: 'p', signature: 'public.p(integer)' })).resolves.toBe('CREATE FUNCTION f(integer)\n');
     await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'public', name: 'users_trg' })).resolves.toBe('CREATE TRIGGER users_trg\n');
     expect(pgMock.queries.some((entry) => String(entry.sql).includes('pg_get_functiondef'))).toBe(true);
     expect(pgMock.queries.some((entry) => String(entry.sql).includes('pg_get_triggerdef'))).toBe(true);
+  });
+
+  it('covers Redshift supported and unsupported definition capabilities with sanitized errors', async () => {
+    pgMock.failSsl = false;
+    const driver = new RedshiftDriver();
+    await driver.connect(config({ type: 'redshift', port: 5439 }));
+    await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'public', name: 'v' })).resolves.toBe('CREATE VIEW v AS SELECT 1\n');
+    await expect(driver.getObjectDefinition('local', { kind: 'function', schema: 'public', name: 'f' })).resolves.toBe('return 1;\n');
+    await expect(driver.getObjectDefinition('local', { kind: 'procedure', schema: 'public', name: 'p' })).resolves.toBe('return 1;\n');
+    await expect(driver.getObjectDefinition('local', { kind: 'table', schema: 'public', name: 't' })).resolves.toBeUndefined();
+    await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'public', name: 'trg' })).resolves.toBeUndefined();
+    pgMock.failDefinition = true;
+    await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'public', name: 'v' })).rejects.toEqual({ message: 'catalog failed', code: 'XX001', detail: undefined, hint: undefined, position: undefined, where: undefined });
+    pgMock.failDefinition = false;
   });
 
   it('sanitizes native catalog errors', async () => {
@@ -235,6 +250,8 @@ function respond(sql: unknown) {
   if (text.includes('pg_get_viewdef')) return { rows: [{ definition: ' SELECT * FROM users;\n' }], fields: [], rowCount: 1 };
   if (text.includes('pg_get_functiondef')) return { rows: [{ definition: 'CREATE FUNCTION f(integer)\n' }], fields: [], rowCount: 1 };
   if (text.includes('pg_get_triggerdef')) return { rows: [{ definition: 'CREATE TRIGGER users_trg\n' }], fields: [], rowCount: 1 };
+  if (text.includes('pg_views')) return { rows: [{ definition: 'CREATE VIEW v AS SELECT 1\n' }], fields: [], rowCount: 1 };
+  if (text.includes('pg_proc')) return { rows: [{ definition: 'return 1;\n' }], fields: [], rowCount: 1 };
   if (text.includes('information_schema.columns')) {
     return {
       rows: [

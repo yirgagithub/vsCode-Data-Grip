@@ -79,3 +79,9 @@ The fixes now:
 - exercise all five object kinds through contract/capability tests plus native query shape, quoting, unsupported, error, and long Oracle source cases.
 
 Follow-up GREEN result: 4 files passed, 34 tests passed. `npm run lint` exited 0.
+
+## Final capability coverage
+
+Added an explicit eight-engine by five-object-kind capability matrix and exercised every supported/unsupported branch across PostgreSQL, MySQL, SQL Server, Oracle, SQLite, Snowflake, Redshift, and the Redis exclusion. Coverage now includes Redshift native view/routine text and unsupported table/trigger branches, all SQL Server and Oracle kinds, all Snowflake kinds including unsupported trigger, MySQL/PostgreSQL procedures, SQLite's supported table/view/trigger and unsupported routines, plus sanitized Redshift and SQLite catalog failures.
+
+The first coverage run exited 1 with two test-fixture defects (leaked mock SSL state and an overly broad MySQL view fixture); no production defect was exposed, so production code was not changed. After correcting those test fixtures, the required focused command passed 4 files and 37 tests.
