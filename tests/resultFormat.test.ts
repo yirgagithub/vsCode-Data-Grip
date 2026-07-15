@@ -3,8 +3,10 @@ import { formatFieldValue, rowsToInsertSql, rowsToMarkdown } from '../src/webvie
 
 describe('result format helpers', () => {
   it('preserves date-only calendar values without UTC shifting', () => {
-    expect(formatFieldValue(new Date('2025-11-08T23:00:00.000Z'), { dataTypeId: 1082, dataTypeName: 'date' })).toBe('2025-11-09');
-    expect(formatFieldValue(new Date('2025-11-08T23:00:00.000Z'), { dataTypeId: 1184, dataTypeName: 'timestamptz' })).toBe('2025-11-08T23:00:00.000Z');
+    const localDate = new Date(2025, 10, 9);
+
+    expect(formatFieldValue(localDate, { dataTypeId: 1082, dataTypeName: 'date' })).toBe('2025-11-09');
+    expect(formatFieldValue(localDate, { dataTypeId: 1184, dataTypeName: 'timestamptz' })).toBe(localDate.toISOString());
     expect(formatFieldValue('2025-11-09', { dataTypeName: 'date' })).toBe('2025-11-09');
   });
   it('renders markdown tables', () => {
