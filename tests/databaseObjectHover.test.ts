@@ -3,8 +3,7 @@ import { escapeMarkdownText, markdownCodeSpan, renderDatabaseObjectHover } from 
 
 describe('renderDatabaseObjectHover', () => {
   it('renders a compact trusted refresh action for unavailable metadata', () => {
-    expect(renderDatabaseObjectHover({ kind: 'metadata-unavailable', schema: 'public' })).toContain('Refresh database metadata');
-    expect(renderDatabaseObjectHover({ kind: 'metadata-unavailable', schema: 'public' })).toContain('command:querydeck.refreshDatabaseMetadata');
+    expect(renderDatabaseObjectHover({ kind: 'metadata-unavailable', schema: 'public' })).toBe('Database metadata is unavailable for `public`.');
   });
   it('renders compact table columns, nullability, primary and foreign keys', () => {
     const markdown = renderDatabaseObjectHover({
