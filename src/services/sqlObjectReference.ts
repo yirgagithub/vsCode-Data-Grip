@@ -23,6 +23,12 @@ interface IdentifierSequence {
   end: number;
 }
 
+interface CteScope {
+  name: string;
+  startIndex: number;
+  endIndex: number;
+}
+
 const builtInRoutines = new Set([
   'abs', 'acos', 'asin', 'atan', 'avg', 'cast', 'ceil', 'ceiling', 'coalesce', 'concat',
   'convert', 'cos', 'count', 'current_date', 'current_time', 'current_timestamp', 'dateadd',
@@ -41,13 +47,15 @@ export function findSqlObjectReference(sql: string, offset: number): SqlObjectRe
   }
 
   const tokens = tokenize(sql);
-  const cteNames = collectCteNames(tokens);
+  const cteScopes = collectCteScopes(tokens);
   const candidates: SqlObjectReference[] = [];
 
   for (let index = 0; index < tokens.length; index += 1) {
     const word = keyword(tokens[index]);
     if (word === 'trigger' && isTriggerDdl(tokens, index)) {
-      const sequence = readIdentifierSequence(tokens, index + 1);
+      let nameIndex = index + 1;
+      while (['if', 'not', 'exists'].includes(keyword(tokens[nameIndex]))) nameIndex += 1;
+      const sequence = readIdentifierSequence(tokens, nameIndex);
       if (sequence) {
         candidates.push(toReference(sequence, 'trigger'));
       }
@@ -57,9 +65,15 @@ export function findSqlObjectReference(sql: string, offset: number): SqlObjectRe
     if (isRelationIntroducer(tokens, index)) {
       const sequence = readIdentifierSequence(tokens, index + 1);
       const insertTarget = word === 'into' && keyword(tokens[index - 1]) === 'insert';
-      if (sequence && (tokens[sequence.endIndex + 1]?.text !== '(' || insertTarget) && !cteNames.has(lastPart(sequence))) {
+      if (sequence && (tokens[sequence.endIndex + 1]?.text !== '(' || insertTarget)
+        && !isCteReference(sequence, cteScopes)) {
         candidates.push(toReference(sequence, 'relation'));
       }
+    }
+
+    if (word === 'exec' || word === 'execute' || word === 'call') {
+      const sequence = readIdentifierSequence(tokens, index + 1);
+      if (sequence) candidates.push(toReference(sequence, 'routine'));
     }
   }
 
@@ -70,7 +84,8 @@ export function findSqlObjectReference(sql: string, offset: number): SqlObjectRe
     }
     const name = lastPart(sequence);
     const previous = keyword(tokens[index - 1]);
-    if (builtInRoutines.has(name) || routineDeclarationKeywords.has(previous) || previous === 'into'
+    if ((sequence.parts.length === 1 && !['call', 'exec', 'execute'].includes(previous))
+      || builtInRoutines.has(name) || routineDeclarationKeywords.has(previous) || previous === 'into'
       || isCteDeclaration(tokens, sequence)) {
       index = sequence.endIndex;
       continue;
@@ -198,23 +213,64 @@ function isTriggerDdl(tokens: Token[], triggerIndex: number): boolean {
   return false;
 }
 
-function collectCteNames(tokens: Token[]): Set<string> {
-  const names = new Set<string>();
+function collectCteScopes(tokens: Token[]): CteScope[] {
+  const scopes: CteScope[] = [];
+  const depths = tokenDepths(tokens);
   for (let index = 0; index < tokens.length; index += 1) {
-    if (keyword(tokens[index]) !== 'with' && !(tokens[index].text === ',' && names.size > 0)) continue;
-    const sequence = readIdentifierSequence(tokens, index + 1);
-    if (!sequence || sequence.parts.length !== 1) continue;
-    let cursor = sequence.endIndex + 1;
-    if (tokens[cursor]?.text === '(') {
-      const close = matchingCloseParen(tokens, cursor);
-      if (close === undefined) continue;
-      cursor = close + 1;
-    }
-    if (keyword(tokens[cursor]) === 'as' && tokens[cursor + 1]?.text === '(') {
-      names.add(lastPart(sequence));
+    if (keyword(tokens[index]) !== 'with') continue;
+    const scopeEnd = cteScopeEnd(tokens, depths, index);
+    let cursor = index + 1;
+    if (keyword(tokens[cursor]) === 'recursive') cursor += 1;
+    while (cursor < scopeEnd) {
+      const sequence = readIdentifierSequence(tokens, cursor);
+      if (!sequence || sequence.parts.length !== 1) break;
+      cursor = sequence.endIndex + 1;
+      if (tokens[cursor]?.text === '(') {
+        const columnsEnd = matchingCloseParen(tokens, cursor);
+        if (columnsEnd === undefined) break;
+        cursor = columnsEnd + 1;
+      }
+      if (keyword(tokens[cursor]) !== 'as') break;
+      cursor += 1;
+      if (keyword(tokens[cursor]) === 'not') cursor += 1;
+      if (keyword(tokens[cursor]) === 'materialized') cursor += 1;
+      if (tokens[cursor]?.text !== '(') break;
+      const bodyEnd = matchingCloseParen(tokens, cursor);
+      if (bodyEnd === undefined) break;
+      scopes.push({ name: lastPart(sequence), startIndex: index, endIndex: scopeEnd });
+      cursor = bodyEnd + 1;
+      if (tokens[cursor]?.text !== ',') break;
+      cursor += 1;
     }
   }
-  return names;
+  return scopes;
+}
+
+function isCteReference(sequence: IdentifierSequence, scopes: CteScope[]): boolean {
+  if (sequence.parts.length !== 1) return false;
+  const name = lastPart(sequence);
+  return scopes.some((scope) => scope.name === name
+    && sequence.startIndex > scope.startIndex && sequence.startIndex < scope.endIndex);
+}
+
+function tokenDepths(tokens: Token[]): number[] {
+  const depths: number[] = [];
+  let depth = 0;
+  for (const token of tokens) {
+    depths.push(depth);
+    if (token.text === '(') depth += 1;
+    else if (token.text === ')') depth = Math.max(0, depth - 1);
+  }
+  return depths;
+}
+
+function cteScopeEnd(tokens: Token[], depths: number[], withIndex: number): number {
+  const depth = depths[withIndex];
+  for (let index = withIndex + 1; index < tokens.length; index += 1) {
+    if (tokens[index].text === ';' && depths[index] === depth) return index;
+    if (tokens[index].text === ')' && depths[index] === depth) return index;
+  }
+  return tokens.length;
 }
 
 function isCteDeclaration(tokens: Token[], sequence: IdentifierSequence): boolean {
