@@ -1,0 +1,66 @@
+# Task 4 Report: Native object-definition retrieval
+
+## Status
+
+Implemented `DatabaseDriver.getObjectDefinition(connectionId, object)` for SQL drivers while retaining `getTableDDL` for current callers. Native definition strings are returned without trimming, normalization, translation, or synthesis. Redis remains excluded through the base unsupported behavior.
+
+Implementation commit: `235da2360b7be6ed3ac6c6bdf0b348eefdeaf5a6` (`feat: retrieve database object definitions`)
+
+## RED evidence
+
+Command:
+
+```text
+npx vitest run tests/databaseObjectDefinition.test.ts tests/postgresDriver.test.ts tests/mysqlDriver.test.ts tests/additionalDrivers.test.ts
+```
+
+Initial result: exit 1. `tests/databaseObjectDefinition.test.ts` had 5/5 expected failures with `TypeError: driver.getObjectDefinition is not a function`; the 17 pre-existing focused tests passed.
+
+## GREEN evidence
+
+Focused command:
+
+```text
+npx vitest run tests/databaseObjectDefinition.test.ts tests/postgresDriver.test.ts tests/mysqlDriver.test.ts tests/additionalDrivers.test.ts
+```
+
+Result: exit 0; 4 files passed, 25 tests passed.
+
+Lint command:
+
+```text
+npm run lint
+```
+
+Result: exit 0 (`tsc -p ./ --noEmit`).
+
+Scoped whitespace check:
+
+```text
+git diff --check -- src/database/drivers tests/databaseObjectDefinition.test.ts tests/postgresDriver.test.ts tests/mysqlDriver.test.ts tests/additionalDrivers.test.ts
+```
+
+Result: exit 0. A repository-wide `git diff --check` still reports pre-existing `node_modules/.bin/*` whitespace changes; Task 4 did not touch or stage `node_modules`.
+
+## Engine behavior
+
+- PostgreSQL: `pg_get_viewdef`, `pg_get_functiondef`, and `pg_get_triggerdef` with bound values; table calls preserve the existing `getTableDDL` path.
+- MySQL: safely quoted `SHOW CREATE` for tables, views, functions, and procedures; bound `information_schema.triggers` lookup for triggers.
+- SQL Server: `OBJECT_DEFINITION(OBJECT_ID(...))` with escaped object identity; table calls preserve `getTableDDL`.
+- Oracle: bound `DBMS_METADATA.GET_DDL` for tables/views and bound `ALL_SOURCE` retrieval for functions, procedures, and triggers.
+- SQLite: bound `sqlite_master` lookup for tables, views, and triggers; functions/procedures return `undefined`.
+- Snowflake: `GET_DDL` with existing identifier quoting and escaped literal input.
+- Redshift: bound `pg_views` and `pg_proc` text retrieval; unavailable table/trigger definitions return `undefined`.
+
+## Self-review
+
+- The returned catalog/command value is converted to string only; whitespace and terminators are not changed.
+- Unsupported branches are explicit and return `undefined`.
+- PostgreSQL, Oracle, SQLite, and Redshift catalog values use binding. Engines whose native command does not accept identifier parameters use existing identifier quoting or escaped literals.
+- No hover/provider code or unrelated feature code was added.
+- Only Task 4 source/tests and this report were staged; the existing untracked Task 1 brief and dirty `node_modules` were preserved.
+
+## Concerns
+
+- PostgreSQL has no built-in `pg_get_tabledef`; the binding plan explicitly requires the table branch to preserve/delegate to current `getTableDDL`, so table behavior remains the existing generated DDL while all newly supported object kinds return native catalog text.
+- The focused tests use driver mocks (and an in-memory SQLite database). Live engine validation belongs to Task 6.
