@@ -175,10 +175,13 @@ export class SchemaContextService {
   private async loadSchemaNow(connection: ConnectionConfig, schemaName: string, base: SchemaCacheEntry): Promise<SchemaCacheEntry> {
     try {
       const driver = this.connectionManager.getDriver(connection.type);
-      const [schemas, tables, views] = await Promise.all([
+      const [schemas, tables, views, functions, procedures, triggers] = await Promise.all([
         driver.getSchemas(connection.id),
         driver.getTables(connection.id, schemaName),
-        driver.getViews(connection.id, schemaName)
+        driver.getViews(connection.id, schemaName),
+        driver.getFunctions(connection.id, schemaName),
+        driver.getProcedures(connection.id, schemaName),
+        driver.getTriggers(connection.id, schemaName)
       ]);
       const columns = await this.loadColumnsForRelations(connection, schemaName, [...tables, ...views]);
       const entry: SchemaCacheEntry = {
@@ -186,6 +189,9 @@ export class SchemaContextService {
         schemas,
         tables,
         views,
+        functions,
+        procedures,
+        triggers,
         columns,
         loadedAt: Date.now(),
         cacheVersion: SCHEMA_METADATA_CACHE_VERSION,
@@ -253,6 +259,9 @@ export class SchemaContextService {
       schemas: [],
       tables: [],
       views: [],
+      functions: [],
+      procedures: [],
+      triggers: [],
       columns: {},
       indexes: {},
       keys: {},

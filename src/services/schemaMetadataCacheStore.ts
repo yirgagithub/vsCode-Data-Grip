@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { ConnectionConfig, SchemaCacheEntry } from '../types';
 
-export const SCHEMA_METADATA_CACHE_VERSION = 1;
+export const SCHEMA_METADATA_CACHE_VERSION = 2;
 
 interface StoredSchemaCacheEntry {
   version: number;
@@ -126,7 +126,15 @@ export function parseStoredSchemaCacheEntry(connection: ConnectionConfig, raw: s
   if (!stored.entry || stored.entry.connectionId !== connection.id) {
     return undefined;
   }
-  return stored;
+  return {
+    ...stored,
+    entry: {
+      ...stored.entry,
+      functions: stored.entry.functions ?? [],
+      procedures: stored.entry.procedures ?? [],
+      triggers: stored.entry.triggers ?? []
+    }
+  };
 }
 
 function safePath(value: string): string {
