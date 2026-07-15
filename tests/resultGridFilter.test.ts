@@ -25,6 +25,44 @@ describe('ResultGrid value filters', () => {
     expect(matchesColumnFilter('active', { column: 'status', operator: 'values', value: '', values: [] })).toBe(false);
   });
 
+  it('derives cascading options from rows matching every other filter', async () => {
+    const { buildColumnFilterOptions, rowsForColumnOptions } = await import('../src/webviews/results/app/resultFilters');
+    const rows = [
+      { region: 'Africa', country: 'Ethiopia' },
+      { region: 'Africa', country: 'Kenya' },
+      { region: 'Europe', country: 'Germany' }
+    ];
+    const filters = [{ column: 'region', operator: 'values' as const, value: '', values: ['Africa'] }];
+    const fields = [{ name: 'region' }, { name: 'country' }];
+
+    expect(buildColumnFilterOptions(rowsForColumnOptions(rows, filters, 'country', fields), fields[1]).map((option) => option.label)).toEqual(['Ethiopia', 'Kenya']);
+  });
+
+  it('excludes the target column own filter when deriving its options', async () => {
+    const { rowsForColumnOptions } = await import('../src/webviews/results/app/resultFilters');
+    const rows = [{ region: 'Africa', country: 'Ethiopia' }, { region: 'Africa', country: 'Kenya' }];
+    const filters = [
+      { column: 'region', operator: 'values' as const, value: '', values: ['Africa'] },
+      { column: 'country', operator: 'values' as const, value: '', values: ['Ethiopia'] }
+    ];
+    expect(rowsForColumnOptions(rows, filters, 'country', [{ name: 'region' }, { name: 'country' }])).toHaveLength(2);
+  });
+
+  it('keeps select-all state and count on the complete value set', async () => {
+    const { selectionState, toggleAllValues } = await import('../src/webviews/results/app/resultFilters');
+    const all = ['a', 'b', 'c'];
+    expect(selectionState(new Set(['a']), all)).toBe('partial');
+    expect(toggleAllValues(new Set(['a']), all)).toEqual(new Set());
+    expect(toggleAllValues(new Set(), all)).toEqual(new Set(all));
+  });
+
+  it('warns at the high-cardinality thresholds', async () => {
+    const { analyzeFilterCardinality } = await import('../src/webviews/results/app/resultFilters');
+    const rows = Array.from({ length: 10_000 }, (_, index) => ({ value: `value-${index}` }));
+    expect(analyzeFilterCardinality(rows, { name: 'value' }).warned).toBe(true);
+    expect(analyzeFilterCardinality([{ value: 'x'.repeat(100) }], { name: 'value' }, { uniqueLimit: 20, memoryLimitBytes: 50 }).warned).toBe(true);
+  });
+
   it('preserves filters and sort when pagination reruns replace the tab result set', () => {
     const previous = resultTab({
       filters: [{ column: 'status', operator: 'values', value: '', values: ['active'] }],
