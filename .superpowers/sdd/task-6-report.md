@@ -23,9 +23,22 @@ The first full-suite run also exposed three legacy schema-cache test drivers tha
 - `npm test`: exit 0; 34 test files passed, 2 skipped; 382 tests passed, 7 skipped (389 total).
 - `npm run lint`: exit 0 (`tsc -p ./ --noEmit`).
 - `npm run build`: exit 0. TypeScript compilation, extension bundle, MCP bundle, eight runtime entry bundles, native-runtime copy, and webview bundle succeeded; Vite transformed 701 modules.
-- `npx vsce package --no-dependencies`: exit 0. Created `C:\Users\yirga\.openclaw\workspace\querydeck-table-hover-ddl\vscode-data-grip-0.0.14.vsix` with 65 files at 4.44 MB.
+- `npx vsce package --no-dependencies`: initial exit 0. The packaging follow-up below supersedes the initial 65-file artifact.
 
-Archive inspection found the expected bundled runtime entry points plus the SQLite native binding and its supporting licenses. A filename audit found no `.env`, key, PEM, credential, password, or secret files. The archive includes `.superpowers/sdd` development records under the repository's existing package inclusion rules.
+Archive inspection found the expected bundled runtime entry points plus the SQLite native binding and its supporting licenses. A filename audit found no `.env`, key, PEM, credential, password, or secret files.
+
+## Packaging follow-up
+
+Added `.superpowers/**` to `.vscodeignore`, then rebuilt and repackaged from commit `34c6177` plus that reviewed ignore change.
+
+- `npm run build`: exit 0. TypeScript compilation, extension, MCP, eight runtime entries, native-runtime copy, and the webview bundle completed; Vite transformed 701 modules.
+- `npx vsce package --no-dependencies`: exit 0. Created `C:\Users\yirga\.openclaw\workspace\querydeck-table-hover-ddl\vscode-data-grip-0.0.14.vsix` with 53 files, reported as 4.43 MB.
+- Exact artifact size: 4,644,250 bytes.
+- SHA-256: `EFD0D1F397CD2EEF085C06E2EA3247E10EAA9B584CEA5A5A811A68B54907D5AF`.
+- `tar -tf` archive audit: 53 entries; 0 paths matching `(^|/)\.superpowers(/|$)`.
+- Extracted-content fixed-string audit with `rg -a -l -F`: 0 matches for `C:\Users\yirga`, `C:/Users/yirga`, or either slash form of the complete local workspace path.
+
+The temporary extraction directory and rebuild-generated tracked/untracked `dist` and webview outputs were removed or restored after the audit. The ignored VSIX remains at the artifact path.
 
 ## Live coverage
 
@@ -43,4 +56,4 @@ The scoped `git diff --check` for Task 6 source/tests passed with no output. Rep
 
 - SQL Server and Oracle have native trigger definition retrieval but currently inherit unsupported trigger enumeration; the matrix makes this limitation explicit. Snowflake trigger enumeration/definition is unsupported. Redshift table and trigger definitions are unsupported even though those objects can be enumerated.
 - Vitest and Vite emit the repository's existing CJS Node API deprecation warning; it is non-fatal.
-- `.superpowers/sdd` records are packaged in the VSIX. No sensitive files were found, but excluding internal development records could reduce package surface in a separate packaging-policy change.
+- Internal `.superpowers` development records are now excluded from the VSIX.
