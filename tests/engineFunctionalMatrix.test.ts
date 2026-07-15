@@ -60,7 +60,7 @@ type EngineObjectCapabilities = Record<DatabaseType, Record<'table' | 'view' | '
 
 const engineObjectCapabilities: EngineObjectCapabilities = {
   postgres: capabilityRow(true, true, true, true, true, true, true, true, true, true),
-  redshift: capabilityRow(true, false, true, true, true, true, true, true, true, false),
+  redshift: capabilityRow(true, true, true, true, true, true, true, true, true, false),
   mysql: capabilityRow(true, true, true, true, true, true, true, true, true, true),
   sqlite: capabilityRow(true, true, true, true, false, false, false, false, true, true),
   sqlserver: capabilityRow(true, true, true, true, true, true, true, true, false, true),
@@ -80,7 +80,7 @@ describe('database engine functional matrix', () => {
         trigger: { enumerate: 'supported', define: 'supported' }
       },
       redshift: {
-        table: { enumerate: 'supported', define: 'unsupported' },
+        table: { enumerate: 'supported', define: 'supported' },
         view: { enumerate: 'supported', define: 'supported' },
         function: { enumerate: 'supported', define: 'supported' },
         procedure: { enumerate: 'supported', define: 'supported' },
