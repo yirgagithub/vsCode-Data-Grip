@@ -48,3 +48,33 @@ The provider tests cover SQL registration, bound-document gating, hover renderin
 - Vitest emits the repository's existing Vite CJS deprecation warning; it does not fail the tests.
 - The worktree contains extensive pre-existing `node_modules` modifications and untracked files. Task 5 did not modify, stage, or clean them.
 - Full-suite/build/package verification remains Task 6 scope.
+
+## Review follow-up
+
+Fixed the virtual-document display basename without weakening URI identity:
+
+- The final encoded path segment is now `<schema>.<object> (<kind> @ <connection>).sql`.
+- Functions/procedures retain a tagged `signature=` identity segment, and triggers retain a tagged `table=` identity segment, so overloads and same-named triggers on different tables cannot collide.
+- A trigger's final title always uses the trigger name, never its owning table.
+- Non-trigger URIs no longer end in empty optional segments.
+- Tests directly prove all three registrations are disposed and only a read-only `TextDocumentContentProvider` is registered; no writable file-system provider is exposed.
+
+Review RED:
+
+```text
+npx vitest run tests/databaseObjectLanguageProviders.test.ts
+Tests 1 failed | 6 passed
+expected 'orders/#1' to be 'sales data.orders/#1 (view @ conn /?#).sql'
+```
+
+Review GREEN and final focused verification:
+
+```text
+npx vitest run tests/databaseObjectLanguageProviders.test.ts tests/commandSurface.test.ts
+Test Files 2 passed (2)
+Tests 13 passed (13)
+
+npm run lint
+tsc -p ./ --noEmit
+exit 0
+```
