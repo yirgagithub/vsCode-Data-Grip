@@ -35,6 +35,7 @@ describe('er diagram service', () => {
           ]
         },
         keys: {},
+        foreignKeys: {},
         indexes: {},
         schemas: []
       })),

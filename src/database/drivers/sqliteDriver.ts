@@ -1,8 +1,8 @@
 import { Database } from 'sqlite3';
-import { ConnectionConfigWithPassword, DbConnection, ExecuteQueryParams, ColumnInfo, SchemaInfo, TableInfo, QueryExecutionResult, TablePreviewOptions, ViewInfo, IndexInfo, KeyInfo, ForeignKeyInfo } from '../../types';
+import { ConnectionConfigWithPassword, DbConnection, ExecuteQueryParams, ColumnInfo, DatabaseObjectIdentity, SchemaInfo, TableInfo, QueryExecutionResult, TablePreviewOptions, ViewInfo, IndexInfo, KeyInfo, ForeignKeyInfo, TriggerInfo } from '../../types';
 import { qualifiedName, quoteIdentifier } from '../../utils/identifiers';
 import { loadBundledRuntime } from '../../runtime/runtimeLoader';
-import { BasicDatabaseDriver, clientLimit, emptyExecutionResult, executionResultFromRows, numberFromDb, optionalString, safeFilterClause } from './driverUtils';
+import { BasicDatabaseDriver, clientLimit, emptyExecutionResult, executionResultFromRows, numberFromDb, optionalString, safeFilterClause, toQueryError } from './driverUtils';
 
 export class SQLiteDriver extends BasicDatabaseDriver {
   readonly id = 'sqlite' as const;
@@ -62,6 +62,11 @@ export class SQLiteDriver extends BasicDatabaseDriver {
   override async getViews(connectionId: string, schema: string): Promise<ViewInfo[]> {
     const rows = await all(this.requireDatabase(connectionId), `select name from ${quoteIdentifier(schema)}.sqlite_master where type = 'view' order by name`);
     return rows.map((row) => ({ schema, name: String(row.name), type: 'view' }));
+  }
+
+  override async getTriggers(connectionId: string, schema: string): Promise<TriggerInfo[]> {
+    const rows = await all(this.requireDatabase(connectionId), `select name, tbl_name as "table" from ${quoteIdentifier(schema)}.sqlite_master where type = 'trigger' order by tbl_name, name`);
+    return rows.map((row) => ({ schema, table: String(row.table), name: String(row.name) }));
   }
 
   async getColumns(connectionId: string, schema: string, table: string): Promise<ColumnInfo[]> {
@@ -128,6 +133,21 @@ export class SQLiteDriver extends BasicDatabaseDriver {
     const rows = await all(this.requireDatabase(connectionId), `select sql from ${quoteIdentifier(schema)}.sqlite_master where name = ? and type in ('table', 'view')`, [table]);
     const ddl = optionalString(rows[0]?.sql);
     return ddl ? `${ddl};` : super.getTableDDL(connectionId, schema, table);
+  }
+
+  override async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
+    if (object.kind === 'function' || object.kind === 'procedure') return undefined;
+    try {
+      const rows = await all(
+        this.requireDatabase(connectionId),
+        `select sql from ${quoteIdentifier(object.schema)}.sqlite_master where name = ? and type = ?`,
+        [object.name, object.kind]
+      );
+      const value = rows[0]?.sql;
+      return value === null || value === undefined || value === '' ? undefined : String(value);
+    } catch (error) {
+      throw toQueryError(error);
+    }
   }
 
   private requireDatabase(connectionId: string): Database {

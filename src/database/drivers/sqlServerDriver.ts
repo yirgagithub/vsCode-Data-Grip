@@ -1,4 +1,4 @@
-import { ConnectionConfigWithPassword, DbConnection, ExecuteQueryParams, ColumnInfo, SchemaInfo, TableInfo, QueryExecutionResult, TablePreviewOptions, ViewInfo, RoutineInfo } from '../../types';
+import { ConnectionConfigWithPassword, DbConnection, ExecuteQueryParams, ColumnInfo, DatabaseObjectIdentity, SchemaInfo, TableInfo, QueryExecutionResult, TablePreviewOptions, ViewInfo, RoutineInfo } from '../../types';
 import { loadBundledRuntime } from '../../runtime/runtimeLoader';
 import { BasicDatabaseDriver, emptyExecutionResult, executionResultFromRows, optionalString, safeFilterClause, toQueryError } from './driverUtils';
 import { qualifiedSqlName, quoteSqlIdentifier } from '../../services/sqlDialect';
@@ -141,13 +141,30 @@ export class SqlServerDriver extends BasicDatabaseDriver {
     return this.executeQuery({ connectionId, sql, maxRows: 0 });
   }
 
+  override async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
+    if (object.kind === 'table') {
+      const columns = await this.getColumns(connectionId, object.schema, object.name);
+      const body = columns.map((column) => `  ${quoteSqlIdentifier(this.id, column.name)} ${column.dataType}${column.defaultValue == null ? '' : ` default ${column.defaultValue}`}${column.nullable ? ' null' : ' not null'}`).join(',\n');
+      return `create table ${qualifiedSqlName(this.id, object.schema, object.name)} (\n${body}\n);`;
+    }
+    try {
+      const qualified = qualifiedSqlName(this.id, object.schema, object.name).replace(/'/g, "''");
+      const rows = await this.query(connectionId, `select OBJECT_DEFINITION(OBJECT_ID(N'${qualified}')) as definition`);
+      return nativeDefinition(rows[0]?.definition);
+    } catch (error) {
+      throw toQueryError(error);
+    }
+  }
+
   private async getRoutines(connectionId: string, schema: string, type: 'FUNCTION' | 'PROCEDURE'): Promise<RoutineInfo[]> {
-    const rows = await this.query(connectionId, `select routine_schema as [schema], routine_name as name, routine_type as kind, data_type as returnType from information_schema.routines where routine_schema = '${escapeSql(schema)}' and routine_type = '${type}' order by routine_name`);
+    const rows = await this.query(connectionId, `select r.routine_schema as [schema], r.routine_name as name, r.routine_type as kind, r.data_type as returnType, concat(r.specific_schema, '.', r.specific_name) as signature, string_agg(concat(p.parameter_mode, ' ', p.parameter_name, ' ', p.data_type), ', ') within group (order by p.ordinal_position) as arguments from information_schema.routines r left join information_schema.parameters p on p.specific_schema = r.specific_schema and p.specific_name = r.specific_name where r.routine_schema = '${escapeSql(schema)}' and r.routine_type = '${type}' group by r.routine_schema, r.routine_name, r.routine_type, r.data_type, r.specific_schema, r.specific_name order by r.routine_name`);
     return rows.map((row) => ({
       schema: String(row.schema),
       name: String(row.name),
       kind: type === 'PROCEDURE' ? 'procedure' : 'function',
-      returnType: optionalString(row.returnType)
+      returnType: optionalString(row.returnType),
+      signature: optionalString(row.signature),
+      arguments: optionalString(row.arguments)?.split(', ').filter(Boolean)
     }));
   }
 
@@ -178,4 +195,8 @@ async function loadMssql(): Promise<MssqlRuntime> {
 
 function escapeSql(value: string): string {
   return value.replace(/'/g, "''");
+}
+
+function nativeDefinition(value: unknown): string | undefined {
+  return value === null || value === undefined || value === '' ? undefined : String(value);
 }

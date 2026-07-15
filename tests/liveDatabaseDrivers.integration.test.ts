@@ -201,6 +201,7 @@ run('live database drivers', () => {
       await driver.executeStatements(params(config), [
         `drop table if exists ${table}`,
         `create table ${table} (id integer primary key, name text not null)`,
+        `create trigger ${table}_trigger after insert on ${table} begin update ${table} set name = name where id = new.id; end`,
         `insert into ${table} (id, name) values (1, 'Ada')`
       ]);
 
@@ -210,6 +211,11 @@ run('live database drivers', () => {
       expectName(await driver.getTables(config.id, 'main'), table);
       expectColumnNames(await driver.getColumns(config.id, 'main', table), ['id', 'name']);
       expectValue((await driver.getTablePreview(config.id, 'main', table, 10)).rows, 'name', 'Ada');
+      expectName(await driver.getTriggers(config.id, 'main'), `${table}_trigger`);
+      await expect(driver.getObjectDefinition(config.id, { kind: 'table', schema: 'main', name: table }))
+        .resolves.toBe(`CREATE TABLE ${table} (id integer primary key, name text not null)`);
+      await expect(driver.getObjectDefinition(config.id, { kind: 'trigger', schema: 'main', name: `${table}_trigger` }))
+        .resolves.toBe(`CREATE TRIGGER ${table}_trigger after insert on ${table} begin update ${table} set name = name where id = new.id; end`);
     } finally {
       await driver.disconnect(config.id);
       if (existsSync(database)) {

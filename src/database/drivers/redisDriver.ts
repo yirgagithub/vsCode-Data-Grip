@@ -25,6 +25,10 @@ const REDIS_TABLES = [
 export class RedisDriver extends BasicDatabaseDriver {
   readonly id = 'redis' as const;
   readonly displayName = 'Redis';
+
+  override async getObjectDefinition(): Promise<undefined> {
+    return undefined;
+  }
   private readonly clients = new Map<string, RedisClient>();
   private readonly configs = new Map<string, ConnectionConfigWithPassword>();
 

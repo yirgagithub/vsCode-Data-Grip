@@ -1,11 +1,27 @@
 import { PostgresDriver } from './postgresDriver';
-import { ActiveSessionInfo, ColumnInfo, ConnectionConfigWithPassword, ExecuteQueryParams, ExplainQueryOptions, QueryPlanResult, SchemaInfo, TableInfo, TableStatsInfo, ViewInfo } from '../../types';
+import { ActiveSessionInfo, ColumnInfo, ConnectionConfigWithPassword, DatabaseObjectIdentity, ExecuteQueryParams, ExplainQueryOptions, QueryPlanResult, SchemaInfo, TableInfo, TableStatsInfo, ViewInfo } from '../../types';
 import { textExplainPlan } from '../../services/queryPlanService';
 import { qualifiedName } from '../../utils/identifiers';
+import { toQueryError } from './driverUtils';
 
 export class RedshiftDriver extends PostgresDriver {
   override readonly id = 'redshift' as const;
   override readonly displayName = 'Amazon Redshift';
+
+  override async getObjectDefinition(connectionId: string, object: DatabaseObjectIdentity): Promise<string | undefined> {
+    try {
+      if (object.kind === 'view') {
+        const result = await this.requirePool(connectionId).query('select definition from pg_views where schemaname = $1 and viewname = $2', [object.schema, object.name]);
+        return nativeDefinition(result.rows[0]?.definition);
+      }
+      // Redshift exposes routine bodies in pg_proc, but not an unambiguous native
+      // CREATE statement. A body selected by name alone is unsafe for overloads.
+      if (object.kind === 'function' || object.kind === 'procedure') return undefined;
+      return undefined;
+    } catch (error) {
+      throw toQueryError(error);
+    }
+  }
 
   override async getSchemas(connectionId: string): Promise<SchemaInfo[]> {
     const pool = this.requirePool(connectionId);
@@ -230,6 +246,10 @@ function optionalString(value: unknown): string | undefined {
   }
   const next = String(value).trim();
   return next || undefined;
+}
+
+function nativeDefinition(value: unknown): string | undefined {
+  return value === null || value === undefined || value === '' ? undefined : String(value);
 }
 
 function booleanFromDb(value: unknown): boolean {

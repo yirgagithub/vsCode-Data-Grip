@@ -33,6 +33,10 @@ import { DocumentConnectionBinding, DocumentConnectionResolution, resolveDocumen
 import { QueryOutputService } from './services/queryOutputService';
 import { ErDiagramService } from './services/erDiagramService';
 import { QueryPlanAnalyzerService } from './services/queryPlanAnalyzerService';
+import { findSqlObjectReference } from './services/sqlObjectReference';
+import { resolveDatabaseObject } from './services/databaseObjectMetadata';
+import { renderDatabaseObjectHover } from './services/databaseObjectHover';
+import { DatabaseObjectLanguageProviders, registerDatabaseObjectLanguageProviders } from './providers/databaseObjectLanguageProviders';
 import { compareResultSets, formatResultSetDiffMarkdown } from './services/resultSetDiffService';
 import { compareSchemas, formatSchemaDiffMarkdown } from './services/schemaDiffService';
 import { querySnippets } from './services/querySnippetService';
@@ -63,6 +67,14 @@ export function activate(context: vscode.ExtensionContext): void {
   const sqlDocumentConnections = new SqlDocumentConnectionStore(context);
   const resultStore = new ResultSessionStore(context);
   const schemaContext = new SchemaContextService(connectionManager, new SchemaMetadataCacheStore(context));
+  registerDatabaseObjectLanguageProviders(context, new DatabaseObjectLanguageProviders({
+    resolveConnection: resolveConnectionForDocument,
+    findReference: findSqlObjectReference,
+    resolveObject: (reference, connection) => resolveDatabaseObject(reference, connection, schemaContext),
+    renderHover: renderDatabaseObjectHover,
+    getDefinition: (connectionId, object) => connectionManager.getDriverByConnectionId(connectionId).getObjectDefinition(connectionId, object),
+    notify: (message) => { void vscode.window.showWarningMessage(message); }
+  }));
   const sectionService = new SqlSectionService();
   const highlighter = new SqlSectionHighlighter();
   const sqlDiagnostics = vscode.languages.createDiagnosticCollection('database-sql');

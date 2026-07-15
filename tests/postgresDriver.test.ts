@@ -3,6 +3,7 @@ import { ColumnInfo, ConnectionConfigWithPassword } from '../src/types';
 
 const pgMock = vi.hoisted(() => ({
   failSsl: false,
+  failDefinition: false,
   queries: [] as Array<{ sql: unknown; params: unknown[] }>,
   pools: [] as Array<{
     config: { ssl?: unknown };
@@ -17,6 +18,9 @@ vi.mock('pg', () => {
       pgMock.queries.push({ sql, params });
       if (pgMock.failSsl && this.config.ssl) {
         throw new Error('The server does not support SSL connections');
+      }
+      if (pgMock.failDefinition && /pg_get_|pg_views|pg_proc/.test(String(sql))) {
+        throw { message: 'catalog failed', code: 'XX001', password: 'secret' };
       }
       return respond(sql);
     });
@@ -39,11 +43,14 @@ vi.mock('pg', () => {
 });
 
 import { PostgresDriver } from '../src/database/drivers/postgresDriver';
+import { findSqlObjectReference } from '../src/services/sqlObjectReference';
+import { resolveDatabaseObject } from '../src/services/databaseObjectMetadata';
 import { RedshiftDriver } from '../src/database/drivers/redshiftDriver';
 
 describe('PostgresDriver SSL mode', () => {
   beforeEach(() => {
     pgMock.failSsl = false;
+    pgMock.failDefinition = false;
     pgMock.queries.length = 0;
     pgMock.pools.length = 0;
   });
@@ -74,6 +81,75 @@ describe('PostgresDriver SSL mode', () => {
 });
 
 describe('PostgresDriver DDL generation', () => {
+  it('returns native catalog definitions verbatim with bound object identity', async () => {
+    const driver = new PostgresDriver();
+    await driver.connect(config());
+
+    const definition = await driver.getObjectDefinition('local', { kind: 'view', schema: 'odd schema', name: 'active_users' });
+
+    expect(definition).toBe('CREATE VIEW "odd schema"."active_users" AS\n SELECT * FROM users;\n');
+    const query = pgMock.queries.find((entry) => String(entry.sql).includes('pg_get_viewdef'));
+    expect(query?.params).toEqual([['odd schema', 'active_users']]);
+  });
+
+  it('uses native routine and trigger definition functions', async () => {
+    const driver = new PostgresDriver();
+    await driver.connect(config());
+    await expect(driver.getObjectDefinition('local', { kind: 'function', schema: 'public', name: 'f', signature: 'public.f(integer)' })).resolves.toBe('CREATE FUNCTION f(integer)\n');
+    await expect(driver.getObjectDefinition('local', { kind: 'procedure', schema: 'public', name: 'p', signature: 'public.p(integer)' })).resolves.toBe('CREATE FUNCTION f(integer)\n');
+    await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'public', name: 'users_trg' })).resolves.toBe('CREATE TRIGGER users_trg\n');
+    expect(pgMock.queries.some((entry) => String(entry.sql).includes('pg_get_functiondef'))).toBe(true);
+    expect(pgMock.queries.some((entry) => String(entry.sql).includes('pg_get_triggerdef'))).toBe(true);
+  });
+
+  it('enumerates stable routine identities and argument metadata', async () => {
+    const driver = new PostgresDriver();
+    await driver.connect(config());
+    await driver.getFunctions('local', 'public');
+    const sql = String(pgMock.queries.at(-1)?.sql);
+    expect(sql).toContain('pg_get_function_identity_arguments');
+    expect(sql).toContain('signature');
+    expect(sql).toContain('arguments');
+  });
+
+  it('resolves parsed overloaded calls through real driver routine metadata', async () => {
+    const driver = new PostgresDriver();
+    await driver.connect(config());
+    const functions = await driver.getFunctions('local', 'public');
+    const sql = 'select lookup(1, 2)';
+    const reference = findSqlObjectReference(sql, sql.indexOf('lookup') + 1)!;
+    const metadata = { connectionId: 'local', schemaName: 'public', source: 'live', schemas: [], tables: [], views: [], functions, procedures: [], triggers: [], columns: {}, indexes: {}, keys: {}, foreignKeys: {}, status: 'ready' } as const;
+    const result = await resolveDatabaseObject(reference, config(), {
+      getCachedForConnection: async () => metadata,
+      loadSchema: async () => metadata,
+      getCachedColumns: async () => undefined,
+      getColumns: async () => [], getPrimaryKeys: async () => [], getForeignKeys: async () => []
+    });
+    expect(result).toEqual(expect.objectContaining({ signature: 'public.lookup(integer, integer)' }));
+  });
+
+  it('covers Redshift supported and unsupported definition capabilities with sanitized errors', async () => {
+    pgMock.failSsl = false;
+    const driver = new RedshiftDriver();
+    await driver.connect(config({ type: 'redshift', port: 5439 }));
+    await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'public', name: 'v' })).resolves.toBe('CREATE VIEW v AS SELECT 1\n');
+    await expect(driver.getObjectDefinition('local', { kind: 'function', schema: 'public', name: 'f' })).resolves.toBeUndefined();
+    await expect(driver.getObjectDefinition('local', { kind: 'procedure', schema: 'public', name: 'p' })).resolves.toBeUndefined();
+    await expect(driver.getObjectDefinition('local', { kind: 'table', schema: 'public', name: 't' })).resolves.toBeUndefined();
+    await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'public', name: 'trg' })).resolves.toBeUndefined();
+    pgMock.failDefinition = true;
+    await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'public', name: 'v' })).rejects.toEqual({ message: 'catalog failed', code: 'XX001', detail: undefined, hint: undefined, position: undefined, where: undefined });
+    pgMock.failDefinition = false;
+  });
+
+  it('sanitizes native catalog errors', async () => {
+    pgMock.failDefinition = true;
+    const driver = new PostgresDriver();
+    await driver.connect(config());
+    await expect(driver.getObjectDefinition('local', { kind: 'view', schema: 'public', name: 'v' }))
+      .rejects.toEqual({ message: 'catalog failed', code: 'XX001', detail: undefined, hint: undefined, position: undefined, where: undefined });
+    pgMock.failDefinition = false;
+  });
   it('quotes column identifiers with the shared identifier rules', async () => {
     class DdlDriver extends PostgresDriver {
       override async getColumns(): Promise<ColumnInfo[]> {
@@ -199,6 +275,15 @@ describe('RedshiftDriver metadata', () => {
 
 function respond(sql: unknown) {
   const text = String(sql);
+  if (text.includes("prokind = 'f'")) return { rows: [
+    { schema: 'public', name: 'lookup', kind: 'function', signature: 'public.lookup(integer)', arguments: ['integer'] },
+    { schema: 'public', name: 'lookup', kind: 'function', signature: 'public.lookup(integer, integer)', arguments: ['integer', 'integer'] }
+  ], fields: [], rowCount: 2 };
+  if (text.includes('pg_get_viewdef')) return { rows: [{ definition: ' SELECT * FROM users;\n' }], fields: [], rowCount: 1 };
+  if (text.includes('pg_get_functiondef')) return { rows: [{ definition: 'CREATE FUNCTION f(integer)\n' }], fields: [], rowCount: 1 };
+  if (text.includes('pg_get_triggerdef')) return { rows: [{ definition: 'CREATE TRIGGER users_trg\n' }], fields: [], rowCount: 1 };
+  if (text.includes('pg_views')) return { rows: [{ definition: 'CREATE VIEW v AS SELECT 1\n' }], fields: [], rowCount: 1 };
+  if (text.includes('pg_proc')) return { rows: [{ definition: 'return 1;\n' }], fields: [], rowCount: 1 };
   if (text.includes('information_schema.columns')) {
     return {
       rows: [
