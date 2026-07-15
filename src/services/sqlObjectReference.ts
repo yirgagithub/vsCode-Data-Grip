@@ -36,7 +36,14 @@ const builtInRoutines = new Set([
   'json_extract', 'lag', 'last_value', 'lead', 'least', 'length', 'ln', 'log', 'lower',
   'ltrim', 'max', 'min', 'mod', 'nullif', 'now', 'nth_value', 'ntile', 'power', 'rank',
   'replace', 'round', 'row_number', 'rtrim', 'sin', 'sqrt', 'substring', 'sum', 'tan',
-  'trim', 'upper',
+  'trim', 'upper', 'getdate', 'sysdate', 'nvl', 'isnull', 'json_value',
+]);
+
+const nonRoutineKeywords = new Set([
+  'all', 'and', 'any', 'as', 'between', 'by', 'case', 'distinct', 'else', 'end',
+  'exists', 'filter', 'from', 'group', 'having', 'in', 'is', 'like', 'not', 'null',
+  'on', 'or', 'order', 'over', 'partition', 'select', 'some', 'then', 'using', 'values',
+  'when', 'where', 'within',
 ]);
 
 const routineDeclarationKeywords = new Set(['function', 'procedure', 'trigger', 'table', 'view', 'type']);
@@ -71,7 +78,8 @@ export function findSqlObjectReference(sql: string, offset: number): SqlObjectRe
       }
     }
 
-    if (word === 'exec' || word === 'execute' || word === 'call') {
+    if ((word === 'exec' || word === 'execute' || word === 'call')
+      && keyword(tokens[index + 1]) !== 'as') {
       const sequence = readIdentifierSequence(tokens, index + 1);
       if (sequence) candidates.push(toReference(sequence, 'routine'));
     }
@@ -84,8 +92,8 @@ export function findSqlObjectReference(sql: string, offset: number): SqlObjectRe
     }
     const name = lastPart(sequence);
     const previous = keyword(tokens[index - 1]);
-    if ((sequence.parts.length === 1 && !['call', 'exec', 'execute'].includes(previous))
-      || builtInRoutines.has(name) || routineDeclarationKeywords.has(previous) || previous === 'into'
+    if (nonRoutineKeywords.has(name) || builtInRoutines.has(name)
+      || routineDeclarationKeywords.has(previous) || previous === 'into'
       || isCteDeclaration(tokens, sequence)) {
       index = sequence.endIndex;
       continue;

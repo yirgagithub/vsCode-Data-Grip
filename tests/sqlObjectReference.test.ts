@@ -59,6 +59,17 @@ describe('findSqlObjectReference', () => {
     });
   });
 
+  it('finds an ordinary unqualified user-defined function call', () => {
+    const sql = 'select calculate_total(amount) from orders';
+    const range = at(sql, 'calculate_total');
+    expect(findSqlObjectReference(sql, range.middle)).toEqual({
+      range: { start: range.start, end: range.end },
+      parts: ['calculate_total'],
+      context: 'routine',
+      argumentCount: 1,
+    });
+  });
+
   it.each([
     'create trigger audit.users_changed after update on users begin select 1; end',
     'alter trigger audit.users_changed enable',
@@ -134,6 +145,11 @@ describe('findSqlObjectReference', () => {
       parts: ['dbo', 'rebuild_index'],
       context: 'routine',
     });
+  });
+
+  it('does not treat EXECUTE AS USER as a stored procedure invocation', () => {
+    const sql = 'execute as user = \'report_reader\'';
+    expect(findSqlObjectReference(sql, at(sql, 'as').middle)).toBeUndefined();
   });
 
   it('uses an end-exclusive exact range', () => {
