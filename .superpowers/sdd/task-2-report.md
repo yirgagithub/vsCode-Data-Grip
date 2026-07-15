@@ -56,3 +56,25 @@ Result: exit 0; no whitespace errors. Git emitted line-ending notices that LF wi
 
 - The worktree already contains extensive modified/untracked `node_modules` content and an untracked `.superpowers/sdd/task-1-brief.md`; these pre-existing changes were not touched or staged.
 - The focused Vitest run emits the repository's CJS Vite Node API deprecation warning, but all required tests pass.
+
+## Review fix: persisted version 1 migration
+
+### RED evidence
+
+Changed the legacy hydration test to construct an actual persisted `version: 1` snapshot and added coverage that a future unsupported version is rejected.
+
+Command:
+
+`npx vitest run tests/schemaContextService.test.ts tests/schemaMetadataCacheStore.test.ts`
+
+Result: exit 1; 1 test file failed and 1 passed, with 1 failed and 5 passed tests. The expected failure was `migrates version 1 snapshots without routine and trigger fields using empty arrays`: deserialization returned `undefined` because it only accepted version 2.
+
+### GREEN evidence
+
+Updated deserialization to accept persisted versions 1 and 2, normalize accepted records to version 2, hydrate the new arrays with `?? []`, and continue rejecting unsupported versions.
+
+Command:
+
+`npx vitest run tests/schemaContextService.test.ts tests/schemaMetadataCacheStore.test.ts; npm run lint`
+
+Result: exit 0; 2 test files passed, 6 tests passed, and `tsc -p ./ --noEmit` completed without diagnostics. Vitest emitted the existing CJS Vite Node API deprecation warning.

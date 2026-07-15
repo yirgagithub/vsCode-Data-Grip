@@ -28,13 +28,13 @@ describe('schema metadata cache store object metadata', () => {
     expect(parsed?.entry.triggers).toEqual(entry.triggers);
   });
 
-  it('hydrates snapshots without routine and trigger fields using empty arrays', () => {
+  it('migrates version 1 snapshots without routine and trigger fields using empty arrays', () => {
     const legacyEntry = schemaEntry({}) as Partial<SchemaCacheEntry>;
     delete legacyEntry.functions;
     delete legacyEntry.procedures;
     delete legacyEntry.triggers;
     const raw = JSON.stringify({
-      version: SCHEMA_METADATA_CACHE_VERSION,
+      version: 1,
       fingerprint: connectionMetadataFingerprint(connection),
       savedAt: Date.now(),
       entry: legacyEntry
@@ -43,6 +43,17 @@ describe('schema metadata cache store object metadata', () => {
     expect(parseStoredSchemaCacheEntry(connection, raw)?.entry).toEqual(expect.objectContaining({
       functions: [], procedures: [], triggers: []
     }));
+  });
+
+  it('rejects unsupported snapshot versions', () => {
+    const raw = JSON.stringify({
+      version: SCHEMA_METADATA_CACHE_VERSION + 1,
+      fingerprint: connectionMetadataFingerprint(connection),
+      savedAt: Date.now(),
+      entry: schemaEntry({})
+    });
+
+    expect(parseStoredSchemaCacheEntry(connection, raw)).toBeUndefined();
   });
 });
 
