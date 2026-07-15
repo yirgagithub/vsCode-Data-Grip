@@ -81,6 +81,23 @@ describe('findSqlObjectReference', () => {
     expect(findSqlObjectReference(sql, at(sql, 'users').middle)?.context).toBe('relation');
   });
 
+  it('filters recursive and multiple CTEs only inside their statement scope', () => {
+    const sql = `with recursive first_cte as (select * from app.seed),
+      second_cte as (select * from first_cte)
+      select * from second_cte join archive.first_cte on 1 = 1;
+      select * from first_cte`;
+    expect(findSqlObjectReference(sql, at(sql, 'first_cte', 1).middle)).toBeUndefined();
+    expect(findSqlObjectReference(sql, at(sql, 'second_cte', 1).middle)).toBeUndefined();
+    expect(findSqlObjectReference(sql, at(sql, 'archive.first_cte').middle)?.parts).toEqual(['archive', 'first_cte']);
+    expect(findSqlObjectReference(sql, at(sql, 'first_cte', 3).middle)?.context).toBe('relation');
+  });
+
+  it('keeps nested CTE names scoped to their containing query', () => {
+    const sql = 'select * from (with local_rows as (select * from app.rows) select * from local_rows) q join local_rows on 1 = 1';
+    expect(findSqlObjectReference(sql, at(sql, 'local_rows', 1).middle)).toBeUndefined();
+    expect(findSqlObjectReference(sql, at(sql, 'local_rows', 2).middle)?.context).toBe('relation');
+  });
+
   it('ignores identifiers and routine-shaped text in strings and comments', () => {
     const sql = "select 'from secret.users, fake_call(1)' -- join hidden.table\nfrom real.users /* other_call(2) */";
     for (const text of ['secret.users', 'fake_call', 'hidden.table', 'other_call']) {
@@ -92,6 +109,31 @@ describe('findSqlObjectReference', () => {
   it.each(['count', 'coalesce', 'cast', 'current_date'])('rejects the built-in %s', (name) => {
     const sql = `select ${name}(value) from metrics`;
     expect(findSqlObjectReference(sql, at(sql, name).middle)).toBeUndefined();
+  });
+
+  it.each(['in', 'values', 'over', 'getdate', 'sysdate', 'nvl', 'isnull', 'json_value'])('rejects SQL constructs and dialect built-ins: %s', (name) => {
+    const sql = `select ${name}(value) from metrics`;
+    expect(findSqlObjectReference(sql, at(sql, name).middle)).toBeUndefined();
+  });
+
+  it('finds trigger names after DDL modifiers', () => {
+    const sql = 'drop trigger if exists audit.users_changed';
+    const range = at(sql, 'audit.users_changed');
+    expect(findSqlObjectReference(sql, range.middle)).toEqual({
+      range: { start: range.start, end: range.end },
+      parts: ['audit', 'users_changed'],
+      context: 'trigger',
+    });
+  });
+
+  it('finds parenthesis-free stored procedure invocation', () => {
+    const sql = 'exec dbo.rebuild_index @table = N\'users\', @online = 1';
+    const range = at(sql, 'dbo.rebuild_index');
+    expect(findSqlObjectReference(sql, range.middle)).toEqual({
+      range: { start: range.start, end: range.end },
+      parts: ['dbo', 'rebuild_index'],
+      context: 'routine',
+    });
   });
 
   it('uses an end-exclusive exact range', () => {
