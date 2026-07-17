@@ -78,6 +78,13 @@ describe('command surface', () => {
       .sort()).toEqual([]);
   });
 
+  it('registers Marketplace seed commands only in extension development hosts', () => {
+    const extensionSource = readText('src/extension.ts');
+
+    expect(extensionSource).toContain('context.extensionMode === vscode.ExtensionMode.Development');
+    expect(extensionSource).not.toContain('QUERYDECK_ENABLE_TEST_COMMANDS');
+  });
+
   it('keeps AI actions discoverable even before an AI provider is configured', () => {
     const pkg = packageJson();
     const commands = new Map((pkg.contributes?.commands ?? []).map((item) => [item.command, item]));
