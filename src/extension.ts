@@ -329,7 +329,7 @@ export function activate(context: vscode.ExtensionContext): void {
     updateSqlDiagnostics(document);
   });
 
-  if (context.extensionMode === vscode.ExtensionMode.Development) {
+  if (context.extensionMode !== vscode.ExtensionMode.Production) {
     register('database.internal.seedAndConnectForMarketplaceMedia', async (configsArg: unknown) => {
       const configs = configsArg as ConnectionConfigWithPassword[];
       for (const config of configs) {
