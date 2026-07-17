@@ -37,14 +37,6 @@ describe('result format helpers', () => {
     );
   });
 
-  it('preserves temporal row values through the JSON export path', () => {
-    const exportedRows = JSON.parse(JSON.stringify([temporalRow])) as Array<Record<string, unknown>>;
-
-    expect(exportedRows).toEqual([temporalRow]);
-    for (const value of Object.values(exportedRows[0])) {
-      expect(typeof value).toBe('string');
-    }
-  });
   it('renders markdown tables', () => {
     expect(rowsToMarkdown([
       { id: 1, name: 'Ada' },

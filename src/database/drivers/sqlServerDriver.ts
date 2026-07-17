@@ -33,6 +33,10 @@ export function formatSqlServerTemporalValue(type: SqlServerTemporalType, value:
   if (value === null) {
     return null;
   }
+  // Tedious has already materialized a Date here: the original datetimeoffset offset and
+  // precision beyond JavaScript milliseconds are unavailable, so the best stable fallback
+  // is the equivalent UTC ISO value. mssql.valueHandler is process-global; registering these
+  // handlers intentionally makes QueryDeck the owner of temporal handling in this process.
   const iso = value.toISOString();
   if (type === 'date') {
     return iso.slice(0, 10);
