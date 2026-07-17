@@ -3,10 +3,19 @@ import { ConnectionConfigWithPassword } from '../src/types';
 
 const mssqlMock = vi.hoisted(() => ({
   queries: [] as string[],
-  failDefinition: false
+  failDefinition: false,
+  valueHandler: new Map<unknown, (value: unknown) => unknown>()
 }));
 
 vi.mock('mssql', () => {
+  const temporalTypes = {
+    Date: Symbol('Date'),
+    Time: Symbol('Time'),
+    DateTime: Symbol('DateTime'),
+    DateTime2: Symbol('DateTime2'),
+    SmallDateTime: Symbol('SmallDateTime'),
+    DateTimeOffset: Symbol('DateTimeOffset')
+  };
   class ConnectionPool {
     constructor(public readonly config: Record<string, unknown>) {}
     connect = vi.fn(async () => this);
@@ -37,7 +46,8 @@ vi.mock('mssql', () => {
       })
     });
   }
-  return { ConnectionPool, default: { ConnectionPool } };
+  const runtime = { ConnectionPool, valueHandler: mssqlMock.valueHandler, ...temporalTypes };
+  return { ...runtime, default: runtime };
 });
 
 const oracleMock = vi.hoisted(() => ({
@@ -181,6 +191,7 @@ describe('additional database drivers', () => {
   beforeEach(() => {
     mssqlMock.queries.length = 0;
     mssqlMock.failDefinition = false;
+    mssqlMock.valueHandler.clear();
     oracleMock.queries.length = 0;
     oracleMock.executeOptions.length = 0;
     oracleMock.failDefinition = false;
@@ -262,6 +273,23 @@ describe('additional database drivers', () => {
     await expect(driver.getObjectDefinition('local', { kind: 'procedure', schema: 'HR', name: 'P' })).resolves.toBe(`PROCEDURE P AS\nBEGIN\n${'x'.repeat(5000)}\nEND;\n`);
     await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'HR', name: 'TRG' })).resolves.toBe(`PROCEDURE P AS\nBEGIN\n${'x'.repeat(5000)}\nEND;\n`);
     expect(oracleMock.queries.at(-1)).toContain('order by line');
+  });
+
+  it('registers SQL Server temporal handlers without changing numeric results', async () => {
+    const mssql = await import('mssql');
+    const driver = new SqlServerDriver();
+    await driver.connect(config({ type: 'sqlserver', port: 1433, database: 'master' }));
+
+    for (const type of [mssql.Date, mssql.Time, mssql.DateTime, mssql.DateTime2, mssql.SmallDateTime, mssql.DateTimeOffset]) {
+      expect(mssqlMock.valueHandler.has(type)).toBe(true);
+    }
+    const handlers = new Map(mssqlMock.valueHandler);
+    await driver.connect(config({ type: 'sqlserver', port: 1433, database: 'master' }));
+    for (const [type, handler] of handlers) {
+      expect(mssqlMock.valueHandler.get(type)).toBe(handler);
+    }
+    const result = await driver.executeQuery({ connectionId: 'local', sql: 'select 1 as ok' });
+    expect(result.rows).toEqual([{ ok: 1 }]);
   });
 
   it('fetches Oracle temporal result columns as strings without changing other types', async () => {
