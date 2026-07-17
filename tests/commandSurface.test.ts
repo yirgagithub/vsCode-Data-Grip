@@ -82,6 +82,8 @@ describe('command surface', () => {
     const extensionSource = readText('src/extension.ts');
 
     expect(extensionSource).toContain('context.extensionMode !== vscode.ExtensionMode.Production');
+    expect(extensionSource).toContain("vscode.commands.registerCommand('database.internal.seedAndConnectForMarketplaceMedia'");
+    expect(extensionSource).not.toContain("register('database.internal.seedAndConnectForMarketplaceMedia'");
     expect(extensionSource).not.toContain('QUERYDECK_ENABLE_TEST_COMMANDS');
   });
 
