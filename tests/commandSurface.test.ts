@@ -78,10 +78,10 @@ describe('command surface', () => {
       .sort()).toEqual([]);
   });
 
-  it('registers Marketplace seed commands only in extension development hosts', () => {
+  it('registers Marketplace seed commands only in non-production extension hosts', () => {
     const extensionSource = readText('src/extension.ts');
 
-    expect(extensionSource).toContain('context.extensionMode === vscode.ExtensionMode.Development');
+    expect(extensionSource).toContain('context.extensionMode !== vscode.ExtensionMode.Production');
     expect(extensionSource).not.toContain('QUERYDECK_ENABLE_TEST_COMMANDS');
   });
 
