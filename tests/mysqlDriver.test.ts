@@ -6,7 +6,7 @@ const mysqlMock = vi.hoisted(() => ({
   failDefinition: false,
   queries: [] as Array<{ sql: unknown; params: unknown[] }>,
   pools: [] as Array<{
-    config: { ssl?: unknown };
+    config: { ssl?: unknown; dateStrings?: string[] };
     query: ReturnType<typeof vi.fn>;
     getConnection: ReturnType<typeof vi.fn>;
     end: ReturnType<typeof vi.fn>;
@@ -38,14 +38,14 @@ vi.mock('mysql2/promise', () => {
     getConnection = vi.fn(async () => new MockConnection(this.config));
     end = vi.fn(async () => undefined);
 
-    constructor(public readonly config: { ssl?: unknown }) {
+    constructor(public readonly config: { ssl?: unknown; dateStrings?: string[] }) {
       mysqlMock.pools.push(this);
     }
   }
 
   return {
-    default: { createPool: (config: { ssl?: unknown }) => new Pool(config) },
-    createPool: (config: { ssl?: unknown }) => new Pool(config)
+    default: { createPool: (config: { ssl?: unknown; dateStrings?: string[] }) => new Pool(config) },
+    createPool: (config: { ssl?: unknown; dateStrings?: string[] }) => new Pool(config)
   };
 });
 
@@ -68,6 +68,17 @@ describe('MySQLDriver', () => {
     expect(mysqlMock.pools).toHaveLength(2);
     expect(mysqlMock.pools[0].config.ssl).toEqual({ rejectUnauthorized: false });
     expect(mysqlMock.pools[1].config.ssl).toBeUndefined();
+  });
+
+  it('fetches date, datetime, and timestamp values as strings for all pools', async () => {
+    mysqlMock.failSsl = true;
+    const driver = new MySQLDriver();
+    await driver.connect(config({ sslMode: 'prefer' }));
+
+    expect(mysqlMock.pools).toHaveLength(2);
+    for (const pool of mysqlMock.pools) {
+      expect(pool.config.dateStrings).toEqual(['DATE', 'DATETIME', 'TIMESTAMP']);
+    }
   });
 
   it('reads schemas, tables, columns, and sessions', async () => {
