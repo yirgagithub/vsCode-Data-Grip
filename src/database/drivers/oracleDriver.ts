@@ -10,6 +10,11 @@ type OracleConnection = {
 
 type OracleRuntime = {
   OUT_FORMAT_OBJECT: number;
+  STRING: unknown;
+  DB_TYPE_DATE: unknown;
+  DB_TYPE_TIMESTAMP: unknown;
+  DB_TYPE_TIMESTAMP_TZ: unknown;
+  DB_TYPE_TIMESTAMP_LTZ: unknown;
   createPool(config: Record<string, unknown>): Promise<{ getConnection(): Promise<OracleConnection>; close(drainTime?: number): Promise<void> }>;
 };
 
@@ -72,11 +77,21 @@ export class OracleDriver extends BasicDatabaseDriver {
     const oracle = await loadOracle();
     const connection = await this.requirePool(params.connectionId).getConnection();
     const results: QueryExecutionResult[] = [];
+    const temporalTypes = new Set([
+      oracle.DB_TYPE_DATE,
+      oracle.DB_TYPE_TIMESTAMP,
+      oracle.DB_TYPE_TIMESTAMP_TZ,
+      oracle.DB_TYPE_TIMESTAMP_LTZ
+    ]);
     try {
       for (const sql of statements) {
         const started = Date.now();
         try {
-          const result = await connection.execute(sql, [], { outFormat: oracle.OUT_FORMAT_OBJECT, autoCommit: true });
+          const result = await connection.execute(sql, [], {
+            outFormat: oracle.OUT_FORMAT_OBJECT,
+            autoCommit: true,
+            fetchTypeHandler: (metadata: { dbType: unknown }) => temporalTypes.has(metadata.dbType) ? { type: oracle.STRING } : undefined
+          });
           const rows = (result.rows ?? []) as Record<string, unknown>[];
           const dataTypes = Object.fromEntries((result.metaData ?? []).map((field) => [field.name, field.dbTypeName ?? '']));
           results.push(rows.length ? executionResultFromRows(rows, started, sql, dataTypes) : emptyExecutionResult(started, sql, result.rowsAffected ?? 0));

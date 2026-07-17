@@ -1,80 +1,48 @@
-# Task 2 Report: Extend object metadata and cache
+# Task 2 Report: Oracle and Snowflake Native String Fetching
 
-## Status
+## Implementation
 
-DONE_WITH_CONCERNS
+- Oracle query-result executions now install a per-execute `fetchTypeHandler` that maps `DB_TYPE_DATE`, `DB_TYPE_TIMESTAMP`, `DB_TYPE_TIMESTAMP_TZ`, and `DB_TYPE_TIMESTAMP_LTZ` to `{ type: STRING }` and returns `undefined` for other types.
+- The handler is local to QueryDeck query execution; global `oracledb.fetchAsString` is not mutated.
+- Snowflake executions now pass the exact option `fetchAsString: ['Date']` while retaining the existing callback rows, row count, and column metadata path.
+- The Oracle runtime type includes every runtime constant consumed by the handler. Rebuilding `dist/runtime/oracleRuntime.js` and running runtime contract tests confirmed the bundled runtime remains loadable; the generated artifact did not differ from the repository version.
 
-Implementation commit: `f9739b51b3f82ebd47cf80d76d3626e2637ef957`
+## TDD Evidence
 
-## RED evidence
-
-Command:
-
-`npx vitest run tests/schemaContextService.test.ts tests/schemaMetadataCacheStore.test.ts`
-
-After adding the VS Code test mock so the suites could collect, the expected feature failures were observed: 2 test files failed, with 4 failed and 1 passed tests. The failures showed that schema loads did not populate routines/triggers, routine/trigger driver methods were not called or included in failure handling, and legacy records did not hydrate missing arrays.
-
-## Files changed
-
-- `src/types.ts`
-- `src/services/schemaContextService.ts`
-- `src/services/schemaMetadataCacheStore.ts`
-- `tests/schemaContextService.test.ts`
-- `tests/schemaMetadataCacheStore.test.ts`
-
-## Verification
+### RED
 
 Command:
 
-`npx vitest run tests/schemaContextService.test.ts tests/schemaMetadataCacheStore.test.ts`
+`npx vitest run tests/additionalDrivers.test.ts -t "fetches Oracle temporal|fetches Snowflake date"`
 
-Result: exit 0; 2 test files passed, 5 tests passed. Vitest also emitted its existing CJS Vite Node API deprecation warning.
+Result: exit 1, 2 failed / 6 skipped.
 
-Command:
+- Oracle failed with `expected undefined to be type of 'function'` because no `fetchTypeHandler` was supplied.
+- Snowflake failed with `expected undefined to deeply equal [ 'Date' ]` because no `fetchAsString` option was supplied.
 
-`npm run lint`
+### GREEN
 
-Result: exit 0; `tsc -p ./ --noEmit` completed without diagnostics.
+Same focused command after the minimal production changes: exit 0, 2 passed / 6 skipped.
 
-Command:
+Focused driver/runtime verification after rebuilding runtime chunks:
 
-`git diff --check -- src/types.ts src/services/schemaContextService.ts src/services/schemaMetadataCacheStore.ts tests/schemaContextService.test.ts tests/schemaMetadataCacheStore.test.ts`
+`npx vitest run tests/additionalDrivers.test.ts tests/runtimeChunks.test.ts`
 
-Result: exit 0; no whitespace errors. Git emitted line-ending notices that LF will be replaced by CRLF when it next touches the files.
+Result: exit 0, 11 passed across 2 files.
+
+## Final Verification
+
+- `npm test`: exit 0; 34 files passed, 2 skipped; 400 tests passed, 7 skipped.
+- `npm run lint`: exit 0; TypeScript `--noEmit` completed without diagnostics.
 
 ## Self-review
 
-- Added the exact five-kind object identity contract and optional routine signature/arguments.
-- Added required routine/trigger arrays to every newly created schema cache entry.
-- Loaded all six metadata categories in one `Promise.all`, preserving shared in-flight behavior.
-- A routine/trigger failure follows the existing schema-load error path and does not persist a partial snapshot.
-- Persisted shape version is incremented from 1 to 2.
-- Deserialization uses `?? []` for backward-compatible hydration of records missing the three new fields.
-- No hover UI, definition retrieval, provider code, native DDL transformation, `node_modules`, or unrelated production code was changed.
+- Scope: only the two requested drivers, their shared additional-driver test file, and this report were changed. Pre-existing `.superpowers` edits and untracked `node_modules` content were not touched or staged.
+- Correctness: Oracle compares native dbType identities, not names, and lets non-temporal columns use default fetching. Snowflake uses the SDK's requested `Date` category spelling exactly.
+- Data integrity: neither path constructs `Date`, localizes values, changes timezone representation, or transforms rows/nulls. Tests also assert callback result rows remain unchanged.
+- Runtime: the existing `export = oracledb` bundle already carries the referenced constants; rebuilding produced no tracked runtime diff.
 
 ## Concerns
 
-- The worktree already contains extensive modified/untracked `node_modules` content and an untracked `.superpowers/sdd/task-1-brief.md`; these pre-existing changes were not touched or staged.
-- The focused Vitest run emits the repository's CJS Vite Node API deprecation warning, but all required tests pass.
-
-## Review fix: persisted version 1 migration
-
-### RED evidence
-
-Changed the legacy hydration test to construct an actual persisted `version: 1` snapshot and added coverage that a future unsupported version is rejected.
-
-Command:
-
-`npx vitest run tests/schemaContextService.test.ts tests/schemaMetadataCacheStore.test.ts`
-
-Result: exit 1; 1 test file failed and 1 passed, with 1 failed and 5 passed tests. The expected failure was `migrates version 1 snapshots without routine and trigger fields using empty arrays`: deserialization returned `undefined` because it only accepted version 2.
-
-### GREEN evidence
-
-Updated deserialization to accept persisted versions 1 and 2, normalize accepted records to version 2, hydrate the new arrays with `?? []`, and continue rejecting unsupported versions.
-
-Command:
-
-`npx vitest run tests/schemaContextService.test.ts tests/schemaMetadataCacheStore.test.ts; npm run lint`
-
-Result: exit 0; 2 test files passed, 6 tests passed, and `tsc -p ./ --noEmit` completed without diagnostics. Vitest emitted the existing CJS Vite Node API deprecation warning.
+- Vitest emits the repository's existing Vite CJS deprecation warning; it does not fail tests.
+- Live Oracle/Snowflake integration tests remain environment-gated and were skipped by the full suite.
