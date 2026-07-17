@@ -42,13 +42,15 @@ vi.mock('mssql', () => {
 
 const oracleMock = vi.hoisted(() => ({
   queries: [] as string[],
+  executeOptions: [] as Array<Record<string, unknown> | undefined>,
   failDefinition: false
 }));
 
 vi.mock('oracledb', () => {
   const connection = {
-    execute: vi.fn(async (sql: string) => {
+    execute: vi.fn(async (sql: string, _binds?: unknown[], options?: Record<string, unknown>) => {
       oracleMock.queries.push(sql);
+      oracleMock.executeOptions.push(options);
       if (oracleMock.failDefinition && (sql.includes('all_source') || sql.includes('dbms_metadata'))) throw { message: 'catalog failed', code: 'ORA-00942', password: 'secret' };
       if (sql.includes('v$version')) {
         return { rows: [{ VERSION: 'Oracle Database 23ai' }], metaData: [{ name: 'VERSION', dbTypeName: 'VARCHAR2' }] };
@@ -78,6 +80,12 @@ vi.mock('oracledb', () => {
   };
   const runtime = {
     OUT_FORMAT_OBJECT: 1,
+    STRING: 'STRING',
+    DB_TYPE_DATE: 'DB_TYPE_DATE',
+    DB_TYPE_TIMESTAMP: 'DB_TYPE_TIMESTAMP',
+    DB_TYPE_TIMESTAMP_TZ: 'DB_TYPE_TIMESTAMP_TZ',
+    DB_TYPE_TIMESTAMP_LTZ: 'DB_TYPE_TIMESTAMP_LTZ',
+    DB_TYPE_NUMBER: 'DB_TYPE_NUMBER',
     createPool: vi.fn(async () => pool)
   };
   return { ...runtime, default: runtime };
@@ -125,6 +133,7 @@ vi.mock('redis', () => {
 
 const snowflakeMock = vi.hoisted(() => ({
   queries: [] as string[],
+  executeOptions: [] as Array<Record<string, unknown>>,
   failDefinition: false
 }));
 
@@ -139,6 +148,7 @@ vi.mock('snowflake-sdk', () => {
     destroy: vi.fn((callback: (error: unknown, connection: unknown) => void) => callback(undefined, connection)),
     execute: vi.fn((options: { sqlText: string; complete?: (error: unknown, statement: typeof statement, rows?: Record<string, unknown>[]) => void }) => {
       snowflakeMock.queries.push(options.sqlText);
+      snowflakeMock.executeOptions.push(options);
       if (snowflakeMock.failDefinition && options.sqlText.includes('GET_DDL')) {
         options.complete?.({ message: 'catalog failed', code: 'SF001', password: 'secret' }, statement);
         return statement;
@@ -172,9 +182,11 @@ describe('additional database drivers', () => {
     mssqlMock.queries.length = 0;
     mssqlMock.failDefinition = false;
     oracleMock.queries.length = 0;
+    oracleMock.executeOptions.length = 0;
     oracleMock.failDefinition = false;
     redisMock.commands.length = 0;
     snowflakeMock.queries.length = 0;
+    snowflakeMock.executeOptions.length = 0;
     snowflakeMock.failDefinition = false;
   });
 
@@ -252,6 +264,22 @@ describe('additional database drivers', () => {
     expect(oracleMock.queries.at(-1)).toContain('order by line');
   });
 
+  it('fetches Oracle temporal result columns as strings without changing other types', async () => {
+    const driver = new OracleDriver();
+    await driver.connect(config({ type: 'oracle', port: 1521, database: 'ORCLPDB1' }));
+    const result = await driver.executeQuery({ connectionId: 'local', sql: 'select * from temporal_values' });
+
+    const options = oracleMock.executeOptions.at(-1);
+    const fetchTypeHandler = options?.fetchTypeHandler as ((metadata: { dbType: string }) => { type: string } | undefined) | undefined;
+
+    expect(fetchTypeHandler).toBeTypeOf('function');
+    for (const dbType of ['DB_TYPE_DATE', 'DB_TYPE_TIMESTAMP', 'DB_TYPE_TIMESTAMP_TZ', 'DB_TYPE_TIMESTAMP_LTZ']) {
+      expect(fetchTypeHandler?.({ dbType })).toEqual({ type: 'STRING' });
+    }
+    expect(fetchTypeHandler?.({ dbType: 'DB_TYPE_NUMBER' })).toBeUndefined();
+    expect(result.rows).toEqual([{ OK: 1 }]);
+  });
+
   it('runs Redis commands and previews key-type views', async () => {
     const driver = new RedisDriver();
     await driver.connect(config({ type: 'redis', port: 6379, database: '4', username: '' }));
@@ -293,6 +321,15 @@ describe('additional database drivers', () => {
       await expect(driver.getObjectDefinition('local', { kind, schema: 'PUBLIC', name: 'THING' })).resolves.toBe('CREATE OR REPLACE VIEW "PUBLIC"."V" AS SELECT 1\n');
     }
     await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'PUBLIC', name: 'T' })).resolves.toBeUndefined();
+  });
+
+  it('fetches Snowflake date values as strings', async () => {
+    const driver = new SnowflakeDriver();
+    await driver.connect(config({ type: 'snowflake', host: 'acme.snowflakecomputing.com', port: 443, database: 'DB' }));
+    const result = await driver.executeQuery({ connectionId: 'local', sql: 'select * from temporal_values' });
+
+    expect(snowflakeMock.executeOptions.at(-1)?.fetchAsString).toEqual(['Date']);
+    expect(result.rows).toEqual([{ VERSION: '8.0' }]);
   });
 
   it('sanitizes direct catalog failures', async () => {
