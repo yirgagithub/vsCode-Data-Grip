@@ -43,6 +43,15 @@ export function formatSqlServerTemporalValue(type: SqlServerTemporalType, value:
   return type === 'datetimeoffset' ? iso : iso.slice(0, -1);
 }
 
+const sqlServerTemporalValueHandlers: Record<SqlServerTemporalType, (value: Date | null) => string | null> = {
+  date: (value) => formatSqlServerTemporalValue('date', value),
+  time: (value) => formatSqlServerTemporalValue('time', value),
+  datetime: (value) => formatSqlServerTemporalValue('datetime', value),
+  datetime2: (value) => formatSqlServerTemporalValue('datetime2', value),
+  smalldatetime: (value) => formatSqlServerTemporalValue('smalldatetime', value),
+  datetimeoffset: (value) => formatSqlServerTemporalValue('datetimeoffset', value)
+};
+
 export class SqlServerDriver extends BasicDatabaseDriver {
   readonly id = 'sqlserver' as const;
   readonly displayName = 'Microsoft SQL Server';
@@ -216,9 +225,7 @@ function registerTemporalValueHandlers(mssql: MssqlRuntime): void {
     [mssql.DateTimeOffset, 'datetimeoffset']
   ];
   for (const [token, type] of temporalTypes) {
-    if (!mssql.valueHandler.has(token)) {
-      mssql.valueHandler.set(token, (value) => formatSqlServerTemporalValue(type, value));
-    }
+    mssql.valueHandler.set(token, sqlServerTemporalValueHandlers[type]);
   }
 }
 

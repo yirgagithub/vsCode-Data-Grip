@@ -277,12 +277,19 @@ describe('additional database drivers', () => {
 
   it('registers SQL Server temporal handlers without changing numeric results', async () => {
     const mssql = await import('mssql');
+    const foreignTemporalHandler = (value: unknown) => value;
+    const nonTemporalType = Symbol('Int');
+    const nonTemporalHandler = (value: unknown) => value;
+    mssqlMock.valueHandler.set(mssql.Date, foreignTemporalHandler);
+    mssqlMock.valueHandler.set(nonTemporalType, nonTemporalHandler);
     const driver = new SqlServerDriver();
     await driver.connect(config({ type: 'sqlserver', port: 1433, database: 'master' }));
 
     for (const type of [mssql.Date, mssql.Time, mssql.DateTime, mssql.DateTime2, mssql.SmallDateTime, mssql.DateTimeOffset]) {
       expect(mssqlMock.valueHandler.has(type)).toBe(true);
     }
+    expect(mssqlMock.valueHandler.get(mssql.Date)).not.toBe(foreignTemporalHandler);
+    expect(mssqlMock.valueHandler.get(nonTemporalType)).toBe(nonTemporalHandler);
     const handlers = new Map(mssqlMock.valueHandler);
     await driver.connect(config({ type: 'sqlserver', port: 1433, database: 'master' }));
     for (const [type, handler] of handlers) {

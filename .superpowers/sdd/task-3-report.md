@@ -26,6 +26,10 @@ Focused command:
 
 Observed exit code 0: 2 files passed, 16 tests passed.
 
+`npm run lint` completed with exit code 0 (`tsc -p ./ --noEmit`).
+
+`npm test` completed with exit code 0: 35 files passed and 2 skipped; 408 tests passed and 7 skipped.
+
 Full suite command:
 
 `npm test`
@@ -48,3 +52,23 @@ Inspection of installed `tedious` 19.2.1 (`lib/value-parser.js`, `readDateTimeOf
 - UTC-derived slicing ensures timezone-free SQL Server types do not gain `Z` and avoids local calendar shifts.
 - Handler registration neither overwrites pre-existing custom handlers nor changes non-temporal values.
 - No bundled runtime artifact change was required because the runtime exposes the same mssql module-level type tokens and `valueHandler` map.
+
+## Review Fix: Deterministic Handler Ownership
+
+The Important review finding showed that registration previously retained a foreign handler already mapped to a temporal token. QueryDeck must deterministically own all six temporal mappings while preserving unrelated global mappings.
+
+### RED
+
+After seeding the mssql mock map with a foreign Date handler and an unrelated non-temporal handler:
+
+`npm test -- tests/temporalResultValues.test.ts tests/additionalDrivers.test.ts`
+
+Observed exit code 1: 1 failed and 15 passed. The expected assertion failed because the Date token still referenced `foreignTemporalHandler`.
+
+### GREEN
+
+Registration now uses six stable module-level QueryDeck handler functions and sets each temporal token unconditionally. Repeated connects install the same function identities, while the unrelated map entry is never cleared or modified.
+
+`npm test -- tests/temporalResultValues.test.ts tests/additionalDrivers.test.ts`
+
+Observed exit code 0: 2 files passed, 16 tests passed.
