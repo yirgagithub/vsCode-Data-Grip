@@ -16,7 +16,7 @@ type SnowflakeStatement = {
 
 type SnowflakeConnection = {
   connectAsync(): Promise<SnowflakeConnection>;
-  execute(options: { sqlText: string; complete?: (error: unknown, statement: SnowflakeStatement, rows?: Record<string, unknown>[]) => void }): SnowflakeStatement;
+  execute(options: { sqlText: string; fetchAsString?: string[]; complete?: (error: unknown, statement: SnowflakeStatement, rows?: Record<string, unknown>[]) => void }): SnowflakeStatement;
   destroy(callback: (error: unknown, connection: SnowflakeConnection) => void): void;
 };
 
@@ -205,6 +205,7 @@ function executeSnowflake(connection: SnowflakeConnection, sql: string): Promise
   return new Promise((resolve, reject) => {
     connection.execute({
       sqlText: sql,
+      fetchAsString: ['Date'],
       complete: (error, statement, rows = []) => {
         if (error) {
           reject(error);
