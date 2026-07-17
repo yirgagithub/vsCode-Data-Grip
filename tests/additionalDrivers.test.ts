@@ -316,17 +316,20 @@ describe('additional database drivers', () => {
     expect(result.rows).toEqual([{ ok: 1 }]);
   });
 
-  it('fetches Oracle temporal result columns as strings without changing other types', async () => {
+  it('formats native Oracle temporal values as deterministic canonical UTC strings', async () => {
     const driver = new OracleDriver();
     await driver.connect(config({ type: 'oracle', port: 1521, database: 'ORCLPDB1' }));
     const result = await driver.executeQuery({ connectionId: 'local', sql: 'select * from temporal_values' });
 
     const options = oracleMock.executeOptions.at(-1);
-    const fetchTypeHandler = options?.fetchTypeHandler as ((metadata: { dbType: string }) => { type: string } | undefined) | undefined;
+    const fetchTypeHandler = options?.fetchTypeHandler as ((metadata: { dbType: string }) => { converter: (value: unknown) => unknown } | undefined) | undefined;
 
     expect(fetchTypeHandler).toBeTypeOf('function');
     for (const dbType of ['DB_TYPE_DATE', 'DB_TYPE_TIMESTAMP', 'DB_TYPE_TIMESTAMP_TZ', 'DB_TYPE_TIMESTAMP_LTZ']) {
-      expect(fetchTypeHandler?.({ dbType })).toEqual({ type: 'STRING' });
+      const handler = fetchTypeHandler?.({ dbType });
+      expect(handler).toEqual({ converter: expect.any(Function) });
+      expect(handler?.converter(new Date('2025-11-09T00:23:45.123Z'))).toBe('2025-11-09T00:23:45.123Z');
+      expect(handler?.converter(null)).toBeNull();
     }
     expect(fetchTypeHandler?.({ dbType: 'DB_TYPE_NUMBER' })).toBeUndefined();
     expect(result.rows).toEqual([{ OK: 1 }]);
