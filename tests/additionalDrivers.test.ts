@@ -132,7 +132,7 @@ vi.mock('redis', () => {
         return 5;
       }
       if (name === 'GET') {
-        return 'Ada';
+        return command[1] === 'temporal:date' ? '2025-11-09' : 'Ada';
       }
       return 'OK';
     })
@@ -275,6 +275,23 @@ describe('additional database drivers', () => {
     expect(oracleMock.queries.at(-1)).toContain('order by line');
   });
 
+  it('keeps SQLite date-shaped values as strings', async () => {
+    const driver = new SQLiteDriver();
+    await driver.connect(config({ type: 'sqlite', database: ':memory:', username: '', port: 0 }));
+
+    const result = await driver.executeQuery({
+      connectionId: 'local',
+      sql: "select '2025-11-09' as date_value, '2025-11-09 14:23:45.123456' as timestamp_value"
+    });
+
+    expect(result.rows).toEqual([{
+      date_value: '2025-11-09',
+      timestamp_value: '2025-11-09 14:23:45.123456'
+    }]);
+    expect(result.rows.every((row) => Object.values(row).every((value) => typeof value === 'string'))).toBe(true);
+    await driver.disconnect('local');
+  });
+
   it('registers SQL Server temporal handlers without changing numeric results', async () => {
     const mssql = await import('mssql');
     const foreignTemporalHandler = (value: unknown) => value;
@@ -356,6 +373,16 @@ describe('additional database drivers', () => {
       await expect(driver.getObjectDefinition('local', { kind, schema: 'PUBLIC', name: 'THING' })).resolves.toBe('CREATE OR REPLACE VIEW "PUBLIC"."V" AS SELECT 1\n');
     }
     await expect(driver.getObjectDefinition('local', { kind: 'trigger', schema: 'PUBLIC', name: 'T' })).resolves.toBeUndefined();
+  });
+
+  it('keeps Redis date-shaped values as strings', async () => {
+    const driver = new RedisDriver();
+    await driver.connect(config({ type: 'redis', port: 6379, database: '4', username: '' }));
+
+    const result = await driver.executeQuery({ connectionId: 'local', sql: 'GET temporal:date' });
+
+    expect(result.rows).toEqual([{ value: '2025-11-09' }]);
+    expect(typeof result.rows[0].value).toBe('string');
   });
 
   it('fetches Snowflake date values as strings', async () => {

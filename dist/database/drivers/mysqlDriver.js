@@ -39,6 +39,7 @@ const identifiers_1 = require("../../utils/identifiers");
 const queryPlanService_1 = require("../../services/queryPlanService");
 const runtimeLoader_1 = require("../../runtime/runtimeLoader");
 const sqlDialect_1 = require("../../services/sqlDialect");
+const driverUtils_1 = require("./driverUtils");
 class MySQLDriver {
     id = 'mysql';
     displayName = 'MySQL';
@@ -396,6 +397,20 @@ class MySQLDriver {
         const columns = await this.getColumns(connectionId, schema, table);
         return (0, sqlDialect_1.createTableSql)(this.id, schema, table, columns);
     }
+    async getObjectDefinition(connectionId, object) {
+        try {
+            const command = object.kind === 'table' ? 'TABLE' : object.kind === 'view' ? 'VIEW' : object.kind === 'function' ? 'FUNCTION' : object.kind === 'procedure' ? 'PROCEDURE' : 'TRIGGER';
+            const [rows] = await this.requirePool(connectionId).query(`SHOW CREATE ${command} ${(0, identifiers_1.qualifiedName)(object.schema, object.name, '`')}`);
+            const row = rows[0];
+            if (!row)
+                return undefined;
+            const key = Object.keys(row).find((candidate) => candidate.toLowerCase().startsWith('create ') || candidate.toLowerCase() === 'sql original statement');
+            return key ? nativeDefinition(row[key]) : undefined;
+        }
+        catch (error) {
+            throw this.toQueryError(error);
+        }
+    }
     async getTableStats(connectionId, schema, table) {
         const [rows] = await this.requirePool(connectionId).query(`select table_rows as "rowEstimate",
               data_length as "dataLength",
@@ -430,6 +445,7 @@ class MySQLDriver {
             connectionLimit: max,
             waitForConnections: true,
             connectTimeout: config.connectTimeoutMs ?? 10000,
+            dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'],
             ssl
         };
     }
@@ -472,13 +488,9 @@ class MySQLDriver {
         const limit = Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : undefined;
         const nextOffset = Number.isFinite(offset) && offset && offset > 0 ? Math.floor(offset) : 0;
         const pageLimit = limit ? limit + 1 : undefined;
-        return pageLimit && this.canApplyClientLimit(sql)
+        return pageLimit && (0, driverUtils_1.canApplyClientLimit)(sql)
             ? `select * from (${sql.replace(/;+\s*$/, '')}) __dg_query limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ''}`
             : sql;
-    }
-    canApplyClientLimit(sql) {
-        const normalized = sql.trim().replace(/^--.*$/gm, '').trim().toLowerCase();
-        return normalized.startsWith('select') || normalized.startsWith('with');
     }
     toExecutionResult(rows, fields, executionId, started, sql) {
         const recordRows = Array.isArray(rows) ? rows : [];
@@ -499,13 +511,15 @@ class MySQLDriver {
         };
     }
     async getRoutines(connectionId, schema, type) {
-        const [rows] = await this.requirePool(connectionId).query(`select routine_schema as \`schema\`,
-              routine_name as name,
-              routine_type as kind,
-              dtd_identifier as "returnType",
-              security_type as language,
-              routine_comment as comment
-       from information_schema.routines
+        const [rows] = await this.requirePool(connectionId).query(`select r.routine_schema as \`schema\`,
+              r.routine_name as name,
+              r.routine_type as kind,
+              r.dtd_identifier as "returnType",
+              r.security_type as language,
+              r.routine_comment as comment,
+              concat(r.routine_schema, '.', r.routine_name, '(', coalesce((select group_concat(p.dtd_identifier order by p.ordinal_position separator ', ') from information_schema.parameters p where p.specific_schema = r.specific_schema and p.specific_name = r.specific_name and p.ordinal_position > 0), ''), ')') as signature,
+              (select json_objectagg(p.ordinal_position, p.dtd_identifier) from information_schema.parameters p where p.specific_schema = r.specific_schema and p.specific_name = r.specific_name and p.ordinal_position > 0) as arguments
+       from information_schema.routines r
        where routine_schema = ? and routine_type = ?
        order by routine_name`, [schema, type]);
         return rows.map((row) => ({
@@ -514,7 +528,9 @@ class MySQLDriver {
             kind: optionalString(row.kind)?.toLowerCase() === 'procedure' ? 'procedure' : 'function',
             returnType: optionalString(row.returnType),
             language: optionalString(row.language),
-            comment: optionalString(row.comment)
+            comment: optionalString(row.comment),
+            signature: optionalString(row.signature),
+            arguments: routineArguments(row.arguments)
         }));
     }
     canExplain(sql) {
@@ -601,5 +617,14 @@ function optionalString(value) {
     }
     const next = String(value).trim();
     return next || undefined;
+}
+function routineArguments(value) {
+    if (value === null || value === undefined)
+        return undefined;
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return Object.entries(parsed).sort(([left], [right]) => Number(left) - Number(right)).map(([, argument]) => String(argument));
+}
+function nativeDefinition(value) {
+    return value === null || value === undefined || value === '' ? undefined : String(value);
 }
 //# sourceMappingURL=mysqlDriver.js.map

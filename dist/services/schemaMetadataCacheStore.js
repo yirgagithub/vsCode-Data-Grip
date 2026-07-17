@@ -39,7 +39,7 @@ exports.serializeSchemaCacheEntry = serializeSchemaCacheEntry;
 exports.parseStoredSchemaCacheEntry = parseStoredSchemaCacheEntry;
 const crypto = __importStar(require("crypto"));
 const vscode = __importStar(require("vscode"));
-exports.SCHEMA_METADATA_CACHE_VERSION = 1;
+exports.SCHEMA_METADATA_CACHE_VERSION = 3;
 class SchemaMetadataCacheStore {
     baseUri;
     storageError;
@@ -140,13 +140,24 @@ function parseStoredSchemaCacheEntry(connection, raw) {
     catch {
         return undefined;
     }
-    if (stored.version !== exports.SCHEMA_METADATA_CACHE_VERSION || stored.fingerprint !== connectionMetadataFingerprint(connection)) {
+    if (![1, 2, exports.SCHEMA_METADATA_CACHE_VERSION].includes(stored.version) || stored.fingerprint !== connectionMetadataFingerprint(connection)) {
         return undefined;
     }
     if (!stored.entry || stored.entry.connectionId !== connection.id) {
         return undefined;
     }
-    return stored;
+    return {
+        ...stored,
+        version: exports.SCHEMA_METADATA_CACHE_VERSION,
+        entry: {
+            ...stored.entry,
+            cacheVersion: exports.SCHEMA_METADATA_CACHE_VERSION,
+            functions: stored.entry.functions ?? [],
+            procedures: stored.entry.procedures ?? [],
+            triggers: stored.entry.triggers ?? [],
+            foreignKeys: stored.entry.foreignKeys ?? {}
+        }
+    };
 }
 function safePath(value) {
     return value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'default';

@@ -34,13 +34,13 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode27 = __toESM(require("vscode"));
+var vscode30 = __toESM(require("vscode"));
 
 // src/database/connectionManager.ts
 var vscode = __toESM(require("vscode"));
 
 // src/database/drivers/postgresDriver.ts
-var import_crypto = require("crypto");
+var import_crypto2 = require("crypto");
 
 // src/utils/identifiers.ts
 function quoteIdentifier(identifier, quote) {
@@ -167,6 +167,9 @@ function loadBundledRuntime(moduleName) {
   }
   return require((0, import_path.join)(__dirname, "runtime", moduleName));
 }
+
+// src/database/drivers/driverUtils.ts
+var import_crypto = require("crypto");
 
 // src/services/sqlDialect.ts
 function assertSqlGeneratingType(type, feature) {
@@ -538,6 +541,215 @@ function unsupportedSql(type, feature) {
 `;
 }
 
+// src/database/drivers/driverUtils.ts
+var BasicDatabaseDriver = class {
+  async testConnection(config) {
+    try {
+      const connection = await this.connect(config);
+      await this.disconnect(connection.id);
+      return { ok: true, message: "Connection successful" };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  async beginTransaction(connectionId) {
+    await this.executeQuery({ connectionId, sql: "begin" });
+  }
+  async commitTransaction(connectionId) {
+    await this.executeQuery({ connectionId, sql: "commit" });
+  }
+  async rollbackTransaction(connectionId) {
+    await this.executeQuery({ connectionId, sql: "rollback" });
+  }
+  isTransactionOpen(_connectionId) {
+    return false;
+  }
+  async validateQuery(_params) {
+    return { ok: true };
+  }
+  async explainQuery(params) {
+    return {
+      format: "text",
+      analyze: false,
+      rawText: params.sql,
+      annotations: [{ severity: "low", message: `${this.displayName} explain output is not available in this driver yet.` }]
+    };
+  }
+  async cancelQuery(_executionId) {
+  }
+  async getViews(_connectionId, _schema) {
+    return [];
+  }
+  async getFunctions(_connectionId, _schema) {
+    return [];
+  }
+  async getProcedures(_connectionId, _schema) {
+    return [];
+  }
+  async getTriggers(_connectionId, _schema) {
+    return [];
+  }
+  async getActiveSessions(_connectionId) {
+    return [];
+  }
+  async cancelSession(_connectionId, _pid) {
+  }
+  async terminateSession(_connectionId, _pid) {
+  }
+  async getIndexes(_connectionId, _schema, _table) {
+    return [];
+  }
+  async getPrimaryKeys(_connectionId, _schema, _table) {
+    return [];
+  }
+  async getForeignKeys(_connectionId, _schema, _table) {
+    return [];
+  }
+  async getTableDDL(connectionId, schema, table) {
+    const columns = await this.getColumns(connectionId, schema, table);
+    return createTableSql(this.id, schema, table, columns);
+  }
+  async getObjectDefinition(connectionId, object) {
+    return void 0;
+  }
+  async getTableStats(_connectionId, schema, table) {
+    return { schema, table, databaseType: this.id, columns: [] };
+  }
+};
+function executionResultFromRows(rows, started, sql, dataTypes = {}) {
+  const fields = rows[0] ? Object.keys(rows[0]).map((name) => ({ name, dataTypeName: dataTypes[name] })) : Object.keys(dataTypes).map((name) => ({ name, dataTypeName: dataTypes[name] }));
+  return {
+    executionId: (0, import_crypto.randomUUID)(),
+    fields,
+    rows,
+    rowCount: rows.length,
+    command: sql.trim().match(/^\w+/)?.[0]?.toUpperCase(),
+    durationMs: Date.now() - started
+  };
+}
+function emptyExecutionResult(started, sql, rowCount = 0) {
+  return {
+    executionId: (0, import_crypto.randomUUID)(),
+    fields: [],
+    rows: [],
+    rowCount,
+    command: sql.trim().match(/^\w+/)?.[0]?.toUpperCase(),
+    durationMs: Date.now() - started
+  };
+}
+function optionalString(value) {
+  if (value === null || value === void 0) {
+    return void 0;
+  }
+  const next = String(value).trim();
+  return next || void 0;
+}
+function numberFromDb(value) {
+  if (value === null || value === void 0) {
+    return void 0;
+  }
+  const next = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(next) ? next : void 0;
+}
+function toQueryError(error) {
+  const record = error;
+  return {
+    message: record.message ?? String(error),
+    code: record.code,
+    detail: record.detail,
+    hint: record.hint,
+    position: record.position,
+    where: record.where
+  };
+}
+function clientLimit(sql, maxRows, offset, quote = '"') {
+  const limit = Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : void 0;
+  const nextOffset = Number.isFinite(offset) && offset && offset > 0 ? Math.floor(offset) : 0;
+  const pageLimit = limit ? limit + 1 : void 0;
+  return pageLimit && canApplyClientLimit(sql) ? `select * from (${sql.replace(/;+\s*$/, "")}) ${quote}__dg_query${quote} limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ""}` : sql;
+}
+function canApplyClientLimit(sql) {
+  const normalized = stripCommentsLiteralsAndQuotedIdentifiers(sql).trim().toLowerCase();
+  if (normalized.startsWith("select")) {
+    return true;
+  }
+  if (!normalized.startsWith("with")) {
+    return false;
+  }
+  return !/\b(insert|update|delete|merge)\b/.test(normalized);
+}
+function stripCommentsLiteralsAndQuotedIdentifiers(sql) {
+  let result = "";
+  let index = 0;
+  while (index < sql.length) {
+    const char = sql[index];
+    const next = sql[index + 1];
+    if (char === "-" && next === "-") {
+      index += 2;
+      while (index < sql.length && sql[index] !== "\n") {
+        index += 1;
+      }
+      result += " ";
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      index += 2;
+      while (index < sql.length && !(sql[index] === "*" && sql[index + 1] === "/")) {
+        index += 1;
+      }
+      index = Math.min(index + 2, sql.length);
+      result += " ";
+      continue;
+    }
+    if (char === "'" || char === '"' || char === "`") {
+      index = consumeQuoted(sql, index, char);
+      result += " ";
+      continue;
+    }
+    if (char === "[") {
+      index += 1;
+      while (index < sql.length && sql[index] !== "]") {
+        index += 1;
+      }
+      index = Math.min(index + 1, sql.length);
+      result += " ";
+      continue;
+    }
+    result += char;
+    index += 1;
+  }
+  return result.replace(/^--.*$/gm, "");
+}
+function consumeQuoted(sql, start, quote) {
+  let index = start + 1;
+  while (index < sql.length) {
+    if (sql[index] === quote) {
+      if (sql[index + 1] === quote) {
+        index += 2;
+        continue;
+      }
+      return index + 1;
+    }
+    if (quote === "'" && sql[index] === "\\") {
+      index += 2;
+      continue;
+    }
+    index += 1;
+  }
+  return index;
+}
+function safeFilterClause(where) {
+  const trimmed = where?.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (/;|--|\/\*/.test(trimmed)) {
+    throw new Error("WHERE must be a single SQL expression without comments or semicolons.");
+  }
+  return `
+where ${trimmed}`;
+}
+
 // src/database/drivers/postgresDriver.ts
 var PostgresDriver = class {
   id = "postgres";
@@ -629,7 +841,7 @@ var PostgresDriver = class {
     const pinnedTransaction = !!transactionClient;
     try {
       for (const [index, sql] of statements.entries()) {
-        const executionId = (0, import_crypto.randomUUID)();
+        const executionId = (0, import_crypto2.randomUUID)();
         const started = Date.now();
         params.onProgress?.({
           statementIndex: index,
@@ -760,6 +972,8 @@ var PostgresDriver = class {
       `select n.nspname as schema,
               p.proname as name,
               'function' as kind,
+              format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) as signature,
+              array(select format_type(arg, null) from unnest(p.proargtypes::oid[]) arg) as arguments,
               pg_get_function_result(p.oid) as "returnType",
               l.lanname as language,
               obj_description(p.oid, 'pg_proc') as comment
@@ -777,6 +991,8 @@ var PostgresDriver = class {
       `select n.nspname as schema,
               p.proname as name,
               'procedure' as kind,
+              format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) as signature,
+              array(select format_type(arg, null) from unnest(p.proargtypes::oid[]) arg) as arguments,
               pg_get_function_result(p.oid) as "returnType",
               l.lanname as language,
               obj_description(p.oid, 'pg_proc') as comment
@@ -807,10 +1023,10 @@ var PostgresDriver = class {
       schema: String(row.schema),
       table: String(row.table),
       name: String(row.name),
-      enabled: optionalString(row.enabled),
-      orientation: optionalString(row.definition)?.includes("FOR EACH ROW") ? "row" : "statement",
-      timing: optionalString(row.definition)?.includes("BEFORE") ? "before" : optionalString(row.definition)?.includes("AFTER") ? "after" : optionalString(row.definition)?.includes("INSTEAD OF") ? "instead of" : void 0,
-      events: triggerEvents(optionalString(row.definition))
+      enabled: optionalString2(row.enabled),
+      orientation: optionalString2(row.definition)?.includes("FOR EACH ROW") ? "row" : "statement",
+      timing: optionalString2(row.definition)?.includes("BEFORE") ? "before" : optionalString2(row.definition)?.includes("AFTER") ? "after" : optionalString2(row.definition)?.includes("INSTEAD OF") ? "instead of" : void 0,
+      events: triggerEvents(optionalString2(row.definition))
     }));
   }
   async getActiveSessions(connectionId) {
@@ -835,17 +1051,17 @@ var PostgresDriver = class {
     );
     return result.rows.map((row) => ({
       pid: Number(row.pid),
-      user: optionalString(row.user),
-      database: optionalString(row.database),
-      application: optionalString(row.application),
-      client: optionalString(row.client),
-      state: optionalString(row.state),
-      query: optionalString(row.query),
-      startedAt: optionalString(row.startedAt),
-      transactionStartedAt: optionalString(row.transactionStartedAt),
-      stateChangedAt: optionalString(row.stateChangedAt),
-      waitEventType: optionalString(row.waitEventType),
-      waitEvent: optionalString(row.waitEvent),
+      user: optionalString2(row.user),
+      database: optionalString2(row.database),
+      application: optionalString2(row.application),
+      client: optionalString2(row.client),
+      state: optionalString2(row.state),
+      query: optionalString2(row.query),
+      startedAt: optionalString2(row.startedAt),
+      transactionStartedAt: optionalString2(row.transactionStartedAt),
+      stateChangedAt: optionalString2(row.stateChangedAt),
+      waitEventType: optionalString2(row.waitEventType),
+      waitEvent: optionalString2(row.waitEvent),
       isCurrent: Boolean(row.isCurrent),
       isIdleInTransaction: Boolean(row.isIdleInTransaction)
     }));
@@ -936,7 +1152,43 @@ where ${where}` : ""}${orderBy}${paging}`;
   }
   async getTableDDL(connectionId, schema, table) {
     const columns = await this.getColumns(connectionId, schema, table);
-    return createTableSql(this.id, schema, table, columns);
+    const body = columns.map((column) => {
+      const nullable = column.nullable ? "" : " not null";
+      const defaultValue = column.defaultValue == null ? "" : ` default ${column.defaultValue}`;
+      return `  ${quoteIdentifier(column.name)} ${column.dataType}${defaultValue}${nullable}`;
+    }).join(",\n");
+    return `create table ${qualifiedName(schema, table)} (
+${body}
+);`;
+  }
+  async getObjectDefinition(connectionId, object) {
+    if (object.kind === "table") {
+      return this.getTableDDL(connectionId, object.schema, object.name);
+    }
+    const pool = this.requirePool(connectionId);
+    try {
+      if (object.kind === "view") {
+        const result2 = await pool.query(
+          `select pg_get_viewdef(c.oid, true) as definition from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relname = $2 and c.relkind in ('v', 'm')`,
+          [object.schema, object.name]
+        );
+        const body = nativeDefinition(result2.rows[0]?.definition);
+        return body === void 0 ? void 0 : `CREATE VIEW ${qualifiedName(object.schema, object.name)} AS
+${body}`;
+      }
+      if (object.kind === "function" || object.kind === "procedure") {
+        const identity = object.signature ?? `${object.schema}.${object.name}`;
+        const result2 = await pool.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [identity]);
+        return nativeDefinition(result2.rows[0]?.definition);
+      }
+      const result = await pool.query(
+        `select pg_get_triggerdef(t.oid, true) as definition from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and t.tgname = $2 and not t.tgisinternal`,
+        [object.schema, object.name]
+      );
+      return nativeDefinition(result.rows[0]?.definition);
+    } catch (error) {
+      throw this.toQueryError(error);
+    }
   }
   async getTableStats(connectionId, schema, table) {
     const pool = this.requirePool(connectionId);
@@ -994,7 +1246,7 @@ where ${where}` : ""}${orderBy}${paging}`;
     }
     return pool;
   }
-  toPoolConfig(config, max) {
+  toPoolConfig(config, max, defaultTypes) {
     return {
       host: config.host,
       port: config.port,
@@ -1004,7 +1256,10 @@ where ${where}` : ""}${orderBy}${paging}`;
       max,
       connectionTimeoutMillis: config.connectTimeoutMs ?? 1e4,
       query_timeout: config.queryTimeoutMs,
-      ssl: config.sslMode === "disable" ? false : { rejectUnauthorized: false }
+      ssl: config.sslMode === "disable" ? false : { rejectUnauthorized: false },
+      types: defaultTypes && {
+        getTypeParser: (oid, format) => TEMPORAL_TYPE_OIDS.has(oid) ? (value) => value : defaultTypes.getTypeParser(oid, format)
+      }
     };
   }
   shouldRetryWithoutSsl(config, error) {
@@ -1012,8 +1267,8 @@ where ${where}` : ""}${orderBy}${paging}`;
     return config.sslMode === "prefer" && /server does not support ssl connections/i.test(message);
   }
   async createVerifiedPool(config, max) {
-    const { Pool } = await loadPg();
-    const pool = new Pool(this.toPoolConfig(config, max));
+    const { Pool, types } = await loadPg();
+    const pool = new Pool(this.toPoolConfig(config, max, types));
     try {
       await pool.query("select 1");
       return pool;
@@ -1022,7 +1277,7 @@ where ${where}` : ""}${orderBy}${paging}`;
       if (!this.shouldRetryWithoutSsl(config, error)) {
         throw error;
       }
-      const fallbackPool = new Pool(this.toPoolConfig({ ...config, sslMode: "disable" }, max));
+      const fallbackPool = new Pool(this.toPoolConfig({ ...config, sslMode: "disable" }, max, types));
       try {
         await fallbackPool.query("select 1");
         return fallbackPool;
@@ -1055,15 +1310,11 @@ where ${where}` : ""}${orderBy}${paging}`;
     }
     return value instanceof Date ? value.toISOString() : String(value);
   }
-  canApplyClientLimit(sql) {
-    const normalized = sql.trim().replace(/^--.*$/gm, "").trim().toLowerCase();
-    return normalized.startsWith("select") || normalized.startsWith("with");
-  }
   sqlWithClientLimit(sql, maxRows, offset) {
     const limit = Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : void 0;
     const nextOffset = Number.isFinite(offset) && offset && offset > 0 ? Math.floor(offset) : 0;
     const pageLimit = limit ? limit + 1 : void 0;
-    return pageLimit && this.canApplyClientLimit(sql) ? `select * from (${sql.replace(/;+\s*$/, "")}) __dg_query limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ""}` : sql;
+    return pageLimit && canApplyClientLimit(sql) ? `select * from (${sql.replace(/;+\s*$/, "")}) __dg_query limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ""}` : sql;
   }
   toExecutionResult(result, executionId, started) {
     const fields = result?.fields ?? [];
@@ -1093,6 +1344,7 @@ where ${where}` : ""}${orderBy}${paging}`;
     };
   }
 };
+var TEMPORAL_TYPE_OIDS = /* @__PURE__ */ new Set([1082, 1083, 1114, 1184, 1186, 1266]);
 var pgRuntime;
 function loadPg() {
   pgRuntime ??= loadPgRuntime();
@@ -1108,12 +1360,15 @@ async function loadPgRuntime() {
     return "Pool" in candidate ? candidate : candidate.default;
   });
 }
-function optionalString(value) {
+function optionalString2(value) {
   if (value === null || value === void 0) {
     return void 0;
   }
   const next = String(value).trim();
   return next || void 0;
+}
+function nativeDefinition(value) {
+  return value === null || value === void 0 || value === "" ? void 0 : String(value);
 }
 function triggerEvents(definition) {
   if (!definition) {
@@ -1127,6 +1382,23 @@ function triggerEvents(definition) {
 var RedshiftDriver = class extends PostgresDriver {
   id = "redshift";
   displayName = "Amazon Redshift";
+  async getObjectDefinition(connectionId, object) {
+    try {
+      if (object.kind === "table") {
+        const result = await this.requirePool(connectionId).query(`show table ${qualifiedName(object.schema, object.name)}`);
+        const row = result.rows[0];
+        return row ? nativeDefinition2(Object.values(row)[0]) : void 0;
+      }
+      if (object.kind === "view") {
+        const result = await this.requirePool(connectionId).query("select definition from pg_views where schemaname = $1 and viewname = $2", [object.schema, object.name]);
+        return nativeDefinition2(result.rows[0]?.definition);
+      }
+      if (object.kind === "function" || object.kind === "procedure") return void 0;
+      return void 0;
+    } catch (error) {
+      throw toQueryError(error);
+    }
+  }
   async getSchemas(connectionId) {
     const pool = this.requirePool(connectionId);
     try {
@@ -1213,17 +1485,17 @@ var RedshiftDriver = class extends PostgresDriver {
       );
       return result.rows.map((row) => ({
         pid: Number(row.pid),
-        user: optionalString2(row.user),
-        database: optionalString2(row.database),
-        application: optionalString2(row.application),
-        client: optionalString2(row.client),
-        state: optionalString2(row.state),
-        query: optionalString2(row.query),
-        startedAt: optionalString2(row.startedAt),
-        transactionStartedAt: optionalString2(row.transactionStartedAt),
-        stateChangedAt: optionalString2(row.stateChangedAt),
-        waitEventType: optionalString2(row.waitEventType),
-        waitEvent: optionalString2(row.waitEvent),
+        user: optionalString3(row.user),
+        database: optionalString3(row.database),
+        application: optionalString3(row.application),
+        client: optionalString3(row.client),
+        state: optionalString3(row.state),
+        query: optionalString3(row.query),
+        startedAt: optionalString3(row.startedAt),
+        transactionStartedAt: optionalString3(row.transactionStartedAt),
+        stateChangedAt: optionalString3(row.stateChangedAt),
+        waitEventType: optionalString3(row.waitEventType),
+        waitEvent: optionalString3(row.waitEvent),
         isCurrent: Boolean(row.isCurrent),
         isIdleInTransaction: Boolean(row.isIdleInTransaction)
       }));
@@ -1249,7 +1521,7 @@ var RedshiftDriver = class extends PostgresDriver {
     );
     return result.rows.map((row) => {
       const name = String(row.name ?? row.column_name);
-      const dataType = optionalString2(row.dataType ?? row.datatype ?? row.data_type);
+      const dataType = optionalString3(row.dataType ?? row.datatype ?? row.data_type);
       if (!dataType) {
         throw new Error(`Redshift column metadata for ${qualifiedName(schema, table)}.${name} did not include a data type.`);
       }
@@ -1260,7 +1532,7 @@ var RedshiftDriver = class extends PostgresDriver {
         ordinal: Number(row.ordinal ?? row.ordinal_position),
         dataType,
         nullable: booleanFromDb(row.nullable),
-        defaultValue: optionalString2(row.defaultValue ?? row.defaultvalue ?? row.column_default)
+        defaultValue: optionalString3(row.defaultValue ?? row.defaultvalue ?? row.column_default)
       };
     });
   }
@@ -1289,15 +1561,15 @@ var RedshiftDriver = class extends PostgresDriver {
         rowEstimate: this.numberFromDb(row.rowCount),
         columns: [],
         redshift: {
-          distStyle: optionalString2(row.distStyle),
-          sortKey1: optionalString2(row.sortKey1),
+          distStyle: optionalString3(row.distStyle),
+          sortKey1: optionalString3(row.sortKey1),
           sortKeyNum: this.numberFromDb(row.sortKeyNum),
           sizeMb: this.numberFromDb(row.sizeMb),
           rowCount: this.numberFromDb(row.rowCount),
           skewRows: this.numberFromDb(row.skewRows),
           unsortedPct: this.numberFromDb(row.unsortedPct),
           statsOffPct: this.numberFromDb(row.statsOffPct),
-          encoded: optionalString2(row.encoded)
+          encoded: optionalString3(row.encoded)
         }
       };
     } catch {
@@ -1324,19 +1596,22 @@ var RedshiftDriver = class extends PostgresDriver {
   shouldRetryWithoutSsl(_config, _error) {
     return false;
   }
-  toPoolConfig(config, max) {
+  toPoolConfig(config, max, defaultTypes) {
     return {
-      ...super.toPoolConfig({ ...config, sslMode: config.sslMode === "disable" ? "prefer" : config.sslMode }, max),
+      ...super.toPoolConfig({ ...config, sslMode: config.sslMode === "disable" ? "prefer" : config.sslMode }, max, defaultTypes),
       port: config.port || 5439
     };
   }
 };
-function optionalString2(value) {
+function optionalString3(value) {
   if (value === null || value === void 0) {
     return void 0;
   }
   const next = String(value).trim();
   return next || void 0;
+}
+function nativeDefinition2(value) {
+  return value === null || value === void 0 || value === "" ? void 0 : String(value);
 }
 function booleanFromDb(value) {
   if (typeof value === "boolean") {
@@ -1345,12 +1620,12 @@ function booleanFromDb(value) {
   if (typeof value === "number") {
     return value !== 0;
   }
-  const normalized = optionalString2(value)?.toLowerCase();
+  const normalized = optionalString3(value)?.toLowerCase();
   return normalized === "true" || normalized === "t" || normalized === "yes" || normalized === "y" || normalized === "1";
 }
 
 // src/database/drivers/mysqlDriver.ts
-var import_crypto2 = require("crypto");
+var import_crypto3 = require("crypto");
 var MySQLDriver = class {
   id = "mysql";
   displayName = "MySQL";
@@ -1364,7 +1639,7 @@ var MySQLDriver = class {
       pool = await this.createVerifiedPool(config, 1);
       const [rows] = await pool.query("select version() as version");
       const row = rows[0] ?? {};
-      return { ok: true, message: "Connection successful", serverVersion: optionalString3(row.version) };
+      return { ok: true, message: "Connection successful", serverVersion: optionalString4(row.version) };
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     } finally {
@@ -1442,7 +1717,7 @@ var MySQLDriver = class {
     const pinnedTransaction = !!transactionConnection;
     try {
       for (const [index, sql] of statements.entries()) {
-        const executionId = (0, import_crypto2.randomUUID)();
+        const executionId = (0, import_crypto3.randomUUID)();
         const started = Date.now();
         params.onProgress?.({
           statementIndex: index,
@@ -1587,10 +1862,10 @@ var MySQLDriver = class {
       schema: String(row.schema),
       table: String(row.table),
       name: String(row.name),
-      timing: optionalString3(row.timing)?.toLowerCase(),
-      orientation: optionalString3(row.orientation)?.toLowerCase(),
+      timing: optionalString4(row.timing)?.toLowerCase(),
+      orientation: optionalString4(row.orientation)?.toLowerCase(),
       enabled: "YES",
-      events: optionalString3(row.event) ? [optionalString3(row.event)] : void 0
+      events: optionalString4(row.event) ? [optionalString4(row.event)] : void 0
     }));
   }
   async getActiveSessions(connectionId) {
@@ -1600,7 +1875,7 @@ var MySQLDriver = class {
     let rows = [];
     try {
       const [currentRows] = await connection.query(`select connection_id() as id`);
-      currentThreadId = numberFromDb(currentRows[0]?.id);
+      currentThreadId = numberFromDb2(currentRows[0]?.id);
       const [processRows] = await connection.query(`show full processlist`);
       rows = processRows;
     } finally {
@@ -1608,12 +1883,12 @@ var MySQLDriver = class {
     }
     return rows.map((row) => ({
       pid: Number(row.Id ?? row.id ?? row.ID),
-      user: optionalString3(row.User ?? row.user),
-      database: optionalString3(row.db ?? row.Database ?? row.database),
-      application: optionalString3(row.Command ?? row.command),
-      client: optionalString3(row.Host ?? row.host),
-      state: optionalString3(row.State ?? row.state),
-      query: optionalString3(row.Info ?? row.info),
+      user: optionalString4(row.User ?? row.user),
+      database: optionalString4(row.db ?? row.Database ?? row.database),
+      application: optionalString4(row.Command ?? row.command),
+      client: optionalString4(row.Host ?? row.host),
+      state: optionalString4(row.State ?? row.state),
+      query: optionalString4(row.Info ?? row.info),
       isCurrent: Number(row.Id ?? row.id ?? row.ID) === currentThreadId
     }));
   }
@@ -1718,6 +1993,20 @@ where ${where}` : ""}${orderBy}${paging}`;
     const columns = await this.getColumns(connectionId, schema, table);
     return createTableSql(this.id, schema, table, columns);
   }
+  async getObjectDefinition(connectionId, object) {
+    try {
+      const command = object.kind === "table" ? "TABLE" : object.kind === "view" ? "VIEW" : object.kind === "function" ? "FUNCTION" : object.kind === "procedure" ? "PROCEDURE" : "TRIGGER";
+      const [rows] = await this.requirePool(connectionId).query(
+        `SHOW CREATE ${command} ${qualifiedName(object.schema, object.name, "`")}`
+      );
+      const row = rows[0];
+      if (!row) return void 0;
+      const key = Object.keys(row).find((candidate) => candidate.toLowerCase().startsWith("create ") || candidate.toLowerCase() === "sql original statement");
+      return key ? nativeDefinition3(row[key]) : void 0;
+    } catch (error) {
+      throw this.toQueryError(error);
+    }
+  }
   async getTableStats(connectionId, schema, table) {
     const [rows] = await this.requirePool(connectionId).query(
       `select table_rows as "rowEstimate",
@@ -1733,7 +2022,7 @@ where ${where}` : ""}${orderBy}${paging}`;
       schema,
       table,
       databaseType: this.id,
-      rowEstimate: numberFromDb(row.rowEstimate),
+      rowEstimate: numberFromDb2(row.rowEstimate),
       columns: []
     };
   }
@@ -1755,6 +2044,7 @@ where ${where}` : ""}${orderBy}${paging}`;
       connectionLimit: max,
       waitForConnections: true,
       connectTimeout: config.connectTimeoutMs ?? 1e4,
+      dateStrings: ["DATE", "DATETIME", "TIMESTAMP"],
       ssl
     };
   }
@@ -1793,11 +2083,7 @@ where ${where}` : ""}${orderBy}${paging}`;
     const limit = Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : void 0;
     const nextOffset = Number.isFinite(offset) && offset && offset > 0 ? Math.floor(offset) : 0;
     const pageLimit = limit ? limit + 1 : void 0;
-    return pageLimit && this.canApplyClientLimit(sql) ? `select * from (${sql.replace(/;+\s*$/, "")}) __dg_query limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ""}` : sql;
-  }
-  canApplyClientLimit(sql) {
-    const normalized = sql.trim().replace(/^--.*$/gm, "").trim().toLowerCase();
-    return normalized.startsWith("select") || normalized.startsWith("with");
+    return pageLimit && canApplyClientLimit(sql) ? `select * from (${sql.replace(/;+\s*$/, "")}) __dg_query limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ""}` : sql;
   }
   toExecutionResult(rows, fields, executionId, started, sql) {
     const recordRows = Array.isArray(rows) ? rows : [];
@@ -1813,13 +2099,15 @@ where ${where}` : ""}${orderBy}${paging}`;
   }
   async getRoutines(connectionId, schema, type) {
     const [rows] = await this.requirePool(connectionId).query(
-      `select routine_schema as \`schema\`,
-              routine_name as name,
-              routine_type as kind,
-              dtd_identifier as "returnType",
-              security_type as language,
-              routine_comment as comment
-       from information_schema.routines
+      `select r.routine_schema as \`schema\`,
+              r.routine_name as name,
+              r.routine_type as kind,
+              r.dtd_identifier as "returnType",
+              r.security_type as language,
+              r.routine_comment as comment,
+              concat(r.routine_schema, '.', r.routine_name, '(', coalesce((select group_concat(p.dtd_identifier order by p.ordinal_position separator ', ') from information_schema.parameters p where p.specific_schema = r.specific_schema and p.specific_name = r.specific_name and p.ordinal_position > 0), ''), ')') as signature,
+              (select json_objectagg(p.ordinal_position, p.dtd_identifier) from information_schema.parameters p where p.specific_schema = r.specific_schema and p.specific_name = r.specific_name and p.ordinal_position > 0) as arguments
+       from information_schema.routines r
        where routine_schema = ? and routine_type = ?
        order by routine_name`,
       [schema, type]
@@ -1827,10 +2115,12 @@ where ${where}` : ""}${orderBy}${paging}`;
     return rows.map((row) => ({
       schema: String(row.schema),
       name: String(row.name),
-      kind: optionalString3(row.kind)?.toLowerCase() === "procedure" ? "procedure" : "function",
-      returnType: optionalString3(row.returnType),
-      language: optionalString3(row.language),
-      comment: optionalString3(row.comment)
+      kind: optionalString4(row.kind)?.toLowerCase() === "procedure" ? "procedure" : "function",
+      returnType: optionalString4(row.returnType),
+      language: optionalString4(row.language),
+      comment: optionalString4(row.comment),
+      signature: optionalString4(row.signature),
+      arguments: routineArguments(row.arguments)
     }));
   }
   canExplain(sql) {
@@ -1838,7 +2128,7 @@ where ${where}` : ""}${orderBy}${paging}`;
     return /^(select|with|insert|update|delete|merge)\b/.test(normalized);
   }
   threadId(connection) {
-    return numberFromDb(connection.threadId);
+    return numberFromDb2(connection.threadId);
   }
   toQueryError(error) {
     const mysqlError = error;
@@ -1903,114 +2193,12 @@ function groupForeignKeyRows(rows) {
   }
   return [...grouped.values()];
 }
-function numberFromDb(value) {
+function numberFromDb2(value) {
   if (value === null || value === void 0) {
     return void 0;
   }
   const next = typeof value === "number" ? value : Number(value);
   return Number.isFinite(next) ? next : void 0;
-}
-function optionalString3(value) {
-  if (value === null || value === void 0) {
-    return void 0;
-  }
-  const next = String(value).trim();
-  return next || void 0;
-}
-
-// src/database/drivers/driverUtils.ts
-var import_crypto3 = require("crypto");
-var BasicDatabaseDriver = class {
-  async testConnection(config) {
-    try {
-      const connection = await this.connect(config);
-      await this.disconnect(connection.id);
-      return { ok: true, message: "Connection successful" };
-    } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : String(error) };
-    }
-  }
-  async beginTransaction(connectionId) {
-    await this.executeQuery({ connectionId, sql: "begin" });
-  }
-  async commitTransaction(connectionId) {
-    await this.executeQuery({ connectionId, sql: "commit" });
-  }
-  async rollbackTransaction(connectionId) {
-    await this.executeQuery({ connectionId, sql: "rollback" });
-  }
-  isTransactionOpen(_connectionId) {
-    return false;
-  }
-  async validateQuery(_params) {
-    return { ok: true };
-  }
-  async explainQuery(params) {
-    return {
-      format: "text",
-      analyze: false,
-      rawText: params.sql,
-      annotations: [{ severity: "low", message: `${this.displayName} explain output is not available in this driver yet.` }]
-    };
-  }
-  async cancelQuery(_executionId) {
-  }
-  async getViews(_connectionId, _schema) {
-    return [];
-  }
-  async getFunctions(_connectionId, _schema) {
-    return [];
-  }
-  async getProcedures(_connectionId, _schema) {
-    return [];
-  }
-  async getTriggers(_connectionId, _schema) {
-    return [];
-  }
-  async getActiveSessions(_connectionId) {
-    return [];
-  }
-  async cancelSession(_connectionId, _pid) {
-  }
-  async terminateSession(_connectionId, _pid) {
-  }
-  async getIndexes(_connectionId, _schema, _table) {
-    return [];
-  }
-  async getPrimaryKeys(_connectionId, _schema, _table) {
-    return [];
-  }
-  async getForeignKeys(_connectionId, _schema, _table) {
-    return [];
-  }
-  async getTableDDL(connectionId, schema, table) {
-    const columns = await this.getColumns(connectionId, schema, table);
-    return createTableSql(this.id, schema, table, columns);
-  }
-  async getTableStats(_connectionId, schema, table) {
-    return { schema, table, databaseType: this.id, columns: [] };
-  }
-};
-function executionResultFromRows(rows, started, sql, dataTypes = {}) {
-  const fields = rows[0] ? Object.keys(rows[0]).map((name) => ({ name, dataTypeName: dataTypes[name] })) : Object.keys(dataTypes).map((name) => ({ name, dataTypeName: dataTypes[name] }));
-  return {
-    executionId: (0, import_crypto3.randomUUID)(),
-    fields,
-    rows,
-    rowCount: rows.length,
-    command: sql.trim().match(/^\w+/)?.[0]?.toUpperCase(),
-    durationMs: Date.now() - started
-  };
-}
-function emptyExecutionResult(started, sql, rowCount = 0) {
-  return {
-    executionId: (0, import_crypto3.randomUUID)(),
-    fields: [],
-    rows: [],
-    rowCount,
-    command: sql.trim().match(/^\w+/)?.[0]?.toUpperCase(),
-    durationMs: Date.now() - started
-  };
 }
 function optionalString4(value) {
   if (value === null || value === void 0) {
@@ -2019,40 +2207,13 @@ function optionalString4(value) {
   const next = String(value).trim();
   return next || void 0;
 }
-function numberFromDb2(value) {
-  if (value === null || value === void 0) {
-    return void 0;
-  }
-  const next = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(next) ? next : void 0;
+function routineArguments(value) {
+  if (value === null || value === void 0) return void 0;
+  const parsed = typeof value === "string" ? JSON.parse(value) : value;
+  return Object.entries(parsed).sort(([left], [right]) => Number(left) - Number(right)).map(([, argument]) => String(argument));
 }
-function toQueryError(error) {
-  const record = error;
-  return {
-    message: record.message ?? String(error),
-    code: record.code,
-    detail: record.detail,
-    hint: record.hint,
-    position: record.position,
-    where: record.where
-  };
-}
-function clientLimit(sql, maxRows, offset, quote = '"') {
-  const limit = Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : void 0;
-  const nextOffset = Number.isFinite(offset) && offset && offset > 0 ? Math.floor(offset) : 0;
-  const pageLimit = limit ? limit + 1 : void 0;
-  return pageLimit && /^(select|with)\b/i.test(sql.trim()) ? `select * from (${sql.replace(/;+\s*$/, "")}) ${quote}__dg_query${quote} limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ""}` : sql;
-}
-function safeFilterClause(where) {
-  const trimmed = where?.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (/;|--|\/\*/.test(trimmed)) {
-    throw new Error("WHERE must be a single SQL expression without comments or semicolons.");
-  }
-  return `
-where ${trimmed}`;
+function nativeDefinition3(value) {
+  return value === null || value === void 0 || value === "" ? void 0 : String(value);
 }
 
 // src/database/drivers/sqliteDriver.ts
@@ -2108,16 +2269,20 @@ var SQLiteDriver = class extends BasicDatabaseDriver {
     const rows = await all(this.requireDatabase(connectionId), `select name from ${quoteIdentifier(schema)}.sqlite_master where type = 'view' order by name`);
     return rows.map((row) => ({ schema, name: String(row.name), type: "view" }));
   }
+  async getTriggers(connectionId, schema) {
+    const rows = await all(this.requireDatabase(connectionId), `select name, tbl_name as "table" from ${quoteIdentifier(schema)}.sqlite_master where type = 'trigger' order by tbl_name, name`);
+    return rows.map((row) => ({ schema, table: String(row.table), name: String(row.name) }));
+  }
   async getColumns(connectionId, schema, table) {
     const rows = await all(this.requireDatabase(connectionId), `pragma ${quoteIdentifier(schema)}.table_info(${quoteIdentifier(table)})`);
     return rows.map((row) => ({
       schema,
       table,
       name: String(row.name),
-      ordinal: (numberFromDb2(row.cid) ?? 0) + 1,
-      dataType: optionalString4(row.type) ?? "text",
+      ordinal: (numberFromDb(row.cid) ?? 0) + 1,
+      dataType: optionalString(row.type) ?? "text",
       nullable: !Boolean(row.notnull),
-      defaultValue: optionalString4(row.dflt_value)
+      defaultValue: optionalString(row.dflt_value)
     }));
   }
   async getIndexes(connectionId, schema, table) {
@@ -2164,8 +2329,22 @@ limit ${pageLimit}${offset ? ` offset ${offset}` : ""}` : ""}`;
   }
   async getTableDDL(connectionId, schema, table) {
     const rows = await all(this.requireDatabase(connectionId), `select sql from ${quoteIdentifier(schema)}.sqlite_master where name = ? and type in ('table', 'view')`, [table]);
-    const ddl = optionalString4(rows[0]?.sql);
+    const ddl = optionalString(rows[0]?.sql);
     return ddl ? `${ddl};` : super.getTableDDL(connectionId, schema, table);
+  }
+  async getObjectDefinition(connectionId, object) {
+    if (object.kind === "function" || object.kind === "procedure") return void 0;
+    try {
+      const rows = await all(
+        this.requireDatabase(connectionId),
+        `select sql from ${quoteIdentifier(object.schema)}.sqlite_master where name = ? and type = ?`,
+        [object.name, object.kind]
+      );
+      const value = rows[0]?.sql;
+      return value === null || value === void 0 || value === "" ? void 0 : String(value);
+    } catch (error) {
+      throw toQueryError(error);
+    }
   }
   requireDatabase(connectionId) {
     const database = this.connections.get(connectionId);
@@ -2208,6 +2387,27 @@ function close(database) {
 }
 
 // src/database/drivers/sqlServerDriver.ts
+function formatSqlServerTemporalValue(type, value) {
+  if (value === null) {
+    return null;
+  }
+  const iso = value.toISOString();
+  if (type === "date") {
+    return iso.slice(0, 10);
+  }
+  if (type === "time") {
+    return iso.slice(11, -1);
+  }
+  return type === "datetimeoffset" ? iso : iso.slice(0, -1);
+}
+var sqlServerTemporalValueHandlers = {
+  date: (value) => formatSqlServerTemporalValue("date", value),
+  time: (value) => formatSqlServerTemporalValue("time", value),
+  datetime: (value) => formatSqlServerTemporalValue("datetime", value),
+  datetime2: (value) => formatSqlServerTemporalValue("datetime2", value),
+  smalldatetime: (value) => formatSqlServerTemporalValue("smalldatetime", value),
+  datetimeoffset: (value) => formatSqlServerTemporalValue("datetimeoffset", value)
+};
 var SqlServerDriver = class extends BasicDatabaseDriver {
   id = "sqlserver";
   displayName = "Microsoft SQL Server";
@@ -2215,6 +2415,7 @@ var SqlServerDriver = class extends BasicDatabaseDriver {
   async connect(config) {
     await this.disconnect(config.id);
     const mssql = await loadMssql();
+    registerTemporalValueHandlers(mssql);
     const pool = new mssql.ConnectionPool({
       server: config.host,
       port: config.port,
@@ -2245,7 +2446,7 @@ var SqlServerDriver = class extends BasicDatabaseDriver {
     try {
       connection = await this.connect(config);
       const result = await this.executeQuery({ connectionId: connection.id, sql: "select @@version as version" });
-      return { ok: true, message: "Connection successful", serverVersion: optionalString4(result.rows[0]?.version) };
+      return { ok: true, message: "Connection successful", serverVersion: optionalString(result.rows[0]?.version) };
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     } finally {
@@ -2300,7 +2501,7 @@ var SqlServerDriver = class extends BasicDatabaseDriver {
       ordinal: Number(row.ordinal),
       dataType: String(row.dataType),
       nullable: String(row.nullable).toUpperCase() === "YES",
-      defaultValue: optionalString4(row.defaultValue)
+      defaultValue: optionalString(row.defaultValue)
     }));
   }
   async getTablePreview(connectionId, schema, table, limit, options) {
@@ -2310,13 +2511,31 @@ var SqlServerDriver = class extends BasicDatabaseDriver {
     const sql = `select ${pageLimit && !offset ? `top (${pageLimit}) ` : ""}* from ${qualifiedSqlName(this.id, schema, table)}${safeFilterClause(options?.where)}${orderBy}${pageLimit && offset ? ` offset ${offset} rows fetch next ${pageLimit} rows only` : ""}`;
     return this.executeQuery({ connectionId, sql, maxRows: 0 });
   }
+  async getObjectDefinition(connectionId, object) {
+    if (object.kind === "table") {
+      const columns = await this.getColumns(connectionId, object.schema, object.name);
+      const body = columns.map((column) => `  ${quoteSqlIdentifier(this.id, column.name)} ${column.dataType}${column.defaultValue == null ? "" : ` default ${column.defaultValue}`}${column.nullable ? " null" : " not null"}`).join(",\n");
+      return `create table ${qualifiedSqlName(this.id, object.schema, object.name)} (
+${body}
+);`;
+    }
+    try {
+      const qualified2 = qualifiedSqlName(this.id, object.schema, object.name).replace(/'/g, "''");
+      const rows = await this.query(connectionId, `select OBJECT_DEFINITION(OBJECT_ID(N'${qualified2}')) as definition`);
+      return nativeDefinition4(rows[0]?.definition);
+    } catch (error) {
+      throw toQueryError(error);
+    }
+  }
   async getRoutines(connectionId, schema, type) {
-    const rows = await this.query(connectionId, `select routine_schema as [schema], routine_name as name, routine_type as kind, data_type as returnType from information_schema.routines where routine_schema = '${escapeSql(schema)}' and routine_type = '${type}' order by routine_name`);
+    const rows = await this.query(connectionId, `select r.routine_schema as [schema], r.routine_name as name, r.routine_type as kind, r.data_type as returnType, concat(r.specific_schema, '.', r.specific_name) as signature, string_agg(concat(p.parameter_mode, ' ', p.parameter_name, ' ', p.data_type), ', ') within group (order by p.ordinal_position) as arguments from information_schema.routines r left join information_schema.parameters p on p.specific_schema = r.specific_schema and p.specific_name = r.specific_name where r.routine_schema = '${escapeSql(schema)}' and r.routine_type = '${type}' group by r.routine_schema, r.routine_name, r.routine_type, r.data_type, r.specific_schema, r.specific_name order by r.routine_name`);
     return rows.map((row) => ({
       schema: String(row.schema),
       name: String(row.name),
       kind: type === "PROCEDURE" ? "procedure" : "function",
-      returnType: optionalString4(row.returnType)
+      returnType: optionalString(row.returnType),
+      signature: optionalString(row.signature),
+      arguments: optionalString(row.arguments)?.split(", ").filter(Boolean)
     }));
   }
   async query(connectionId, sql) {
@@ -2331,6 +2550,19 @@ var SqlServerDriver = class extends BasicDatabaseDriver {
     return pool;
   }
 };
+function registerTemporalValueHandlers(mssql) {
+  const temporalTypes = [
+    [mssql.Date, "date"],
+    [mssql.Time, "time"],
+    [mssql.DateTime, "datetime"],
+    [mssql.DateTime2, "datetime2"],
+    [mssql.SmallDateTime, "smalldatetime"],
+    [mssql.DateTimeOffset, "datetimeoffset"]
+  ];
+  for (const [token, type] of temporalTypes) {
+    mssql.valueHandler.set(token, sqlServerTemporalValueHandlers[type]);
+  }
+}
 async function loadMssql() {
   const bundled = loadBundledRuntime("mssqlRuntime");
   if (bundled) {
@@ -2343,6 +2575,9 @@ async function loadMssql() {
 }
 function escapeSql(value) {
   return value.replace(/'/g, "''");
+}
+function nativeDefinition4(value) {
+  return value === null || value === void 0 || value === "" ? void 0 : String(value);
 }
 
 // src/database/drivers/oracleDriver.ts
@@ -2383,7 +2618,7 @@ var OracleDriver = class extends BasicDatabaseDriver {
     try {
       connection = await this.connect(config);
       const result = await this.executeQuery({ connectionId: connection.id, sql: "select banner as version from v$version where rownum = 1" });
-      return { ok: true, message: "Connection successful", serverVersion: optionalString4(result.rows[0]?.VERSION ?? result.rows[0]?.version) };
+      return { ok: true, message: "Connection successful", serverVersion: optionalString(result.rows[0]?.VERSION ?? result.rows[0]?.version) };
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     } finally {
@@ -2400,11 +2635,21 @@ var OracleDriver = class extends BasicDatabaseDriver {
     const oracle = await loadOracle();
     const connection = await this.requirePool(params.connectionId).getConnection();
     const results = [];
+    const temporalTypes = /* @__PURE__ */ new Set([
+      oracle.DB_TYPE_DATE,
+      oracle.DB_TYPE_TIMESTAMP,
+      oracle.DB_TYPE_TIMESTAMP_TZ,
+      oracle.DB_TYPE_TIMESTAMP_LTZ
+    ]);
     try {
       for (const sql of statements) {
         const started = Date.now();
         try {
-          const result = await connection.execute(sql, [], { outFormat: oracle.OUT_FORMAT_OBJECT, autoCommit: true });
+          const result = await connection.execute(sql, [], {
+            outFormat: oracle.OUT_FORMAT_OBJECT,
+            autoCommit: true,
+            fetchTypeHandler: (metadata) => temporalTypes.has(metadata.dbType) ? { type: oracle.STRING } : void 0
+          });
           const rows = result.rows ?? [];
           const dataTypes = Object.fromEntries((result.metaData ?? []).map((field) => [field.name, field.dbTypeName ?? ""]));
           results.push(rows.length ? executionResultFromRows(rows, started, sql, dataTypes) : emptyExecutionResult(started, sql, result.rowsAffected ?? 0));
@@ -2444,7 +2689,7 @@ var OracleDriver = class extends BasicDatabaseDriver {
       ordinal: Number(row.ordinal ?? row.ORDINAL),
       dataType: String(row.dataType ?? row.DATATYPE),
       nullable: String(row.nullable ?? row.NULLABLE).toUpperCase() === "Y",
-      defaultValue: optionalString4(row.defaultValue ?? row.DEFAULTVALUE)
+      defaultValue: optionalString(row.defaultValue ?? row.DEFAULTVALUE)
     }));
   }
   async getTablePreview(connectionId, schema, table, limit, options) {
@@ -2457,6 +2702,32 @@ order by ${options.orderBySql.trim()}` : "";
 offset ${offset} rows fetch next ${pageLimit} rows only` : "";
     const sql = `select * from ${qualifiedName(schema, table)}${safeFilterClause(options?.where)}${orderBy}${paging}`;
     return this.executeQuery({ connectionId, sql, maxRows: 0 });
+  }
+  async getObjectDefinition(connectionId, object) {
+    const type = object.kind === "procedure" ? "PROCEDURE" : object.kind.toUpperCase();
+    const oracle = await loadOracle();
+    const connection = await this.requirePool(connectionId).getConnection();
+    try {
+      const result = object.kind === "function" || object.kind === "procedure" || object.kind === "trigger" ? await connection.execute(
+        `select text as "text" from all_source where owner = upper(:owner) and name = upper(:name) and type = :type order by line`,
+        [object.schema, object.name, type],
+        { outFormat: oracle.OUT_FORMAT_OBJECT }
+      ) : await connection.execute(
+        `select dbms_metadata.get_ddl(:type, upper(:name), upper(:owner)) as "definition" from dual`,
+        [type, object.name, object.schema],
+        { outFormat: oracle.OUT_FORMAT_OBJECT }
+      );
+      if (object.kind === "function" || object.kind === "procedure" || object.kind === "trigger") {
+        const text = (result.rows ?? []).map((row2) => String(row2.text ?? row2.TEXT ?? "")).join("");
+        return nativeDefinition5(text);
+      }
+      const row = result.rows?.[0];
+      return nativeDefinition5(row?.definition ?? row?.DEFINITION);
+    } catch (error) {
+      throw toQueryError(error);
+    } finally {
+      await connection.close();
+    }
   }
   async getRoutines(connectionId, schema, kind) {
     const rows = await this.query(connectionId, `select owner as "schema", object_name as "name" from all_objects where owner = upper('${escapeSql2(schema)}') and object_type = '${kind}' order by object_name`);
@@ -2487,6 +2758,9 @@ async function loadOracle() {
 function escapeSql2(value) {
   return value.replace(/'/g, "''");
 }
+function nativeDefinition5(value) {
+  return value === null || value === void 0 || value === "" ? void 0 : String(value);
+}
 
 // src/database/drivers/redisDriver.ts
 var REDIS_TABLES = [
@@ -2501,6 +2775,9 @@ var REDIS_TABLES = [
 var RedisDriver = class extends BasicDatabaseDriver {
   id = "redis";
   displayName = "Redis";
+  async getObjectDefinition() {
+    return void 0;
+  }
   clients = /* @__PURE__ */ new Map();
   configs = /* @__PURE__ */ new Map();
   async beginTransaction(_connectionId) {
@@ -2543,7 +2820,7 @@ var RedisDriver = class extends BasicDatabaseDriver {
     try {
       connection = await this.connect(config);
       const version = await this.executeQuery({ connectionId: connection.id, sql: "INFO server" });
-      return { ok: true, message: "Connection successful", serverVersion: optionalString4(version.rows.find((row) => row.key === "redis_version")?.value) };
+      return { ok: true, message: "Connection successful", serverVersion: optionalString(version.rows.find((row) => row.key === "redis_version")?.value) };
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     } finally {
@@ -2610,7 +2887,7 @@ var RedisDriver = class extends BasicDatabaseDriver {
       if (redisType && type !== redisType) {
         continue;
       }
-      const ttl = numberFromDb2(await client.sendCommand(["TTL", key]));
+      const ttl = numberFromDb(await client.sendCommand(["TTL", key]));
       rows.push({
         key,
         type,
@@ -2736,7 +3013,7 @@ async function redisValueSize(client, key, type) {
     stream: ["XLEN", key]
   };
   const args = command[type];
-  return args ? numberFromDb2(await client.sendCommand(args)) : void 0;
+  return args ? numberFromDb(await client.sendCommand(args)) : void 0;
 }
 async function redisPreviewValue(client, key, type) {
   const commands5 = {
@@ -2752,7 +3029,7 @@ async function redisPreviewValue(client, key, type) {
     return void 0;
   }
   const value = await client.sendCommand(args);
-  return optionalString4(stringifyRedisValue(value));
+  return optionalString(stringifyRedisValue(value));
 }
 
 // src/database/drivers/snowflakeDriver.ts
@@ -2767,8 +3044,8 @@ var SnowflakeDriver = class extends BasicDatabaseDriver {
       account: snowflakeAccount(config.host),
       username: config.username,
       password: config.password,
-      database: optionalString4(config.database),
-      schema: optionalString4(config.defaultSchema),
+      database: optionalString(config.database),
+      schema: optionalString(config.defaultSchema),
       timeout: config.connectTimeoutMs ?? 1e4,
       application: "QueryDeck",
       rowMode: "object"
@@ -2792,7 +3069,7 @@ var SnowflakeDriver = class extends BasicDatabaseDriver {
     try {
       connection = await this.connect(config);
       const result = await this.executeQuery({ connectionId: connection.id, sql: "select current_version() as version" });
-      return { ok: true, message: "Connection successful", serverVersion: optionalString4(result.rows[0]?.VERSION ?? result.rows[0]?.version) };
+      return { ok: true, message: "Connection successful", serverVersion: optionalString(result.rows[0]?.VERSION ?? result.rows[0]?.version) };
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     } finally {
@@ -2829,7 +3106,7 @@ var SnowflakeDriver = class extends BasicDatabaseDriver {
       schema: String(row.schema ?? row.SCHEMA),
       name: String(row.name ?? row.NAME),
       type: "table",
-      rowEstimate: numberFromDb2(row.rowEstimate ?? row.ROWESTIMATE)
+      rowEstimate: numberFromDb(row.rowEstimate ?? row.ROWESTIMATE)
     }));
   }
   async getViews(connectionId, schema) {
@@ -2851,7 +3128,7 @@ var SnowflakeDriver = class extends BasicDatabaseDriver {
       ordinal: Number(row.ordinal ?? row.ORDINAL),
       dataType: String(row.dataType ?? row.DATATYPE),
       nullable: String(row.nullable ?? row.NULLABLE).toUpperCase() === "YES",
-      defaultValue: optionalString4(row.defaultValue ?? row.DEFAULTVALUE)
+      defaultValue: optionalString(row.defaultValue ?? row.DEFAULTVALUE)
     }));
   }
   async getTablePreview(connectionId, schema, table, limit, options) {
@@ -2864,13 +3141,25 @@ order by ${options.orderBySql.trim()}` : "";
 limit ${pageLimit}${offset ? ` offset ${offset}` : ""}` : ""}`;
     return this.executeQuery({ connectionId, sql, maxRows: 0 });
   }
+  async getObjectDefinition(connectionId, object) {
+    if (object.kind === "trigger") return void 0;
+    const type = object.kind === "procedure" ? "PROCEDURE" : object.kind.toUpperCase();
+    const name = object.signature ?? qualifiedName(object.schema, object.name);
+    const escapedName = name.replace(/'/g, "''");
+    try {
+      const rows = await this.query(connectionId, `select GET_DDL('${type}', '${escapedName}') as "definition"`);
+      return nativeDefinition6(rows[0]?.definition ?? rows[0]?.DEFINITION);
+    } catch (error) {
+      throw toQueryError(error);
+    }
+  }
   async getRoutines(connectionId, schema, kind) {
     const rows = await this.query(connectionId, `select routine_schema as "schema", routine_name as "name", data_type as "returnType" from information_schema.routines where routine_schema = upper('${escapeSql3(schema)}') and routine_type = '${kind}' order by routine_name`);
     return rows.map((row) => ({
       schema: String(row.schema ?? row.SCHEMA),
       name: String(row.name ?? row.NAME),
       kind: kind === "PROCEDURE" ? "procedure" : "function",
-      returnType: optionalString4(row.returnType ?? row.RETURNTYPE)
+      returnType: optionalString(row.returnType ?? row.RETURNTYPE)
     }));
   }
   async query(connectionId, sql) {
@@ -2904,6 +3193,7 @@ function executeSnowflake(connection, sql) {
   return new Promise((resolve, reject) => {
     connection.execute({
       sqlText: sql,
+      fetchAsString: ["Date"],
       complete: (error, statement, rows = []) => {
         if (error) {
           reject(error);
@@ -2930,6 +3220,9 @@ function snowflakeAccount(host) {
 }
 function escapeSql3(value) {
   return value.replace(/'/g, "''");
+}
+function nativeDefinition6(value) {
+  return value === null || value === void 0 || value === "" ? void 0 : String(value);
 }
 
 // src/utils/id.ts
@@ -3758,7 +4051,7 @@ function stripSqlLiteralsCommentsAndQuotedIdentifiers(sql) {
       continue;
     }
     if (char === "'" || char === '"' || char === "`") {
-      index = consumeQuoted(sql, index, char);
+      index = consumeQuoted2(sql, index, char);
       result += " ";
       continue;
     }
@@ -3776,7 +4069,7 @@ function stripSqlLiteralsCommentsAndQuotedIdentifiers(sql) {
   }
   return result;
 }
-function consumeQuoted(sql, start, quote) {
+function consumeQuoted2(sql, start, quote) {
   let index = start + 1;
   while (index < sql.length) {
     if (sql[index] === quote) {
@@ -3962,12 +4255,12 @@ var QueryExecutor = class {
   resultTitle(sql, fileName) {
     const normalized = sql.replace(/\s+/g, " ").trim();
     const from = normalized.match(/\bfrom\s+("?[\w.]+"?)/i)?.[1];
-    const keyword = normalized.match(/^\w+/)?.[0]?.toUpperCase() ?? "SQL";
+    const keyword2 = normalized.match(/^\w+/)?.[0]?.toUpperCase() ?? "SQL";
     if (from) {
-      return `${keyword} ${from.replace(/"/g, "")}`;
+      return `${keyword2} ${from.replace(/"/g, "")}`;
     }
     if (normalized) {
-      return keyword;
+      return keyword2;
     }
     return fileName?.split(/[\\/]/).pop() ?? "SQL";
   }
@@ -5743,7 +6036,7 @@ function stripQuotes2(value) {
 // src/services/schemaMetadataCacheStore.ts
 var crypto = __toESM(require("crypto"));
 var vscode10 = __toESM(require("vscode"));
-var SCHEMA_METADATA_CACHE_VERSION = 1;
+var SCHEMA_METADATA_CACHE_VERSION = 3;
 var SchemaMetadataCacheStore = class {
   baseUri;
   storageError;
@@ -5839,13 +6132,24 @@ function parseStoredSchemaCacheEntry(connection, raw) {
   } catch {
     return void 0;
   }
-  if (stored.version !== SCHEMA_METADATA_CACHE_VERSION || stored.fingerprint !== connectionMetadataFingerprint(connection)) {
+  if (![1, 2, SCHEMA_METADATA_CACHE_VERSION].includes(stored.version) || stored.fingerprint !== connectionMetadataFingerprint(connection)) {
     return void 0;
   }
   if (!stored.entry || stored.entry.connectionId !== connection.id) {
     return void 0;
   }
-  return stored;
+  return {
+    ...stored,
+    version: SCHEMA_METADATA_CACHE_VERSION,
+    entry: {
+      ...stored.entry,
+      cacheVersion: SCHEMA_METADATA_CACHE_VERSION,
+      functions: stored.entry.functions ?? [],
+      procedures: stored.entry.procedures ?? [],
+      triggers: stored.entry.triggers ?? [],
+      foreignKeys: stored.entry.foreignKeys ?? {}
+    }
+  };
 }
 function safePath(value) {
   return value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "default";
@@ -5939,6 +6243,18 @@ var SchemaContextService = class {
     await this.persistentCache?.persist(connection, entry);
     return keys;
   }
+  async getForeignKeys(connection, schemaName, tableName) {
+    const entry = await this.loadSchema(connection, schemaName);
+    const tableKey3 = this.tableKey(schemaName, tableName);
+    if (entry.foreignKeys[tableKey3]) return entry.foreignKeys[tableKey3];
+    const foreignKeys = await this.connectionManager.getDriver(connection.type).getForeignKeys(connection.id, schemaName, tableName);
+    entry.foreignKeys[tableKey3] = foreignKeys;
+    entry.loadedAt = Date.now();
+    entry.status = "ready";
+    entry.source = "live";
+    await this.persistentCache?.persist(connection, entry);
+    return foreignKeys;
+  }
   async getCachedColumns(connection, schemaName, tableName) {
     const entry = await this.getCachedForConnection(connection, schemaName);
     return entry?.columns[this.tableKey(schemaName, tableName)];
@@ -5997,10 +6313,13 @@ var SchemaContextService = class {
   async loadSchemaNow(connection, schemaName, base) {
     try {
       const driver = this.connectionManager.getDriver(connection.type);
-      const [schemas, tables, views] = await Promise.all([
+      const [schemas, tables, views, functions, procedures, triggers] = await Promise.all([
         driver.getSchemas(connection.id),
         driver.getTables(connection.id, schemaName),
-        driver.getViews(connection.id, schemaName)
+        driver.getViews(connection.id, schemaName),
+        driver.getFunctions(connection.id, schemaName),
+        driver.getProcedures(connection.id, schemaName),
+        driver.getTriggers(connection.id, schemaName)
       ]);
       const columns = await this.loadColumnsForRelations(connection, schemaName, [...tables, ...views]);
       const entry = {
@@ -6008,6 +6327,9 @@ var SchemaContextService = class {
         schemas,
         tables,
         views,
+        functions,
+        procedures,
+        triggers,
         columns,
         loadedAt: Date.now(),
         cacheVersion: SCHEMA_METADATA_CACHE_VERSION,
@@ -6067,9 +6389,13 @@ var SchemaContextService = class {
       schemas: [],
       tables: [],
       views: [],
+      functions: [],
+      procedures: [],
+      triggers: [],
       columns: {},
       indexes: {},
       keys: {},
+      foreignKeys: {},
       status,
       errorMessage
     };
@@ -6151,6 +6477,9 @@ async function connectAndRefreshSqlMetadata(connectionManager, schemaContext, co
   }
   schemaContext.refreshDefaultSchemaInBackground(refreshConnection);
 }
+
+// src/services/sqlMetadataCodeActionProvider.ts
+var vscode12 = __toESM(require("vscode"));
 
 // src/services/sqlDiagnosticsService.ts
 var vscode11 = __toESM(require("vscode"));
@@ -6361,7 +6690,48 @@ function isIdentifierPart2(char) {
   return !!char && /[A-Za-z0-9_]/.test(char);
 }
 
+// src/services/sqlGroupByError.ts
+var SAFE_IDENTIFIER = /^(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)(?:\.(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*))*$/;
+function normalizeGroupByError(databaseType, error) {
+  const expression = expressionFromMessage(databaseType, error.message);
+  if (!expression || !SAFE_IDENTIFIER.test(expression)) {
+    return void 0;
+  }
+  const position = Number(error.position);
+  return {
+    expression,
+    ...Number.isFinite(position) && position > 0 ? { position } : {},
+    confidence: "high"
+  };
+}
+function expressionFromMessage(databaseType, message) {
+  switch (databaseType) {
+    case "postgres":
+    case "redshift":
+    case "sqlite":
+      return message.match(/^column\s+"([^"]+)"\s+must appear in the GROUP BY clause(?:\s+or be used in an aggregate function)?$/i)?.[1];
+    case "mysql": {
+      const value = message.match(/^Expression #\d+ of SELECT list contains nonaggregated column '([^']+)'; this is incompatible with sql_mode=only_full_group_by$/i)?.[1];
+      return value ? withoutCatalog(value) : void 0;
+    }
+    case "sqlserver":
+      return message.match(/^Column '([^']+)' is invalid in the select list because it is not contained in either an aggregate function or the GROUP BY clause\.?$/i)?.[1];
+    case "oracle":
+      return message.match(/^ORA-00979:\s*((?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)(?:\.(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*))*)\s*:\s*must appear in the GROUP BY clause$/i)?.[1];
+    case "snowflake":
+      return message.match(/^'([^']+)' in select clause is neither an aggregate nor in the group by clause$/i)?.[1];
+    default:
+      return void 0;
+  }
+}
+function withoutCatalog(value) {
+  const parts = value.split(".");
+  return parts.length > 2 ? parts.slice(-2).join(".") : value;
+}
+
 // src/services/sqlDiagnosticsService.ts
+var SQL_GROUP_BY_DIAGNOSTIC_SOURCE = "QueryDeck planner";
+var SQL_GROUP_BY_DIAGNOSTIC_CODE = "querydeck.planner.groupBy";
 var SQL_COLUMN_CONTEXT_KEYWORDS = /* @__PURE__ */ new Set([
   "all",
   "and",
@@ -6394,6 +6764,9 @@ var SQL_COLUMN_CONTEXT_KEYWORDS = /* @__PURE__ */ new Set([
   "when",
   "where"
 ]);
+var SQL_METADATA_DIAGNOSTIC_SOURCE = "QueryDeck metadata";
+var SQL_METADATA_MISSING_RELATION = "querydeck.metadata.missingRelation";
+var SQL_METADATA_MISSING_COLUMN = "querydeck.metadata.missingColumn";
 var SqlDiagnosticsService = class {
   constructor(connectionManager, schemaContext, sectionService) {
     this.connectionManager = connectionManager;
@@ -6438,10 +6811,11 @@ var SqlDiagnosticsService = class {
         }
         const schema = alias.schema ?? defaultSchema;
         if (!knownRelations.has(this.relationKey(schema, alias.table))) {
-          diagnostics.push(new vscode11.Diagnostic(
+          diagnostics.push(this.metadataDiagnostic(
             this.findIdentifierRange(document, section, alias.schema ? `${alias.schema}.${alias.table}` : alias.table),
             `Table or view "${alias.schema ? `${alias.schema}.` : ""}${alias.table}" does not exist in ${schema}.`,
-            vscode11.DiagnosticSeverity.Error
+            SQL_METADATA_MISSING_RELATION,
+            schema
           ));
         }
       }
@@ -6477,10 +6851,11 @@ var SqlDiagnosticsService = class {
       }
       if (!columns.some((item) => item.name.toLowerCase() === column.toLowerCase())) {
         const start = section.start + match.index + match[0].lastIndexOf(column);
-        diagnostics.push(new vscode11.Diagnostic(
+        diagnostics.push(this.metadataDiagnostic(
           new vscode11.Range(document.positionAt(start), document.positionAt(start + column.length)),
           `Column "${column}" does not exist on ${alias.schema ? `${alias.schema}.` : ""}${alias.table}.`,
-          vscode11.DiagnosticSeverity.Error
+          SQL_METADATA_MISSING_COLUMN,
+          alias.schema ?? defaultSchema
         ));
       }
     }
@@ -6529,13 +6904,14 @@ var SqlDiagnosticsService = class {
           continue;
         }
         seen.add(key);
-        diagnostics.push(new vscode11.Diagnostic(
+        diagnostics.push(this.metadataDiagnostic(
           new vscode11.Range(
             document.positionAt(section.start + tokenStart),
             document.positionAt(section.start + tokenStart + token.length)
           ),
           `Column "${token}" does not exist on ${relation.schema}.${relation.table}.`,
-          vscode11.DiagnosticSeverity.Error
+          SQL_METADATA_MISSING_COLUMN,
+          relation.schema
         ));
       }
     }
@@ -6557,11 +6933,23 @@ var SqlDiagnosticsService = class {
     if (result.ok || !result.error) {
       return void 0;
     }
-    return new vscode11.Diagnostic(
+    const diagnostic = new vscode11.Diagnostic(
       this.errorRange(document, section, result.error),
       this.errorMessage(result.error),
       vscode11.DiagnosticSeverity.Error
     );
+    const groupBy = normalizeGroupByError(connection.type, result.error);
+    if (groupBy) {
+      diagnostic.source = SQL_GROUP_BY_DIAGNOSTIC_SOURCE;
+      diagnostic.code = `${SQL_GROUP_BY_DIAGNOSTIC_CODE}:${encodeURIComponent(groupBy.expression)}`;
+    }
+    return diagnostic;
+  }
+  metadataDiagnostic(range, message, kind, schema) {
+    const diagnostic = new vscode11.Diagnostic(range, message, vscode11.DiagnosticSeverity.Warning);
+    diagnostic.source = SQL_METADATA_DIAGNOSTIC_SOURCE;
+    diagnostic.code = `${kind}:${schema}`;
+    return diagnostic;
   }
   findIdentifierRange(document, section, identifier) {
     const index = section.sql.toLowerCase().indexOf(identifier.toLowerCase());
@@ -6740,8 +7128,286 @@ function escapeRegExp2(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// src/services/sqlMetadataCommands.ts
+var SQL_METADATA_REFRESH_COMMAND = "database.refreshSqlMetadata";
+var SQL_METADATA_REFRESH_TITLE = "Refresh database metadata";
+
+// src/services/sqlMetadataCodeActionProvider.ts
+var SqlMetadataCodeActionProvider = class {
+  static providedCodeActionKinds = [vscode12.CodeActionKind.QuickFix];
+  provideCodeActions(document, _range, context) {
+    return context.diagnostics.flatMap((diagnostic) => {
+      const schemaName = metadataSchemaFromDiagnostic(diagnostic);
+      if (!schemaName) {
+        return [];
+      }
+      const action = new vscode12.CodeAction(SQL_METADATA_REFRESH_TITLE, vscode12.CodeActionKind.QuickFix);
+      action.diagnostics = [diagnostic];
+      action.isPreferred = true;
+      action.command = {
+        command: SQL_METADATA_REFRESH_COMMAND,
+        title: SQL_METADATA_REFRESH_TITLE,
+        arguments: [document.uri, schemaName]
+      };
+      return [action];
+    });
+  }
+};
+function metadataSchemaFromDiagnostic(diagnostic) {
+  const code = diagnostic.code;
+  if (diagnostic.source !== SQL_METADATA_DIAGNOSTIC_SOURCE || typeof code !== "string") {
+    return void 0;
+  }
+  const prefixes = [`${SQL_METADATA_MISSING_RELATION}:`, `${SQL_METADATA_MISSING_COLUMN}:`];
+  const prefix = prefixes.find((candidate) => code.startsWith(candidate));
+  if (!prefix) {
+    return void 0;
+  }
+  return code.slice(prefix.length) || void 0;
+}
+
+// src/services/sqlGroupByCodeActionProvider.ts
+var vscode13 = __toESM(require("vscode"));
+
+// src/services/sqlGroupByQuickFix.ts
+var SET_OPERATORS = /* @__PURE__ */ new Set(["union", "intersect", "except"]);
+var TRAILING_CLAUSES = /* @__PURE__ */ new Set(["having", "limit", "offset", "fetch", "qualify"]);
+function computeGroupByQuickFix(sql, evidence) {
+  const tokens = scan(sql);
+  const scopes = findSelectScopes(tokens, sql.length);
+  const expressionParts = identifierParts(evidence.expression);
+  if (expressionParts.length === 0) return void 0;
+  const candidates = scopes.map((scope2) => ({ scope: scope2, occurrences: findExpression(tokens, scope2, expressionParts) })).filter((candidate) => candidate.occurrences.length > 0);
+  let selected;
+  if (evidence.position !== void 0) {
+    const hints = [evidence.position, Math.max(0, evidence.position - 1)];
+    const containing = candidates.filter(({ scope: scope2 }) => hints.some((hint) => hint >= scope2.start && hint < scope2.end));
+    if (containing.length > 0) {
+      selected = containing.sort((a, b) => a.scope.end - a.scope.start - (b.scope.end - b.scope.start))[0];
+    }
+  } else if (candidates.length === 1) {
+    selected = candidates[0];
+  }
+  if (!selected) return void 0;
+  const { scope } = selected;
+  const ownTokens = tokens.filter((token) => token.start >= scope.start && token.start < scope.end && token.depth === scope.depth);
+  const groupIndex = ownTokens.findIndex((token, index) => token.normalized === "group" && ownTokens[index + 1]?.normalized === "by");
+  const boundaryIndex = (from) => ownTokens.findIndex((token, index) => index > from && isTrailingBoundary(ownTokens, index));
+  if (groupIndex >= 0) {
+    const next2 = boundaryIndex(groupIndex + 1);
+    const end = next2 >= 0 ? ownTokens[next2].start : scope.end;
+    const groupText = sql.slice(ownTokens[groupIndex + 1].end, end);
+    if (containsExpression(groupText, expressionParts)) return void 0;
+    const insertion2 = trimWhitespaceLeft(sql, end, ownTokens[groupIndex + 1].end);
+    return { start: insertion2, end: insertion2, newText: `, ${evidence.expression}`, expression: evidence.expression };
+  }
+  const next = ownTokens.findIndex((token, index) => index > 0 && isTrailingBoundary(ownTokens, index));
+  const insertion = next >= 0 ? ownTokens[next].start : scope.end;
+  const before = sql.slice(0, insertion);
+  const prefix = before.length > 0 && !/\s$/.test(before) ? " " : "";
+  return {
+    start: insertion,
+    end: insertion,
+    newText: `${prefix}GROUP BY ${evidence.expression}${next >= 0 ? " " : ""}`,
+    expression: evidence.expression
+  };
+}
+function findSelectScopes(tokens, sqlLength) {
+  const scopes = [];
+  tokens.forEach((token, tokenIndex) => {
+    if (token.normalized !== "select") return;
+    let end = sqlLength;
+    for (let index = tokenIndex + 1; index < tokens.length; index++) {
+      const current = tokens[index];
+      if (current.depth < token.depth || current.depth === token.depth && (current.text === ";" || SET_OPERATORS.has(current.normalized))) {
+        end = current.start;
+        break;
+      }
+    }
+    scopes.push({ start: token.start, end, depth: token.depth, tokenIndex });
+  });
+  return scopes;
+}
+function findExpression(tokens, scope, parts) {
+  const own = tokens.filter((token) => token.start >= scope.start && token.start < scope.end && token.depth === scope.depth);
+  const found = [];
+  for (let index = 0; index < own.length; index++) {
+    let cursor = index;
+    let matched = true;
+    for (let part = 0; part < parts.length; part++) {
+      if (own[cursor]?.normalized !== parts[part]) {
+        matched = false;
+        break;
+      }
+      cursor++;
+      if (part < parts.length - 1) {
+        if (own[cursor]?.text !== ".") {
+          matched = false;
+          break;
+        }
+        cursor++;
+      }
+    }
+    if (matched) found.push(own[index].start);
+  }
+  return found;
+}
+function identifierParts(expression) {
+  return expression.split(".").map((part) => part.trim().replace(/^(?:"|`|\[)|(?:"|`|\])$/g, "").toLowerCase()).filter(Boolean);
+}
+function containsExpression(text, parts) {
+  const tokens = scan(text);
+  return findExpression(tokens, { start: 0, end: text.length, depth: 0, tokenIndex: 0 }, parts).length > 0;
+}
+function isTrailingBoundary(tokens, index) {
+  const token = tokens[index];
+  return TRAILING_CLAUSES.has(token.normalized) || SET_OPERATORS.has(token.normalized) || token.normalized === "order" && tokens[index + 1]?.normalized === "by";
+}
+function trimWhitespaceLeft(sql, position, minimum) {
+  while (position > minimum && /\s/.test(sql[position - 1])) position--;
+  return position;
+}
+function scan(sql) {
+  const tokens = [];
+  let depth = 0;
+  let index = 0;
+  while (index < sql.length) {
+    const char = sql[index];
+    if (/\s/.test(char)) {
+      index++;
+      continue;
+    }
+    if (char === "-" && sql[index + 1] === "-") {
+      index += 2;
+      while (index < sql.length && sql[index] !== "\n") index++;
+      continue;
+    }
+    if (char === "/" && sql[index + 1] === "*") {
+      index += 2;
+      while (index < sql.length && !(sql[index] === "*" && sql[index + 1] === "/")) index++;
+      index = Math.min(sql.length, index + 2);
+      continue;
+    }
+    if (char === "'") {
+      index++;
+      while (index < sql.length) {
+        if (sql[index] === "'" && sql[index + 1] === "'") {
+          index += 2;
+          continue;
+        }
+        if (sql[index++] === "'") break;
+      }
+      continue;
+    }
+    if (char === "$") {
+      const tag = sql.slice(index).match(/^\$[A-Za-z_0-9]*\$/)?.[0];
+      if (tag) {
+        const close2 = sql.indexOf(tag, index + tag.length);
+        index = close2 < 0 ? sql.length : close2 + tag.length;
+        continue;
+      }
+    }
+    if (char === "(") {
+      tokens.push(makeToken(char, index, index + 1, depth));
+      depth++;
+      index++;
+      continue;
+    }
+    if (char === ")") {
+      depth = Math.max(0, depth - 1);
+      tokens.push(makeToken(char, index, index + 1, depth));
+      index++;
+      continue;
+    }
+    if (";,.".includes(char)) {
+      tokens.push(makeToken(char, index, index + 1, depth));
+      index++;
+      continue;
+    }
+    if (char === '"' || char === "`" || char === "[") {
+      const closeChar = char === "[" ? "]" : char;
+      const start = index++;
+      while (index < sql.length) {
+        if (sql[index] === closeChar) {
+          index++;
+          if (sql[index] === closeChar && closeChar !== "]") {
+            index++;
+            continue;
+          }
+          break;
+        }
+        index++;
+      }
+      tokens.push(makeToken(sql.slice(start, index), start, index, depth));
+      continue;
+    }
+    if (/[A-Za-z_]/.test(char)) {
+      const start = index++;
+      while (index < sql.length && /[A-Za-z0-9_$]/.test(sql[index])) index++;
+      tokens.push(makeToken(sql.slice(start, index), start, index, depth));
+      continue;
+    }
+    index++;
+  }
+  return tokens;
+}
+function makeToken(text, start, end, depth) {
+  return { text, normalized: text.replace(/^(?:"|`|\[)|(?:"|`|\])$/g, "").toLowerCase(), start, end, depth };
+}
+
+// src/services/sqlGroupByCodeActionProvider.ts
+var SqlGroupByCodeActionProvider = class {
+  static providedCodeActionKinds = [vscode13.CodeActionKind.QuickFix];
+  provideCodeActions(document, _range, context) {
+    return context.diagnostics.flatMap((diagnostic) => {
+      const expression = groupByExpression(diagnostic);
+      if (!expression) return [];
+      const fix = computeGroupByQuickFix(document.getText(), {
+        expression,
+        position: document.offsetAt(diagnostic.range.start),
+        confidence: "high"
+      });
+      if (!fix) return [];
+      const action = new vscode13.CodeAction(`Add ${expression} to GROUP BY`, vscode13.CodeActionKind.QuickFix);
+      const edit = new vscode13.WorkspaceEdit();
+      edit.replace(document.uri, new vscode13.Range(document.positionAt(fix.start), document.positionAt(fix.end)), fix.newText);
+      action.edit = edit;
+      action.diagnostics = [diagnostic];
+      action.isPreferred = true;
+      return [action];
+    });
+  }
+};
+function groupByExpression(diagnostic) {
+  if (diagnostic.source !== SQL_GROUP_BY_DIAGNOSTIC_SOURCE || typeof diagnostic.code !== "string") return void 0;
+  const prefix = `${SQL_GROUP_BY_DIAGNOSTIC_CODE}:`;
+  if (!diagnostic.code.startsWith(prefix)) return void 0;
+  try {
+    return decodeURIComponent(diagnostic.code.slice(prefix.length)) || void 0;
+  } catch {
+    return void 0;
+  }
+}
+
+// src/services/sqlMetadataRefresh.ts
+async function refreshSqlMetadata(connectionManager, schemaContext, connection, schemaNames) {
+  let refreshConnection = connection;
+  if (!connectionManager.isConnected(connection.id)) {
+    const active = await connectionManager.connect(connection.id);
+    refreshConnection = active.config;
+  }
+  const schemas = [...new Set(schemaNames.length ? schemaNames : [refreshConnection.defaultSchema ?? "public"])];
+  schemaContext.invalidate(refreshConnection.id);
+  for (const schemaName of schemas) {
+    const entry = await schemaContext.loadSchema(refreshConnection, schemaName, true);
+    if (entry.status !== "ready") {
+      throw new Error(entry.errorMessage ?? `Could not refresh metadata for schema "${schemaName}".`);
+    }
+  }
+}
+
 // src/services/sqlParameterPrompt.ts
-var vscode12 = __toESM(require("vscode"));
+var vscode14 = __toESM(require("vscode"));
 var SqlParameterPrompt = class {
   valuesBySession = /* @__PURE__ */ new Map();
   async resolve(sql, options = {}) {
@@ -6758,10 +7424,10 @@ var SqlParameterPrompt = class {
     return values ? applySqlParameterValues(sql, values) : void 0;
   }
   collectValues(sql, rows) {
-    const panel = vscode12.window.createWebviewPanel(
+    const panel = vscode14.window.createWebviewPanel(
       "databaseSqlParameters",
       "Parameters",
-      vscode12.ViewColumn.Active,
+      vscode14.ViewColumn.Active,
       {
         enableScripts: true,
         retainContextWhenHidden: false
@@ -7072,34 +7738,34 @@ function pickParameterValues(names, values) {
 }
 
 // src/services/sqlSectionHighlighter.ts
-var vscode13 = __toESM(require("vscode"));
+var vscode15 = __toESM(require("vscode"));
 var SqlSectionHighlighter = class {
-  singleLineDecoration = vscode13.window.createTextEditorDecorationType({
+  singleLineDecoration = vscode15.window.createTextEditorDecorationType({
     border: "1px solid",
-    borderColor: new vscode13.ThemeColor("testing.iconPassed"),
+    borderColor: new vscode15.ThemeColor("testing.iconPassed"),
     borderRadius: "3px",
-    overviewRulerColor: new vscode13.ThemeColor("testing.iconPassed"),
-    overviewRulerLane: vscode13.OverviewRulerLane.Right
+    overviewRulerColor: new vscode15.ThemeColor("testing.iconPassed"),
+    overviewRulerLane: vscode15.OverviewRulerLane.Right
   });
-  firstLineDecoration = vscode13.window.createTextEditorDecorationType({
+  firstLineDecoration = vscode15.window.createTextEditorDecorationType({
     isWholeLine: true,
     borderWidth: "1px 1px 0 1px",
     borderStyle: "solid",
-    borderColor: new vscode13.ThemeColor("testing.iconPassed"),
-    overviewRulerColor: new vscode13.ThemeColor("testing.iconPassed"),
-    overviewRulerLane: vscode13.OverviewRulerLane.Right
+    borderColor: new vscode15.ThemeColor("testing.iconPassed"),
+    overviewRulerColor: new vscode15.ThemeColor("testing.iconPassed"),
+    overviewRulerLane: vscode15.OverviewRulerLane.Right
   });
-  middleLineDecoration = vscode13.window.createTextEditorDecorationType({
+  middleLineDecoration = vscode15.window.createTextEditorDecorationType({
     isWholeLine: true,
     borderWidth: "0 1px",
     borderStyle: "solid",
-    borderColor: new vscode13.ThemeColor("testing.iconPassed")
+    borderColor: new vscode15.ThemeColor("testing.iconPassed")
   });
-  lastLineDecoration = vscode13.window.createTextEditorDecorationType({
+  lastLineDecoration = vscode15.window.createTextEditorDecorationType({
     isWholeLine: true,
     borderWidth: "0 1px 1px 1px",
     borderStyle: "solid",
-    borderColor: new vscode13.ThemeColor("testing.iconPassed"),
+    borderColor: new vscode15.ThemeColor("testing.iconPassed"),
     borderRadius: "0 0 3px 3px"
   });
   activeRanges = /* @__PURE__ */ new Map();
@@ -7111,24 +7777,24 @@ var SqlSectionHighlighter = class {
   async reveal(documentUri, range, expectedSql) {
     let document;
     try {
-      document = await vscode13.workspace.openTextDocument(vscode13.Uri.parse(documentUri));
+      document = await vscode15.workspace.openTextDocument(vscode15.Uri.parse(documentUri));
     } catch {
-      void vscode13.window.showWarningMessage("Source SQL file no longer exists.");
+      void vscode15.window.showWarningMessage("Source SQL file no longer exists.");
       return void 0;
     }
-    const editor = await vscode13.window.showTextDocument(document, {
+    const editor = await vscode15.window.showTextDocument(document, {
       preview: false,
       preserveFocus: false,
-      viewColumn: vscode13.ViewColumn.Active
+      viewColumn: vscode15.ViewColumn.Active
     });
     const targetRange = this.resolveRange(document, range, expectedSql);
     this.activeRanges.set(document.uri.toString(), targetRange);
     this.applyDecorations(editor, targetRange);
-    editor.revealRange(targetRange, vscode13.TextEditorRevealType.InCenterIfOutsideViewport);
+    editor.revealRange(targetRange, vscode15.TextEditorRevealType.InCenterIfOutsideViewport);
     return editor;
   }
   refreshVisibleEditors() {
-    for (const editor of vscode13.window.visibleTextEditors) {
+    for (const editor of vscode15.window.visibleTextEditors) {
       const range = this.activeRanges.get(editor.document.uri.toString());
       this.applyDecorations(editor, range);
     }
@@ -7179,15 +7845,15 @@ var SqlSectionHighlighter = class {
     const normalizedExpected = normalizeSql(expectedSql);
     const index = text.toLowerCase().indexOf(expectedSql.trim().toLowerCase());
     if (index >= 0) {
-      return new vscode13.Range(document.positionAt(index), document.positionAt(index + expectedSql.trim().length));
+      return new vscode15.Range(document.positionAt(index), document.positionAt(index + expectedSql.trim().length));
     }
     for (const line of text.split(/\r?\n/).entries()) {
       if (normalizeSql(line[1]).includes(normalizedExpected.slice(0, 48))) {
-        const start = new vscode13.Position(line[0], 0);
-        return new vscode13.Range(start, start.translate(0, line[1].length));
+        const start = new vscode15.Position(line[0], 0);
+        return new vscode15.Range(start, start.translate(0, line[1].length));
       }
     }
-    void vscode13.window.showWarningMessage("Source SQL range changed; showing the last known location.");
+    void vscode15.window.showWarningMessage("Source SQL range changed; showing the last known location.");
     return direct;
   }
   clampRange(document, range) {
@@ -7196,16 +7862,16 @@ var SqlSectionHighlighter = class {
     const endLine = Math.min(Math.max(startLine, range.endLine), maxLine);
     const startColumn = Math.min(Math.max(0, range.startColumn), document.lineAt(startLine).text.length);
     const endColumn = Math.min(Math.max(0, range.endColumn), document.lineAt(endLine).text.length);
-    return new vscode13.Range(
-      new vscode13.Position(startLine, startColumn),
-      new vscode13.Position(endLine, endColumn)
+    return new vscode15.Range(
+      new vscode15.Position(startLine, startColumn),
+      new vscode15.Position(endLine, endColumn)
     );
   }
 };
 function rangeFromPlain(range) {
-  return new vscode13.Range(
-    new vscode13.Position(range.startLine, range.startColumn),
-    new vscode13.Position(range.endLine, range.endColumn)
+  return new vscode15.Range(
+    new vscode15.Position(range.startLine, range.startColumn),
+    new vscode15.Position(range.endLine, range.endColumn)
   );
 }
 function normalizeSql(sql) {
@@ -7213,17 +7879,17 @@ function normalizeSql(sql) {
 }
 
 // src/services/sqlSectionService.ts
-var vscode15 = __toESM(require("vscode"));
+var vscode17 = __toESM(require("vscode"));
 
 // src/services/sqlQueryTreeService.ts
-var vscode14 = __toESM(require("vscode"));
+var vscode16 = __toESM(require("vscode"));
 var SqlQueryTreeService = class {
   getTree(document) {
     const text = document.getText();
     const counter = { value: 0 };
     return splitSqlStatements(text).map((statement) => {
       const sql = text.slice(statement.start, statement.end);
-      const range = new vscode14.Range(document.positionAt(statement.start), document.positionAt(statement.end));
+      const range = new vscode16.Range(document.positionAt(statement.start), document.positionAt(statement.end));
       const index = counter.value;
       counter.value += 1;
       const node = {
@@ -7358,7 +8024,7 @@ var SqlQueryTreeService = class {
         if (open === void 0) {
           issues.push({
             message: "Unexpected closing parenthesis.",
-            range: new vscode14.Range(document.positionAt(i), document.positionAt(i + 1))
+            range: new vscode16.Range(document.positionAt(i), document.positionAt(i + 1))
           });
         }
       }
@@ -7366,7 +8032,7 @@ var SqlQueryTreeService = class {
     for (const open of stack) {
       issues.push({
         message: "Missing closing parenthesis.",
-        range: new vscode14.Range(document.positionAt(open), document.positionAt(open + 1))
+        range: new vscode16.Range(document.positionAt(open), document.positionAt(open + 1))
       });
     }
     if (single) {
@@ -7378,7 +8044,7 @@ var SqlQueryTreeService = class {
     if (blockCommentStart !== void 0) {
       issues.push({
         message: "Unterminated block comment.",
-        range: new vscode14.Range(document.positionAt(blockCommentStart), document.positionAt(blockCommentStart + 2))
+        range: new vscode16.Range(document.positionAt(blockCommentStart), document.positionAt(blockCommentStart + 2))
       });
     }
     if (dollarTag) {
@@ -7498,7 +8164,7 @@ var SqlQueryTreeService = class {
                 index: counter.value += 1,
                 kind: "subquery",
                 sql: innerSql,
-                range: new vscode14.Range(document.positionAt(start), document.positionAt(end)),
+                range: new vscode16.Range(document.positionAt(start), document.positionAt(end)),
                 start,
                 end,
                 children: [],
@@ -7568,7 +8234,7 @@ var SqlQueryTreeService = class {
         kind: "cte",
         name,
         sql,
-        range: new vscode14.Range(document.positionAt(start), document.positionAt(end)),
+        range: new vscode16.Range(document.positionAt(start), document.positionAt(end)),
         start,
         end,
         children: [],
@@ -7732,10 +8398,10 @@ var SqlQueryTreeService = class {
     const text = document.getText(range);
     const trimmed = this.trimBounds(text, 0, text.length);
     if (!trimmed) {
-      return new vscode14.Range(range.start, range.start);
+      return new vscode16.Range(range.start, range.start);
     }
     const base = document.offsetAt(range.start);
-    return new vscode14.Range(document.positionAt(base + trimmed.start), document.positionAt(base + trimmed.end));
+    return new vscode16.Range(document.positionAt(base + trimmed.start), document.positionAt(base + trimmed.end));
   }
   skipWhitespace(text, index) {
     let i = index;
@@ -7765,7 +8431,7 @@ var SqlQueryTreeService = class {
         if (!next || this.isClauseBoundary(next)) {
           issues.push({
             message: `Expected a table name after ${word.toUpperCase()}.`,
-            range: new vscode14.Range(document.positionAt(token.start), document.positionAt(token.end))
+            range: new vscode16.Range(document.positionAt(token.start), document.positionAt(token.end))
           });
         }
       }
@@ -7786,7 +8452,7 @@ var SqlQueryTreeService = class {
         if (!lowerBound || lowerBound === "and" || this.isBetweenBoundary(lowerBound)) {
           issues.push({
             message: "BETWEEN requires a lower bound and an AND upper bound.",
-            range: new vscode14.Range(document.positionAt(token.start), document.positionAt(token.end))
+            range: new vscode16.Range(document.positionAt(token.start), document.positionAt(token.end))
           });
           continue;
         }
@@ -7794,7 +8460,7 @@ var SqlQueryTreeService = class {
         if (andIndex < 0) {
           issues.push({
             message: "BETWEEN requires an AND upper bound.",
-            range: new vscode14.Range(document.positionAt(token.start), document.positionAt(token.end))
+            range: new vscode16.Range(document.positionAt(token.start), document.positionAt(token.end))
           });
           continue;
         }
@@ -7802,7 +8468,7 @@ var SqlQueryTreeService = class {
         if (!upperBound || upperBound === "and" || this.isBetweenBoundary(upperBound)) {
           issues.push({
             message: "BETWEEN requires an upper bound after AND.",
-            range: new vscode14.Range(document.positionAt(tokens[andIndex].start), document.positionAt(tokens[andIndex].end))
+            range: new vscode16.Range(document.positionAt(tokens[andIndex].start), document.positionAt(tokens[andIndex].end))
           });
         }
       }
@@ -7951,7 +8617,7 @@ var SqlQueryTreeService = class {
     const end = document.positionAt(document.getText().length);
     return {
       message,
-      range: new vscode14.Range(end, end)
+      range: new vscode16.Range(end, end)
     };
   }
   nodeId(documentUri, kind, start, end, name) {
@@ -7977,18 +8643,18 @@ var SqlSectionService = class {
     return node ? this.toSection(node) : void 0;
   }
   getSyntaxIssues(document) {
-    return this.treeService.getSyntaxIssues(document).map((issue) => new vscode15.Diagnostic(
+    return this.treeService.getSyntaxIssues(document).map((issue) => new vscode17.Diagnostic(
       issue.range,
       issue.message,
-      vscode15.DiagnosticSeverity.Error
+      vscode17.DiagnosticSeverity.Error
     ));
   }
   outline(document) {
-    return this.getSections(document).map((section) => new vscode15.SymbolInformation(
+    return this.getSections(document).map((section) => new vscode17.SymbolInformation(
       section.kind === "cte" && section.name ? `CTE ${section.name}` : `SQL section ${section.index + 1}`,
-      vscode15.SymbolKind.Function,
+      vscode17.SymbolKind.Function,
       section.sql.replace(/\s+/g, " ").slice(0, 80),
-      new vscode15.Location(document.uri, section.range)
+      new vscode17.Location(document.uri, section.range)
     ));
   }
   extractAliases(sql) {
@@ -8022,7 +8688,7 @@ function comparePositions(a, b) {
 }
 
 // src/ai/vsCodeLanguageModelSqlAdapter.ts
-var vscode16 = __toESM(require("vscode"));
+var vscode18 = __toESM(require("vscode"));
 
 // src/ai/queryMemorySummaryParser.ts
 function parseQueryMemorySummaryText(text) {
@@ -8133,9 +8799,9 @@ ${schema || "(no schema metadata available)"}`
       throw new Error("No VS Code language model is available.");
     }
     const messages = [
-      vscode16.LanguageModelChatMessage?.User(prompt) ?? { role: "user", content: prompt }
+      vscode18.LanguageModelChatMessage?.User(prompt) ?? { role: "user", content: prompt }
     ];
-    const response = await model.sendRequest(messages, {}, new vscode16.CancellationTokenSource().token);
+    const response = await model.sendRequest(messages, {}, new vscode18.CancellationTokenSource().token);
     let text = "";
     for await (const chunk3 of response.text) {
       text += chunk3;
@@ -8293,7 +8959,7 @@ ${JSON.stringify(request.columns, null, 2)}`
     };
   }
   languageModelNamespace() {
-    return vscode16.lm;
+    return vscode18.lm;
   }
   extractSql(text) {
     const fenced = text.match(/```(?:sql)?\s*([\s\S]*?)```/i);
@@ -8310,7 +8976,7 @@ ${JSON.stringify(request.columns, null, 2)}`
     return candidate.slice(start, end + 1);
   }
   settings() {
-    const config = vscode16.workspace.getConfiguration("database");
+    const config = vscode18.workspace.getConfiguration("database");
     const provider = config.get("ai.provider", "vscodeLanguageModel") === "openAiCompatible" ? "openAiCompatible" : "vscodeLanguageModel";
     const legacyVendor = config.get("ai.copilot.vendor", "copilot");
     return {
@@ -8347,7 +9013,7 @@ ${JSON.stringify(request.columns, null, 2)}`
 };
 
 // src/controllers/queryMemoryController.ts
-var vscode17 = __toESM(require("vscode"));
+var vscode19 = __toESM(require("vscode"));
 var QueryMemoryController = class {
   constructor(context, memory, connectionManager, executor, ai, addResultTab) {
     this.context = context;
@@ -8363,7 +9029,7 @@ var QueryMemoryController = class {
     register("database.backfillQueryMemorySummaries", () => this.backfillSummaries());
   }
   async findPastQuery() {
-    const query = await vscode17.window.showInputBox({
+    const query = await vscode19.window.showInputBox({
       prompt: "Find past query",
       placeHolder: "duplicate invoices, monthly churn, customer email last_login"
     });
@@ -8378,10 +9044,10 @@ var QueryMemoryController = class {
       includeFailed: true
     });
     if (!results.length) {
-      void vscode17.window.showInformationMessage("No matching query memory found.");
+      void vscode19.window.showInformationMessage("No matching query memory found.");
       return;
     }
-    const picked = await vscode17.window.showQuickPick(results.map((result) => this.toPick(result)), {
+    const picked = await vscode19.window.showQuickPick(results.map((result) => this.toPick(result)), {
       placeHolder: "Query memory results",
       matchOnDescription: true,
       matchOnDetail: true
@@ -8403,7 +9069,7 @@ var QueryMemoryController = class {
       safety.previewAvailable ? { label: "Preview Safety SQL", action: "preview" } : void 0,
       { label: safety.requiresConfirmation ? "Run with Safety Check" : "Run", action: "run" }
     ].filter((action) => action !== void 0);
-    const picked = await vscode17.window.showQuickPick(actions, {
+    const picked = await vscode19.window.showQuickPick(actions, {
       placeHolder: [item.title ?? "Query memory", safety.reasons.join(" ")].filter(Boolean).join(" - ")
     });
     if (!picked) {
@@ -8412,11 +9078,11 @@ var QueryMemoryController = class {
     if (picked.action === "open") {
       await this.openSql(item.sql, item.title ?? "Query Memory");
     } else if (picked.action === "copy") {
-      await vscode17.env.clipboard.writeText(item.sql);
+      await vscode19.env.clipboard.writeText(item.sql);
     } else if (picked.action === "explain") {
       await this.openAiResult("Explain Query", await this.ai.send({ action: "explain", selectedSql: item.sql, relevantSchema: { tables: [] } }));
     } else if (picked.action === "modify") {
-      const instruction = await vscode17.window.showInputBox({ prompt: "How should this query change?" });
+      const instruction = await vscode19.window.showInputBox({ prompt: "How should this query change?" });
       if (instruction) {
         await this.openAiResult("Modified Query", await this.ai.send({ action: "generate", selectedSql: item.sql, lastError: instruction, relevantSchema: { tables: [] } }));
       }
@@ -8432,7 +9098,7 @@ var QueryMemoryController = class {
   async run(sql, connectionId) {
     const connection = connectionId ? this.connectionManager.getConnection(connectionId) : this.connectionManager.getPreferredConnection();
     if (!connection) {
-      void vscode17.window.showInformationMessage("Select a database connection before running query memory SQL.");
+      void vscode19.window.showInformationMessage("Select a database connection before running query memory SQL.");
       return;
     }
     const tab = await this.executor.execute({ connectionId: connection.id, sql });
@@ -8440,16 +9106,16 @@ var QueryMemoryController = class {
   }
   async backfillSummaries() {
     if (!await this.ai.isAvailable()) {
-      void vscode17.window.showInformationMessage("Query memory summaries need a VS Code language model provider or configured database.ai.openAiCompatible settings.");
+      void vscode19.window.showInformationMessage("Query memory summaries need a VS Code language model provider or configured database.ai.openAiCompatible settings.");
       return;
     }
-    await vscode17.window.withProgress({
-      location: vscode17.ProgressLocation.Notification,
+    await vscode19.window.withProgress({
+      location: vscode19.ProgressLocation.Notification,
       title: "Summarizing query memory",
       cancellable: true
     }, async (_progress, token) => {
       const result = await this.memory.backfillSummaries({ limit: 25, token });
-      void vscode17.window.showInformationMessage(`Query memory backfill: ${result.succeeded} summarized, ${result.failed} failed, ${result.skipped} skipped.`);
+      void vscode19.window.showInformationMessage(`Query memory backfill: ${result.succeeded} summarized, ${result.failed} failed, ${result.skipped} skipped.`);
     });
   }
   toPick(result) {
@@ -8470,15 +9136,15 @@ var QueryMemoryController = class {
     };
   }
   async openSql(sql, title) {
-    const doc = await vscode17.workspace.openTextDocument({ language: "sql", content: `${sql.trim()}
+    const doc = await vscode19.workspace.openTextDocument({ language: "sql", content: `${sql.trim()}
 ` });
-    await vscode17.window.showTextDocument(doc, { preview: false, viewColumn: vscode17.ViewColumn.Beside });
+    await vscode19.window.showTextDocument(doc, { preview: false, viewColumn: vscode19.ViewColumn.Beside });
   }
   async openAiResult(title, text) {
-    const doc = await vscode17.workspace.openTextDocument({ language: "sql", content: `-- ${title}
+    const doc = await vscode19.workspace.openTextDocument({ language: "sql", content: `-- ${title}
 ${text.trim()}
 ` });
-    await vscode17.window.showTextDocument(doc, { preview: true, viewColumn: vscode17.ViewColumn.Beside });
+    await vscode19.window.showTextDocument(doc, { preview: true, viewColumn: vscode19.ViewColumn.Beside });
   }
 };
 
@@ -8499,7 +9165,7 @@ function resolveDocumentConnection(documentUri, bindings, connections, fallback)
 }
 
 // src/services/queryOutputService.ts
-var vscode18 = __toESM(require("vscode"));
+var vscode20 = __toESM(require("vscode"));
 var MAX_OUTPUT_LINES_PER_CONNECTION = 600;
 var QueryOutputService = class {
   channels = /* @__PURE__ */ new Map();
@@ -8540,7 +9206,7 @@ var QueryOutputService = class {
     if (existing) {
       return existing;
     }
-    const channel = vscode18.window.createOutputChannel(`Database: ${connection.name}`);
+    const channel = vscode20.window.createOutputChannel(`Database: ${connection.name}`);
     this.channels.set(connection.id, channel);
     this.lineCounts.set(connection.id, 0);
     return channel;
@@ -8780,6 +9446,631 @@ var QueryPlanAnalyzerService = class {
     }
   }
 };
+
+// src/services/sqlObjectReference.ts
+var builtInRoutines = /* @__PURE__ */ new Set([
+  "abs",
+  "acos",
+  "asin",
+  "atan",
+  "avg",
+  "cast",
+  "ceil",
+  "ceiling",
+  "coalesce",
+  "concat",
+  "convert",
+  "cos",
+  "count",
+  "current_date",
+  "current_time",
+  "current_timestamp",
+  "dateadd",
+  "datediff",
+  "dense_rank",
+  "exists",
+  "exp",
+  "extract",
+  "floor",
+  "greatest",
+  "ifnull",
+  "json_extract",
+  "lag",
+  "last_value",
+  "lead",
+  "least",
+  "length",
+  "ln",
+  "log",
+  "lower",
+  "ltrim",
+  "max",
+  "min",
+  "mod",
+  "nullif",
+  "now",
+  "nth_value",
+  "ntile",
+  "power",
+  "rank",
+  "replace",
+  "round",
+  "row_number",
+  "rtrim",
+  "sin",
+  "sqrt",
+  "substring",
+  "sum",
+  "tan",
+  "trim",
+  "upper",
+  "getdate",
+  "sysdate",
+  "nvl",
+  "isnull",
+  "json_value"
+]);
+var nonRoutineKeywords = /* @__PURE__ */ new Set([
+  "all",
+  "and",
+  "any",
+  "as",
+  "between",
+  "by",
+  "case",
+  "distinct",
+  "else",
+  "end",
+  "exists",
+  "filter",
+  "from",
+  "group",
+  "having",
+  "in",
+  "is",
+  "like",
+  "not",
+  "null",
+  "on",
+  "or",
+  "order",
+  "over",
+  "partition",
+  "select",
+  "some",
+  "then",
+  "using",
+  "values",
+  "when",
+  "where",
+  "within"
+]);
+var routineDeclarationKeywords = /* @__PURE__ */ new Set(["function", "procedure", "trigger", "table", "view", "type"]);
+function findSqlObjectReference(sql, offset) {
+  if (offset < 0 || offset >= sql.length) {
+    return void 0;
+  }
+  const tokens = tokenize(sql);
+  const cteScopes = collectCteScopes(tokens);
+  const candidates = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const word = keyword(tokens[index]);
+    if (word === "trigger" && isTriggerDdl(tokens, index)) {
+      let nameIndex = index + 1;
+      while (["if", "not", "exists"].includes(keyword(tokens[nameIndex]))) nameIndex += 1;
+      const sequence = readIdentifierSequence(tokens, nameIndex);
+      if (sequence) {
+        candidates.push(toReference(sequence, "trigger"));
+      }
+      continue;
+    }
+    if (isRelationIntroducer(tokens, index)) {
+      const sequence = readIdentifierSequence(tokens, index + 1);
+      const insertTarget = word === "into" && keyword(tokens[index - 1]) === "insert";
+      if (sequence && (tokens[sequence.endIndex + 1]?.text !== "(" || insertTarget) && !isCteReference(sequence, cteScopes)) {
+        candidates.push(toReference(sequence, "relation"));
+      }
+    }
+    if ((word === "exec" || word === "execute" || word === "call") && keyword(tokens[index + 1]) !== "as") {
+      const sequence = readIdentifierSequence(tokens, index + 1);
+      if (sequence) candidates.push(toReference(sequence, "routine"));
+    }
+  }
+  for (let index = 0; index < tokens.length; index += 1) {
+    const sequence = readIdentifierSequence(tokens, index);
+    if (!sequence || sequence.startIndex !== index || tokens[sequence.endIndex + 1]?.text !== "(") {
+      continue;
+    }
+    const name = lastPart(sequence);
+    const previous = keyword(tokens[index - 1]);
+    if (nonRoutineKeywords.has(name) || builtInRoutines.has(name) || routineDeclarationKeywords.has(previous) || previous === "into" || isCteDeclaration(tokens, sequence)) {
+      index = sequence.endIndex;
+      continue;
+    }
+    const closeIndex = matchingCloseParen(tokens, sequence.endIndex + 1);
+    if (closeIndex !== void 0) {
+      candidates.push({
+        ...toReference(sequence, "routine"),
+        argumentCount: countArguments(tokens, sequence.endIndex + 1, closeIndex)
+      });
+    }
+    index = sequence.endIndex;
+  }
+  return candidates.find((candidate) => offset >= candidate.range.start && offset < candidate.range.end);
+}
+function tokenize(sql) {
+  const tokens = [];
+  let index = 0;
+  while (index < sql.length) {
+    const char = sql[index];
+    if (/\s/.test(char)) {
+      index += 1;
+      continue;
+    }
+    if (char === "-" && sql[index + 1] === "-") {
+      index += 2;
+      while (index < sql.length && sql[index] !== "\n") index += 1;
+      continue;
+    }
+    if (char === "/" && sql[index + 1] === "*") {
+      const end = sql.indexOf("*/", index + 2);
+      index = end < 0 ? sql.length : end + 2;
+      continue;
+    }
+    if (char === "'") {
+      const start = index++;
+      while (index < sql.length) {
+        if (sql[index] === "'" && sql[index + 1] === "'") {
+          index += 2;
+        } else if (sql[index++] === "'") {
+          break;
+        }
+      }
+      tokens.push({ kind: "string", text: sql.slice(start, index), normalized: "", start, end: index });
+      continue;
+    }
+    if (char === '"' || char === "`" || char === "[") {
+      const start = index;
+      const close2 = char === "[" ? "]" : char;
+      index += 1;
+      let value = "";
+      while (index < sql.length) {
+        if (sql[index] === close2 && sql[index + 1] === close2) {
+          value += close2;
+          index += 2;
+        } else if (sql[index] === close2) {
+          index += 1;
+          break;
+        } else {
+          value += sql[index++];
+        }
+      }
+      tokens.push({ kind: "identifier", text: sql.slice(start, index), normalized: value, start, end: index });
+      continue;
+    }
+    if (/[A-Za-z_$#]/.test(char)) {
+      const start = index++;
+      while (index < sql.length && /[A-Za-z0-9_$#]/.test(sql[index])) index += 1;
+      const text = sql.slice(start, index);
+      tokens.push({ kind: "identifier", text, normalized: text, start, end: index });
+      continue;
+    }
+    tokens.push({ kind: "punctuation", text: char, normalized: char, start: index, end: index + 1 });
+    index += 1;
+  }
+  return tokens;
+}
+function keyword(token) {
+  return token?.kind === "identifier" && /^[A-Za-z_$#]/.test(token.text) ? token.normalized.toLowerCase() : "";
+}
+function readIdentifierSequence(tokens, startIndex) {
+  const first = tokens[startIndex];
+  if (!first || first.kind !== "identifier") return void 0;
+  const parts = [first.normalized];
+  let endIndex = startIndex;
+  while (tokens[endIndex + 1]?.text === "." && tokens[endIndex + 2]?.kind === "identifier") {
+    parts.push(tokens[endIndex + 2].normalized);
+    endIndex += 2;
+  }
+  return { startIndex, endIndex, parts, start: first.start, end: tokens[endIndex].end };
+}
+function toReference(sequence, context) {
+  return { range: { start: sequence.start, end: sequence.end }, parts: sequence.parts, context };
+}
+function lastPart(sequence) {
+  return sequence.parts[sequence.parts.length - 1].toLowerCase();
+}
+function isRelationIntroducer(tokens, index) {
+  const word = keyword(tokens[index]);
+  if (word === "from" || word === "join" || word === "update") return true;
+  if (word === "into" && keyword(tokens[index - 1]) === "insert") return true;
+  if (tokens[index].text !== ",") return false;
+  const clauseBoundaries = /* @__PURE__ */ new Set(["where", "group", "order", "having", "on", "union", "set", "values", "returning"]);
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const priorWord = keyword(tokens[cursor]);
+    if (priorWord === "from" || priorWord === "join") return true;
+    if (clauseBoundaries.has(priorWord) || tokens[cursor].text === ";" || tokens[cursor].text === "(") return false;
+  }
+  return false;
+}
+function isTriggerDdl(tokens, triggerIndex) {
+  for (let index = triggerIndex - 1; index >= 0 && triggerIndex - index <= 3; index -= 1) {
+    const word = keyword(tokens[index]);
+    if (word === "create" || word === "alter" || word === "drop") return true;
+    if (tokens[index].text === ";") break;
+  }
+  return false;
+}
+function collectCteScopes(tokens) {
+  const scopes = [];
+  const depths = tokenDepths(tokens);
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (keyword(tokens[index]) !== "with") continue;
+    const scopeEnd = cteScopeEnd(tokens, depths, index);
+    let cursor = index + 1;
+    if (keyword(tokens[cursor]) === "recursive") cursor += 1;
+    while (cursor < scopeEnd) {
+      const sequence = readIdentifierSequence(tokens, cursor);
+      if (!sequence || sequence.parts.length !== 1) break;
+      cursor = sequence.endIndex + 1;
+      if (tokens[cursor]?.text === "(") {
+        const columnsEnd = matchingCloseParen(tokens, cursor);
+        if (columnsEnd === void 0) break;
+        cursor = columnsEnd + 1;
+      }
+      if (keyword(tokens[cursor]) !== "as") break;
+      cursor += 1;
+      if (keyword(tokens[cursor]) === "not") cursor += 1;
+      if (keyword(tokens[cursor]) === "materialized") cursor += 1;
+      if (tokens[cursor]?.text !== "(") break;
+      const bodyEnd = matchingCloseParen(tokens, cursor);
+      if (bodyEnd === void 0) break;
+      scopes.push({ name: lastPart(sequence), startIndex: index, endIndex: scopeEnd });
+      cursor = bodyEnd + 1;
+      if (tokens[cursor]?.text !== ",") break;
+      cursor += 1;
+    }
+  }
+  return scopes;
+}
+function isCteReference(sequence, scopes) {
+  if (sequence.parts.length !== 1) return false;
+  const name = lastPart(sequence);
+  return scopes.some((scope) => scope.name === name && sequence.startIndex > scope.startIndex && sequence.startIndex < scope.endIndex);
+}
+function tokenDepths(tokens) {
+  const depths = [];
+  let depth = 0;
+  for (const token of tokens) {
+    depths.push(depth);
+    if (token.text === "(") depth += 1;
+    else if (token.text === ")") depth = Math.max(0, depth - 1);
+  }
+  return depths;
+}
+function cteScopeEnd(tokens, depths, withIndex) {
+  const depth = depths[withIndex];
+  for (let index = withIndex + 1; index < tokens.length; index += 1) {
+    if (tokens[index].text === ";" && depths[index] === depth) return index;
+    if (tokens[index].text === ")" && depths[index] === depth) return index;
+  }
+  return tokens.length;
+}
+function isCteDeclaration(tokens, sequence) {
+  const close2 = matchingCloseParen(tokens, sequence.endIndex + 1);
+  return close2 !== void 0 && keyword(tokens[close2 + 1]) === "as" && (keyword(tokens[sequence.startIndex - 1]) === "with" || tokens[sequence.startIndex - 1]?.text === ",");
+}
+function matchingCloseParen(tokens, openIndex) {
+  if (tokens[openIndex]?.text !== "(") return void 0;
+  let depth = 0;
+  for (let index = openIndex; index < tokens.length; index += 1) {
+    if (tokens[index].text === "(") depth += 1;
+    if (tokens[index].text === ")" && --depth === 0) return index;
+  }
+  return void 0;
+}
+function countArguments(tokens, openIndex, closeIndex) {
+  if (closeIndex === openIndex + 1) return 0;
+  let depth = 0;
+  let commas = 0;
+  let hasContent = false;
+  for (let index = openIndex + 1; index < closeIndex; index += 1) {
+    const text = tokens[index].text;
+    if (text === "(") depth += 1;
+    else if (text === ")") depth -= 1;
+    else if (text === "," && depth === 0) commas += 1;
+    else hasContent = true;
+  }
+  return hasContent ? commas + 1 : 0;
+}
+
+// src/services/databaseObjectMetadata.ts
+async function resolveDatabaseObject(reference, connection, schemaContext) {
+  if (connection.type === "redis" || reference.parts.length < 1 || reference.parts.length > 2) return void 0;
+  const schemaName = reference.parts.length === 2 ? reference.parts[0] : connection.defaultSchema ?? "public";
+  const requestedName = reference.parts[reference.parts.length - 1];
+  const cached = await schemaContext.getCachedForConnection(connection, schemaName);
+  const metadata = hasUsableMetadata(cached) ? cached : await schemaContext.loadSchema(connection, schemaName);
+  if (!hasUsableMetadata(metadata)) return { kind: "metadata-unavailable", schema: schemaName };
+  if (reference.context === "relation") {
+    const relations = preferExactMatches([
+      ...metadata.tables.map((item) => ({ item, kind: "table" })),
+      ...metadata.views.map((item) => ({ item, kind: "view" }))
+    ], requestedName, connection.type, (candidate) => candidate.item.name);
+    if (relations.length !== 1) return void 0;
+    const { item: relation, kind } = relations[0];
+    const columns = await cachedOrEmpty(() => schemaContext.getCachedColumns(connection, relation.schema, relation.name), []) ?? await cachedOrEmpty(() => schemaContext.getColumns(connection, relation.schema, relation.name), []);
+    if (kind === "table") {
+      const [primaryKeys, foreignKeys] = await Promise.all([
+        cachedOrEmpty(() => schemaContext.getPrimaryKeys(connection, relation.schema, relation.name), []),
+        cachedOrEmpty(() => schemaContext.getForeignKeys(connection, relation.schema, relation.name), [])
+      ]);
+      return { kind: "table", schema: relation.schema, name: relation.name, columns, primaryKeys, foreignKeys };
+    }
+    return { kind: "view", schema: relation.schema, name: relation.name, columns };
+  }
+  if (reference.context === "trigger") {
+    const matches = preferExactMatches(metadata.triggers, requestedName, connection.type, (item) => item.name);
+    if (matches.length !== 1) return void 0;
+    const trigger = matches[0];
+    return {
+      kind: "trigger",
+      schema: trigger.schema,
+      name: trigger.name,
+      table: trigger.table,
+      timing: trigger.timing,
+      events: trigger.events,
+      orientation: trigger.orientation,
+      enabled: trigger.enabled
+    };
+  }
+  const namedRoutines = preferExactMatches([...metadata.functions, ...metadata.procedures], requestedName, connection.type, (item) => item.name);
+  const countMatches = namedRoutines.filter((item) => reference.argumentCount === void 0 || routineArgumentCount(item) === reference.argumentCount);
+  const routines = countMatches.length > 0 ? countMatches : namedRoutines.length === 1 && routineArgumentCount(namedRoutines[0]) === void 0 ? namedRoutines : [];
+  if (routines.length !== 1) return void 0;
+  const routine = routines[0];
+  if (routine.kind === "function") {
+    return {
+      kind: "function",
+      schema: routine.schema,
+      name: routine.name,
+      signature: routine.signature,
+      arguments: routine.arguments,
+      returnType: routine.returnType,
+      language: routine.language,
+      comment: routine.comment
+    };
+  }
+  return {
+    kind: "procedure",
+    schema: routine.schema,
+    name: routine.name,
+    signature: routine.signature,
+    arguments: routine.arguments,
+    language: routine.language,
+    comment: routine.comment
+  };
+}
+function hasUsableMetadata(entry) {
+  return !!entry && (entry.status === "ready" || entry.status === "stale");
+}
+function identifiersEqual(actual, requested, type) {
+  if (actual === requested) return true;
+  if (type === "oracle" || type === "snowflake") return actual.toUpperCase() === requested.toUpperCase();
+  return actual.toLowerCase() === requested.toLowerCase();
+}
+function preferExactMatches(items, requested, type, nameOf) {
+  const exact = items.filter((item) => nameOf(item) === requested);
+  return exact.length ? exact : items.filter((item) => identifiersEqual(nameOf(item), requested, type));
+}
+function routineArgumentCount(routine) {
+  if (routine.arguments) return routine.arguments.length;
+  if (!routine.signature) return void 0;
+  const open = routine.signature.indexOf("(");
+  const close2 = routine.signature.lastIndexOf(")");
+  if (open < 0 || close2 < open) return void 0;
+  const body = routine.signature.slice(open + 1, close2).trim();
+  if (!body) return 0;
+  let depth = 0;
+  let commas = 0;
+  let quote = "";
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index];
+    if (quote) {
+      if (char === quote && body[index + 1] === quote) index += 1;
+      else if (char === quote) quote = "";
+    } else if (char === "'" || char === '"' || char === "`") quote = char;
+    else if (char === "(" || char === "[" || char === "<") depth += 1;
+    else if (char === ")" || char === "]" || char === ">") depth = Math.max(0, depth - 1);
+    else if (char === "," && depth === 0) commas += 1;
+  }
+  return commas + 1;
+}
+async function cachedOrEmpty(load, fallback) {
+  try {
+    return await load();
+  } catch {
+    return fallback;
+  }
+}
+
+// src/services/databaseObjectHover.ts
+function escapeMarkdownText(value) {
+  return value.replace(/\\/g, "\\\\").replace(/([`*_{}\[\]()<>#+.!|~-])/g, "\\$1").replace(/[\r\n]+/g, " ");
+}
+function markdownCodeSpan(value) {
+  const normalized = value.replace(/[\r\n]+/g, " ");
+  const longestRun = Math.max(0, ...[...normalized.matchAll(/`+/g)].map((match) => match[0].length));
+  const delimiter = "`".repeat(longestRun + 1);
+  const needsPadding = longestRun > 0 || /^\s|\s$/.test(normalized);
+  return needsPadding ? `${delimiter} ${normalized} ${delimiter}` : `${delimiter}${normalized}${delimiter}`;
+}
+function renderDatabaseObjectHover(object) {
+  if (object.kind === "metadata-unavailable") {
+    return `Database metadata is unavailable for ${markdownCodeSpan(object.schema)}.`;
+  }
+  const title = `**${capitalize(object.kind)}** ${qualified(object.schema, object.name)}`;
+  switch (object.kind) {
+    case "table":
+      return [title, "", ...renderColumns(object.columns, object.primaryKeys.flatMap((key) => key.columns), object.foreignKeys)].join("\n");
+    case "view":
+      return [title, "", ...renderColumns(object.columns, [], [])].join("\n");
+    case "function": {
+      const lines = [title, "", markdownCodeSpan(routineSignature(object))];
+      if (object.returnType) lines.push(`Returns ${markdownCodeSpan(object.returnType)}`);
+      return lines.join("\n");
+    }
+    case "procedure":
+      return [title, "", markdownCodeSpan(routineSignature(object))].join("\n");
+    case "trigger": {
+      const details = [object.timing, object.events?.join(", ")].filter(Boolean).join(" ");
+      return [title, "", `${escapeMarkdownText(details)} on ${qualified(object.schema, object.table)}`].join("\n");
+    }
+  }
+}
+function renderColumns(columns, primaryKeyColumns, foreignKeys) {
+  return [...columns].sort((left, right) => left.ordinal - right.ordinal).map((column) => {
+    const attributes = [column.nullable ? "NULL" : "NOT NULL"];
+    if (primaryKeyColumns.includes(column.name)) attributes.push("PK");
+    const foreignKey = foreignKeys.find((key) => key.columns.includes(column.name));
+    if (foreignKey) {
+      const index = foreignKey.columns.indexOf(column.name);
+      attributes.push(`FK \u2192 ${qualified(foreignKey.foreignSchema, `${foreignKey.foreignTable}.${foreignKey.foreignColumns[index] ?? ""}`)}`);
+    }
+    return `- ${markdownCodeSpan(column.name)} \u2014 ${markdownCodeSpan(column.dataType)} \u2014 ${attributes.join(" \u2014 ")}`;
+  });
+}
+function routineSignature(object) {
+  return object.signature ?? `${object.name}(${object.arguments?.join(", ") ?? ""})`;
+}
+function qualified(schema, name) {
+  return `${markdownCodeSpan(schema)}.${markdownCodeSpan(name)}`;
+}
+function capitalize(value) {
+  return value[0].toUpperCase() + value.slice(1);
+}
+
+// src/providers/databaseObjectLanguageProviders.ts
+var vscode21 = __toESM(require("vscode"));
+var DATABASE_OBJECT_DEFINITION_SCHEME = "querydeck-definition";
+var DatabaseObjectLanguageProviders = class {
+  constructor(dependencies) {
+    this.dependencies = dependencies;
+  }
+  definitions = /* @__PURE__ */ new Map();
+  changeEmitter = new vscode21.EventEmitter();
+  registrations = [];
+  onDidChange = this.changeEmitter.event;
+  async provideHover(document, position, token) {
+    if (token.isCancellationRequested) return void 0;
+    const context = this.context(document, position);
+    if (!context) return void 0;
+    try {
+      const object = await this.dependencies.resolveObject(context.reference, context.connection);
+      if (token.isCancellationRequested || !object) return void 0;
+      const markdown = this.dependencies.renderHover(object);
+      if (token.isCancellationRequested) return void 0;
+      if (object.kind === "metadata-unavailable") {
+        const args = encodeURIComponent(JSON.stringify([document.uri, object.schema]));
+        const trusted = new vscode21.MarkdownString(`${markdown} [${SQL_METADATA_REFRESH_TITLE}](command:${SQL_METADATA_REFRESH_COMMAND}?${args})`);
+        trusted.isTrusted = { enabledCommands: [SQL_METADATA_REFRESH_COMMAND] };
+        return new vscode21.Hover(trusted, this.range(document, context.reference));
+      }
+      return new vscode21.Hover(markdown, this.range(document, context.reference));
+    } catch {
+      return void 0;
+    }
+  }
+  async provideDefinition(document, position, token) {
+    if (token.isCancellationRequested) return void 0;
+    const context = this.context(document, position);
+    if (!context) return void 0;
+    try {
+      const object = await this.dependencies.resolveObject(context.reference, context.connection);
+      if (token.isCancellationRequested || !object) return void 0;
+      if (object.kind === "metadata-unavailable") {
+        this.dependencies.notify("Database metadata is unavailable. Refresh database metadata and try again.");
+        return void 0;
+      }
+      const identity = databaseObjectIdentity(object);
+      const definition = await this.dependencies.getDefinition(context.connection.id, identity);
+      if (token.isCancellationRequested) return void 0;
+      if (definition === void 0) {
+        this.dependencies.notify(`Definition navigation is not available for this ${object.kind}.`);
+        return void 0;
+      }
+      const uri = definitionUri(context.connection.id, identity);
+      this.definitions.set(uri.toString(), definition);
+      this.changeEmitter.fire(uri);
+      return new vscode21.Location(uri, new vscode21.Range(new vscode21.Position(0, 0), new vscode21.Position(0, 0)));
+    } catch (error) {
+      if (!token.isCancellationRequested) {
+        this.dependencies.notify(error instanceof Error ? error.message : String(error));
+      }
+      return void 0;
+    }
+  }
+  provideTextDocumentContent(uri) {
+    return this.definitions.get(uri.toString());
+  }
+  track(...registrations) {
+    this.registrations.push(...registrations);
+  }
+  dispose() {
+    for (const registration of this.registrations.splice(0)) registration.dispose();
+    this.definitions.clear();
+    this.changeEmitter.dispose();
+  }
+  context(document, position) {
+    if (document.languageId !== "sql") return void 0;
+    const resolution = this.dependencies.resolveConnection(document);
+    if (!resolution.isBound || !resolution.connection || resolution.connection.type === "redis") return void 0;
+    const reference = this.dependencies.findReference(document.getText(), document.offsetAt(position));
+    return reference ? { connection: resolution.connection, reference } : void 0;
+  }
+  range(document, reference) {
+    return new vscode21.Range(document.positionAt(reference.range.start), document.positionAt(reference.range.end));
+  }
+};
+function registerDatabaseObjectLanguageProviders(context, providers) {
+  const selector = { language: "sql" };
+  providers.track(
+    vscode21.languages.registerHoverProvider(selector, providers),
+    vscode21.languages.registerDefinitionProvider(selector, providers),
+    vscode21.workspace.registerTextDocumentContentProvider(DATABASE_OBJECT_DEFINITION_SCHEME, providers)
+  );
+  context.subscriptions.push(providers);
+  return providers;
+}
+function definitionUri(connectionId, object) {
+  const identity = JSON.stringify({
+    connectionId,
+    kind: object.kind,
+    schema: object.schema,
+    name: object.name,
+    ...object.signature !== void 0 ? { signature: object.signature } : {},
+    ...object.table !== void 0 ? { table: object.table } : {}
+  });
+  const title = sanitizeDefinitionBasename(`${object.schema}.${object.name} (${object.kind} @ ${connectionId})`) + ".sql";
+  return vscode21.Uri.from({
+    scheme: DATABASE_OBJECT_DEFINITION_SCHEME,
+    path: `/definition/${title}`,
+    query: identity
+  });
+}
+function sanitizeDefinitionBasename(value) {
+  const sanitized = value.replace(/[\u0000-\u001f\u007f<>:"/\\|?*]+/g, "_").replace(/[ .]+$/g, "");
+  return sanitized || "database-object";
+}
+function databaseObjectIdentity(object) {
+  return {
+    kind: object.kind,
+    schema: object.schema,
+    name: object.name,
+    ..."signature" in object && object.signature ? { signature: object.signature } : {},
+    ...object.kind === "trigger" ? { table: object.table } : {}
+  };
+}
 
 // src/services/resultSetDiffService.ts
 function compareResultSets(left, right, leftTitle = left.title, rightTitle = right.title) {
@@ -9577,19 +10868,19 @@ function unique(values) {
 }
 
 // src/webviews/session/SessionMonitorPanel.ts
-var vscode19 = __toESM(require("vscode"));
+var vscode22 = __toESM(require("vscode"));
 var SessionMonitorPanel = class {
   static async open(context, connectionManager, connection) {
-    const panel = vscode19.window.createWebviewPanel(
+    const panel = vscode22.window.createWebviewPanel(
       "databaseSessionMonitor",
       `Sessions: ${connection.name}`,
-      vscode19.ViewColumn.Active,
+      vscode22.ViewColumn.Active,
       {
         enableScripts: true,
         retainContextWhenHidden: true
       }
     );
-    panel.iconPath = vscode19.Uri.joinPath(context.extensionUri, "media", "database.svg");
+    panel.iconPath = vscode22.Uri.joinPath(context.extensionUri, "media", "database.svg");
     panel.webview.html = this.html(panel.webview, connection);
     panel.webview.onDidReceiveMessage(async (message) => {
       if (message.type === "ready" || message.type === "refresh") {
@@ -9602,7 +10893,7 @@ var SessionMonitorPanel = class {
         return;
       }
       if (message.type === "terminate" && typeof message.pid === "number") {
-        const confirmed = await vscode19.window.showWarningMessage(
+        const confirmed = await vscode22.window.showWarningMessage(
           `Terminate session ${message.pid} on ${connection.name}?`,
           { modal: true },
           "Terminate"
@@ -9824,16 +11115,16 @@ var SessionMonitorPanel = class {
 };
 
 // src/webviews/erDiagram/ErDiagramPanel.ts
-var vscode20 = __toESM(require("vscode"));
+var vscode23 = __toESM(require("vscode"));
 var ErDiagramPanel = class {
   static async open(context, report) {
-    const panel = vscode20.window.createWebviewPanel(
+    const panel = vscode23.window.createWebviewPanel(
       "databaseErDiagram",
       `ER Diagram: ${report.schemaName}`,
-      vscode20.ViewColumn.Active,
+      vscode23.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true }
     );
-    panel.iconPath = vscode20.Uri.joinPath(context.extensionUri, "media", "database.svg");
+    panel.iconPath = vscode23.Uri.joinPath(context.extensionUri, "media", "database.svg");
     panel.webview.html = this.html(panel.webview, report);
   }
   static html(webview, report) {
@@ -10135,7 +11426,7 @@ function escapeHtml(value) {
 }
 
 // src/webviews/connection/ConnectionEditorPanel.ts
-var vscode21 = __toESM(require("vscode"));
+var vscode24 = __toESM(require("vscode"));
 
 // src/webviews/connection/connectionOnboarding.ts
 var ENGINE_GUIDANCE_BY_DATABASE_TYPE = {
@@ -10277,10 +11568,10 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
   }
   static async open(context, connectionManager, existing) {
     return new Promise((resolve) => {
-      const panel = vscode21.window.createWebviewPanel(
+      const panel = vscode24.window.createWebviewPanel(
         "databaseConnectionEditor",
         existing ? `Edit ${existing.name}` : "Add Database Connection",
-        vscode21.ViewColumn.Active,
+        vscode24.ViewColumn.Active,
         { enableScripts: true, retainContextWhenHidden: true }
       );
       const editor = new _ConnectionEditorPanel(panel, context.extensionUri, connectionManager, existing, resolve);
@@ -10308,7 +11599,7 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       return;
     }
     if (message.type === "pickSqliteFile") {
-      const files = await vscode21.window.showOpenDialog({
+      const files = await vscode24.window.showOpenDialog({
         title: "Choose SQLite database file",
         openLabel: "Use Database File",
         canSelectFiles: true,
@@ -10440,7 +11731,7 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
       defaultSchema: connection?.defaultSchema ?? defaults.defaultSchema,
       color: connection?.color ?? defaults.color,
       connectTimeoutMs: connection?.connectTimeoutMs ? String(connection.connectTimeoutMs) : "",
-      queryTimeoutMs: connection?.queryTimeoutMs ? String(connection.queryTimeoutMs) : String(vscode21.workspace.getConfiguration("database").get("query.timeoutMs", 3e5)),
+      queryTimeoutMs: connection?.queryTimeoutMs ? String(connection.queryTimeoutMs) : String(vscode24.workspace.getConfiguration("database").get("query.timeoutMs", 3e5)),
       production: connection?.production ?? false,
       readOnlyDefault: connection?.readOnlyDefault ?? false,
       sshTunnelEnabled: connection?.sshTunnel?.enabled ?? false,
@@ -10458,7 +11749,7 @@ var ConnectionEditorPanel = class _ConnectionEditorPanel {
     const connections = JSON.stringify(this.connectionManager.getConnections()).replace(/</g, "\\u003c");
     const defaults = JSON.stringify(DEFAULTS_BY_DATABASE_TYPE).replace(/</g, "\\u003c");
     const guidance = JSON.stringify(ENGINE_GUIDANCE_BY_DATABASE_TYPE).replace(/</g, "\\u003c");
-    const codicons = webview.asWebviewUri(vscode21.Uri.joinPath(this.extensionUri, "media", "codicons", "codicon.css"));
+    const codicons = webview.asWebviewUri(vscode24.Uri.joinPath(this.extensionUri, "media", "codicons", "codicon.css"));
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -11536,7 +12827,7 @@ function getNonce() {
 }
 
 // src/webviews/queryMap/QueryMapProvider.ts
-var vscode22 = __toESM(require("vscode"));
+var vscode25 = __toESM(require("vscode"));
 var PROJECT_SQL_SESSION_PREFIX = "project-sql:";
 var QueryMapProvider = class {
   constructor(extensionUri, sectionService, revealSection, runSection, getHistoryItems, openHistoryItem, setConsolePinned, untrackConsole, moveConsole, touchConsoleDocument, updateHistoryItem, deleteHistoryItem, clearActiveSessions, clearHistoryItems, refreshData) {
@@ -11635,7 +12926,7 @@ var QueryMapProvider = class {
   }
   documentTitle(documentUri) {
     try {
-      const uri = vscode22.Uri.parse(documentUri);
+      const uri = vscode25.Uri.parse(documentUri);
       return uri.fsPath.split(/[\\/]/).pop() || uri.toString();
     } catch {
       return documentUri.split(/[\\/]/).pop() || documentUri;
@@ -11655,7 +12946,7 @@ var QueryMapProvider = class {
       return;
     }
     if (message.type === "newConsole") {
-      await vscode22.commands.executeCommand("database.openSqlConsole");
+      await vscode25.commands.executeCommand("database.openSqlConsole");
       return;
     }
     if (message.type === "clearActiveSessions") {
@@ -11663,7 +12954,7 @@ var QueryMapProvider = class {
       if (!ids.length) {
         return;
       }
-      const answer = await vscode22.window.showWarningMessage("Clear active query sessions?", { modal: true }, "Clear");
+      const answer = await vscode25.window.showWarningMessage("Clear active query sessions?", { modal: true }, "Clear");
       if (answer === "Clear") {
         await this.clearActiveSessions(ids);
       }
@@ -11674,7 +12965,7 @@ var QueryMapProvider = class {
       if (!ids.length) {
         return;
       }
-      const answer = await vscode22.window.showWarningMessage("Clear console history?", { modal: true }, "Clear");
+      const answer = await vscode25.window.showWarningMessage("Clear console history?", { modal: true }, "Clear");
       if (answer === "Clear") {
         await this.clearHistoryItems(ids);
       }
@@ -11709,7 +13000,7 @@ var QueryMapProvider = class {
     if (message.type === "copyHistory") {
       const item = this.getHistoryItems().find((history) => history.id === message.historyId);
       if (item) {
-        await vscode22.env.clipboard.writeText(item.sql);
+        await vscode25.env.clipboard.writeText(item.sql);
       }
       return;
     }
@@ -11723,7 +13014,7 @@ var QueryMapProvider = class {
         await this.touchConsoleDocument(message.documentUri);
       } else if (opened2.missing) {
         await this.untrackConsole(message.consoleId);
-        void vscode22.window.showInformationMessage("SQL console file no longer exists. Removed it from Active Session.");
+        void vscode25.window.showInformationMessage("SQL console file no longer exists. Removed it from Active Session.");
       }
       return;
     }
@@ -11737,7 +13028,7 @@ var QueryMapProvider = class {
     const editor = opened.editor;
     const node = this.findNodeById(this.sectionService.getTree(editor.document), message.nodeId);
     if (!node || !node.sql.trim()) {
-      void vscode22.window.showInformationMessage("No SQL section to run.");
+      void vscode25.window.showInformationMessage("No SQL section to run.");
       return;
     }
     const section = this.toSectionNode(node);
@@ -11752,22 +13043,22 @@ var QueryMapProvider = class {
   }
   async openDocument(documentUri, options = {}) {
     try {
-      const document = await vscode22.workspace.openTextDocument(vscode22.Uri.parse(documentUri));
-      const editor = await vscode22.window.showTextDocument(document, { preview: false, viewColumn: vscode22.ViewColumn.Active });
+      const document = await vscode25.workspace.openTextDocument(vscode25.Uri.parse(documentUri));
+      const editor = await vscode25.window.showTextDocument(document, { preview: false, viewColumn: vscode25.ViewColumn.Active });
       return { editor, missing: false };
     } catch (error) {
       if (this.isFileNotFound(error)) {
         if (options.showMissingWarning !== false) {
-          void vscode22.window.showWarningMessage("Source SQL file no longer exists.");
+          void vscode25.window.showWarningMessage("Source SQL file no longer exists.");
         }
         return { missing: true };
       }
-      void vscode22.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+      void vscode25.window.showErrorMessage(error instanceof Error ? error.message : String(error));
       return { missing: false };
     }
   }
   isFileNotFound(error) {
-    const code = error instanceof vscode22.FileSystemError ? error.code : typeof error === "object" && error !== null ? error.code : void 0;
+    const code = error instanceof vscode25.FileSystemError ? error.code : typeof error === "object" && error !== null ? error.code : void 0;
     const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
     return code === "FileNotFound" || /\b(FileNotFound|ENOENT)\b/i.test(message);
   }
@@ -11880,7 +13171,7 @@ var QueryMapProvider = class {
   }
   html(webview) {
     const nonce = Date.now().toString();
-    const codicons = webview.asWebviewUri(vscode22.Uri.joinPath(this.extensionUri, "media", "codicons", "codicon.css"));
+    const codicons = webview.asWebviewUri(vscode25.Uri.joinPath(this.extensionUri, "media", "codicons", "codicon.css"));
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -12747,7 +14038,7 @@ var QueryMapProvider = class {
 };
 
 // src/webviews/results/ResultsPanelProvider.ts
-var vscode23 = __toESM(require("vscode"));
+var vscode26 = __toESM(require("vscode"));
 
 // src/webviews/results/gridState.ts
 function applyResultGridState(tab, state) {
@@ -12795,7 +14086,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
     this.view = webviewView;
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [vscode23.Uri.joinPath(this.context.extensionUri, "media")]
+      localResourceRoots: [vscode26.Uri.joinPath(this.context.extensionUri, "media")]
     };
     webviewView.webview.html = this.html(webviewView.webview);
     webviewView.webview.onDidReceiveMessage((message) => this.onMessage(message));
@@ -12804,7 +14095,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
     if (connectionId) {
       this.selectConnection(connectionId);
     }
-    await vscode23.commands.executeCommand(`${_ResultsPanelProvider.viewType}.focus`);
+    await vscode26.commands.executeCommand(`${_ResultsPanelProvider.viewType}.focus`);
     this.postHydrate();
   }
   setActiveConnection(connectionId) {
@@ -12959,7 +14250,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
       return;
     }
     if (message.type === "copy") {
-      await vscode23.env.clipboard.writeText(message.text);
+      await vscode26.env.clipboard.writeText(message.text);
       return;
     }
     if (message.type === "compareTabs") {
@@ -13004,7 +14295,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
         await this.connectionManager.beginTransaction(connectionId);
       }
     } else if (this.connectionManager.isTransactionOpen(connectionId)) {
-      const answer = await vscode23.window.showWarningMessage(
+      const answer = await vscode26.window.showWarningMessage(
         "Switching to auto-commit will close the current transaction.",
         { modal: true },
         "Commit",
@@ -13041,9 +14332,9 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
     return sameConnectionTabs.filter((item) => !item.pinned).sort((a, b) => b.updatedAt - a.updatedAt)[0];
   }
   html(webview) {
-    const script = webview.asWebviewUri(vscode23.Uri.joinPath(this.context.extensionUri, "media", "results", "results.js"));
-    const style = webview.asWebviewUri(vscode23.Uri.joinPath(this.context.extensionUri, "media", "results", "results.css"));
-    const codicons = webview.asWebviewUri(vscode23.Uri.joinPath(this.context.extensionUri, "media", "codicons", "codicon.css"));
+    const script = webview.asWebviewUri(vscode26.Uri.joinPath(this.context.extensionUri, "media", "results", "results.js"));
+    const style = webview.asWebviewUri(vscode26.Uri.joinPath(this.context.extensionUri, "media", "results", "results.css"));
+    const codicons = webview.asWebviewUri(vscode26.Uri.joinPath(this.context.extensionUri, "media", "codicons", "codicon.css"));
     const nonce = Date.now().toString();
     return `<!doctype html>
 <html lang="en">
@@ -13064,7 +14355,7 @@ var ResultsPanelProvider = class _ResultsPanelProvider {
 };
 
 // src/webviews/table/TableDataPanel.ts
-var vscode24 = __toESM(require("vscode"));
+var vscode27 = __toESM(require("vscode"));
 
 // node_modules/fflate/esm/index.mjs
 var import_module = require("module");
@@ -13899,18 +15190,18 @@ function removeInvalidXmlChars(value) {
 // src/webviews/table/TableDataPanel.ts
 var TableDataPanel = class {
   static async open(context, connectionManager, node) {
-    const configuredMaxRows = vscode24.workspace.getConfiguration("database").get("defaultMaxRows", 500);
+    const configuredMaxRows = vscode27.workspace.getConfiguration("database").get("defaultMaxRows", 500);
     const maxRows = Number.isFinite(configuredMaxRows) && configuredMaxRows && configuredMaxRows > 0 ? Math.floor(configuredMaxRows) : 500;
-    const panel = vscode24.window.createWebviewPanel(
+    const panel = vscode27.window.createWebviewPanel(
       "databaseTableData",
       node.table.name,
-      vscode24.ViewColumn.Active,
+      vscode27.ViewColumn.Active,
       {
         enableScripts: true,
         retainContextWhenHidden: true
       }
     );
-    panel.iconPath = vscode24.Uri.joinPath(context.extensionUri, "media", "database.svg");
+    panel.iconPath = vscode27.Uri.joinPath(context.extensionUri, "media", "database.svg");
     panel.webview.html = this.html(panel.webview, context.extensionUri, node, [], [], 0, maxRows, false, true);
     let initialFetchStarted = false;
     panel.webview.onDidReceiveMessage(async (message) => {
@@ -13922,12 +15213,12 @@ var TableDataPanel = class {
         return;
       }
       if (message.type === "copy" && typeof message.text === "string") {
-        await vscode24.env.clipboard.writeText(message.text);
+        await vscode27.env.clipboard.writeText(message.text);
         return;
       }
       if (message.type === "export" && message.format) {
-        const target = await vscode24.window.showSaveDialog({
-          defaultUri: vscode24.Uri.file(`${node.table.name}.${message.format === "insert" ? "sql" : message.format === "markdown" ? "md" : message.format}`),
+        const target = await vscode27.window.showSaveDialog({
+          defaultUri: vscode27.Uri.file(`${node.table.name}.${message.format === "insert" ? "sql" : message.format === "markdown" ? "md" : message.format}`),
           filters: {
             "Data files": [message.format === "insert" ? "sql" : message.format === "markdown" ? "md" : message.format]
           }
@@ -13936,25 +15227,25 @@ var TableDataPanel = class {
           if (message.format === "xlsx") {
             const rows = message.rows ?? [];
             const columns = message.columns ?? (rows[0] ? Object.keys(rows[0]) : []);
-            await vscode24.workspace.fs.writeFile(target, rowsToXlsxBuffer(rows, columns, node.table.name));
+            await vscode27.workspace.fs.writeFile(target, rowsToXlsxBuffer(rows, columns, node.table.name));
           } else if (typeof message.text === "string") {
-            await vscode24.workspace.fs.writeFile(target, Buffer.from(message.text, "utf8"));
+            await vscode27.workspace.fs.writeFile(target, Buffer.from(message.text, "utf8"));
           }
         }
         return;
       }
       if (message.type === "command") {
         if (message.command === "ddl") {
-          await vscode24.commands.executeCommand("database.showObjectDdl", node);
+          await vscode27.commands.executeCommand("database.showObjectDdl", node);
         }
         if (message.command === "select") {
-          await vscode24.commands.executeCommand("database.generateSelect", node);
+          await vscode27.commands.executeCommand("database.generateSelect", node);
         }
         if (message.command === "import") {
-          await vscode24.commands.executeCommand("database.importTableData", node);
+          await vscode27.commands.executeCommand("database.importTableData", node);
         }
         if (message.command === "copyToConnection") {
-          await vscode24.commands.executeCommand("database.copyTableToConnection", node);
+          await vscode27.commands.executeCommand("database.copyTableToConnection", node);
         }
         return;
       }
@@ -13972,20 +15263,20 @@ var TableDataPanel = class {
     });
   }
   static async openPerformanceAdvisor(context, node, report, openSql) {
-    const panel = vscode24.window.createWebviewPanel(
+    const panel = vscode27.window.createWebviewPanel(
       "databaseTablePerformance",
       `Advisor: ${node.table.name}`,
-      vscode24.ViewColumn.Active,
+      vscode27.ViewColumn.Active,
       {
         enableScripts: true,
         retainContextWhenHidden: true
       }
     );
-    panel.iconPath = vscode24.Uri.joinPath(context.extensionUri, "media", "database.svg");
+    panel.iconPath = vscode27.Uri.joinPath(context.extensionUri, "media", "database.svg");
     panel.webview.html = this.advisorHtml(panel.webview, context.extensionUri, node, report);
     panel.webview.onDidReceiveMessage(async (message) => {
       if (message.type === "copy" && typeof message.text === "string") {
-        await vscode24.env.clipboard.writeText(message.text);
+        await vscode27.env.clipboard.writeText(message.text);
       }
       if (message.type === "openSql" && typeof message.sql === "string") {
         await openSql(message.title || `Advisor DDL ${node.table.name}`, `${message.sql.trim()}
@@ -13994,20 +15285,20 @@ var TableDataPanel = class {
     });
   }
   static async openDataProfile(context, node, report) {
-    const panel = vscode24.window.createWebviewPanel(
+    const panel = vscode27.window.createWebviewPanel(
       "databaseTableProfile",
       `Profile: ${node.table.name}`,
-      vscode24.ViewColumn.Active,
+      vscode27.ViewColumn.Active,
       {
         enableScripts: true,
         retainContextWhenHidden: true
       }
     );
-    panel.iconPath = vscode24.Uri.joinPath(context.extensionUri, "media", "database.svg");
+    panel.iconPath = vscode27.Uri.joinPath(context.extensionUri, "media", "database.svg");
     panel.webview.html = this.profileHtml(panel.webview, context.extensionUri, node, report);
     panel.webview.onDidReceiveMessage(async (message) => {
       if (message.type === "copy" && typeof message.text === "string") {
-        await vscode24.env.clipboard.writeText(message.text);
+        await vscode27.env.clipboard.writeText(message.text);
       }
     });
   }
@@ -14037,7 +15328,7 @@ var TableDataPanel = class {
   }
   /** Shared <head> tags: CSP (allowing the codicon font/stylesheet) and the codicon stylesheet link. */
   static headTags(webview, extensionUri, nonce) {
-    const codicon = webview.asWebviewUri(vscode24.Uri.joinPath(extensionUri, "media", "codicons", "codicon.css"));
+    const codicon = webview.asWebviewUri(vscode27.Uri.joinPath(extensionUri, "media", "codicons", "codicon.css"));
     return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link href="${codicon}" rel="stylesheet">`;
@@ -15943,19 +17234,19 @@ function histogramHtml(histogram) {
 }
 
 // src/webviews/table/TableImportPanel.ts
-var vscode25 = __toESM(require("vscode"));
+var vscode28 = __toESM(require("vscode"));
 var TableImportPanel = class {
   static async open(context, request, onImport) {
     return new Promise((resolve) => {
       let settled = false;
-      const panel = vscode25.window.createWebviewPanel(
+      const panel = vscode28.window.createWebviewPanel(
         "databaseTableImport",
         `Import ${request.table}`,
-        vscode25.ViewColumn.Active,
+        vscode28.ViewColumn.Active,
         { enableScripts: true, retainContextWhenHidden: true }
       );
       context.subscriptions.push(panel);
-      panel.iconPath = vscode25.Uri.joinPath(context.extensionUri, "media", "database.svg");
+      panel.iconPath = vscode28.Uri.joinPath(context.extensionUri, "media", "database.svg");
       panel.webview.html = this.html(panel.webview, context.extensionUri, request);
       const settle = () => {
         if (!settled) {
@@ -15993,7 +17284,7 @@ var TableImportPanel = class {
   }
   static html(webview, extensionUri, request) {
     const nonce = Date.now().toString();
-    const codicon = webview.asWebviewUri(vscode25.Uri.joinPath(extensionUri, "media", "codicons", "codicon.css"));
+    const codicon = webview.asWebviewUri(vscode28.Uri.joinPath(extensionUri, "media", "codicons", "codicon.css"));
     const stateJson = JSON.stringify({
       connectionName: request.connectionName,
       databaseType: request.databaseType,
@@ -16410,9 +17701,9 @@ function escapeHtml3(value) {
 }
 
 // src/utils/logger.ts
-var vscode26 = __toESM(require("vscode"));
+var vscode29 = __toESM(require("vscode"));
 var Logger = class {
-  output = vscode26.window.createOutputChannel("Database");
+  output = vscode29.window.createOutputChannel("Database");
   info(message) {
     this.output.appendLine(`[info] ${message}`);
   }
@@ -16440,18 +17731,28 @@ function activate(context) {
   const sqlDocumentConnections = new SqlDocumentConnectionStore(context);
   const resultStore = new ResultSessionStore(context);
   const schemaContext = new SchemaContextService(connectionManager, new SchemaMetadataCacheStore(context));
+  registerDatabaseObjectLanguageProviders(context, new DatabaseObjectLanguageProviders({
+    resolveConnection: resolveConnectionForDocument,
+    findReference: findSqlObjectReference,
+    resolveObject: (reference, connection) => resolveDatabaseObject(reference, connection, schemaContext),
+    renderHover: renderDatabaseObjectHover,
+    getDefinition: (connectionId, object) => connectionManager.getDriverByConnectionId(connectionId).getObjectDefinition(connectionId, object),
+    notify: (message) => {
+      void vscode30.window.showWarningMessage(message);
+    }
+  }));
   const sectionService = new SqlSectionService();
   const highlighter = new SqlSectionHighlighter();
-  const sqlDiagnostics = vscode27.languages.createDiagnosticCollection("database-sql");
+  const sqlDiagnostics = vscode30.languages.createDiagnosticCollection("database-sql");
   const diagnosticsService = new SqlDiagnosticsService(connectionManager, schemaContext, sectionService);
   const parameterPrompt = new SqlParameterPrompt();
   const aiAdapter = new VsCodeLanguageModelSqlAdapter();
   const refreshAiAvailability = () => {
     void aiAdapter.isAvailable().then((available) => {
-      void vscode27.commands.executeCommand("setContext", "database.aiAvailable", available);
+      void vscode30.commands.executeCommand("setContext", "database.aiAvailable", available);
     });
   };
-  void vscode27.commands.executeCommand("setContext", "database.aiAvailable", false);
+  void vscode30.commands.executeCommand("setContext", "database.aiAvailable", false);
   refreshAiAvailability();
   const memoryStore = new QueryMemoryStore(context);
   const memoryService = new QueryMemoryService(historyStore, memoryStore, consoleStore, connectionManager, aiAdapter);
@@ -16467,20 +17768,20 @@ function activate(context) {
   const consoleAutoSaveQueued = /* @__PURE__ */ new Set();
   const runningDocuments = /* @__PURE__ */ new Map();
   const runningQueries = /* @__PURE__ */ new Map();
-  void vscode27.commands.executeCommand("setContext", "database.queryRunning", false);
-  const statementRunningDecoration = vscode27.window.createTextEditorDecorationType({
+  void vscode30.commands.executeCommand("setContext", "database.queryRunning", false);
+  const statementRunningDecoration = vscode30.window.createTextEditorDecorationType({
     before: {
-      contentIconPath: vscode27.Uri.joinPath(context.extensionUri, "media", "sql-running.svg"),
+      contentIconPath: vscode30.Uri.joinPath(context.extensionUri, "media", "sql-running.svg"),
       width: "12px",
       height: "12px",
       margin: "0 6px 0 0"
     }
   });
-  const statementCompletedDecoration = vscode27.window.createTextEditorDecorationType({
-    before: { contentText: "\u2713 ", color: new vscode27.ThemeColor("testing.iconPassed") }
+  const statementCompletedDecoration = vscode30.window.createTextEditorDecorationType({
+    before: { contentText: "\u2713 ", color: new vscode30.ThemeColor("testing.iconPassed") }
   });
-  const statementFailedDecoration = vscode27.window.createTextEditorDecorationType({
-    before: { contentText: "\u2717 ", color: new vscode27.ThemeColor("testing.iconFailed") }
+  const statementFailedDecoration = vscode30.window.createTextEditorDecorationType({
+    before: { contentText: "\u2717 ", color: new vscode30.ThemeColor("testing.iconFailed") }
   });
   let pruningMissingConsoles = false;
   let pruningUnknownConnections = false;
@@ -16503,7 +17804,7 @@ function activate(context) {
       await highlighter.reveal(documentUri, rangeToPlain(section.range), section.sql);
     },
     async (documentUri, section) => {
-      const editor = vscode27.window.activeTextEditor;
+      const editor = vscode30.window.activeTextEditor;
       if (!editor || editor.document.languageId !== "sql" || editor.document.uri.toString() !== documentUri) {
         return;
       }
@@ -16563,32 +17864,32 @@ function activate(context) {
   context.subscriptions.push(connectionManager.onDidChangeActiveConnections(() => {
     refreshQueryMap();
     tree.refresh();
-    updateSqlConnectionStatus(vscode27.window.activeTextEditor);
-    const activeDocument = vscode27.window.activeTextEditor?.document;
+    updateSqlConnectionStatus(vscode30.window.activeTextEditor);
+    const activeDocument = vscode30.window.activeTextEditor?.document;
     const connection = activeDocument?.languageId === "sql" ? connectionForDocument(activeDocument) : void 0;
     if (connection && connectionManager.isConnected(connection.id)) {
       schemaContext.refreshDefaultSchemaInBackground(connection);
     }
   }));
-  const treeView = vscode27.window.createTreeView("databaseExplorer", { treeDataProvider: tree, showCollapseAll: true });
+  const treeView = vscode30.window.createTreeView("databaseExplorer", { treeDataProvider: tree, showCollapseAll: true });
   context.subscriptions.push(
     treeView,
     highlighter,
     queryOutput,
     sqlDiagnostics,
-    vscode27.window.registerWebviewViewProvider(ResultsPanelProvider.viewType, results),
-    vscode27.window.registerWebviewViewProvider(QueryMapProvider.viewType, queryMap)
+    vscode30.window.registerWebviewViewProvider(ResultsPanelProvider.viewType, results),
+    vscode30.window.registerWebviewViewProvider(QueryMapProvider.viewType, queryMap)
   );
-  const status = vscode27.window.createStatusBarItem(vscode27.StatusBarAlignment.Left, 90);
+  const status = vscode30.window.createStatusBarItem(vscode30.StatusBarAlignment.Left, 90);
   status.command = "database.pickConnection";
   status.text = "$(database) Database";
   status.show();
   context.subscriptions.push(status, statementRunningDecoration, statementCompletedDecoration, statementFailedDecoration);
-  const sqlCodeLensRefresh = new vscode27.EventEmitter();
+  const sqlCodeLensRefresh = new vscode30.EventEmitter();
   context.subscriptions.push(sqlCodeLensRefresh);
   context.subscriptions.push(registerSqlCompletions(connectionManager, schemaContext, sectionService, connectionForDocument, context));
   context.subscriptions.push(registerSqlConnectionCodeLens(sqlConnectionLensTitle, sectionService, sqlCodeLensRefresh.event));
-  context.subscriptions.push(vscode27.window.onDidChangeActiveTextEditor((editor) => {
+  context.subscriptions.push(vscode30.window.onDidChangeActiveTextEditor((editor) => {
     queryMap.updateFromEditor(editor);
     syncResultsToEditor(editor);
     updateSqlConnectionStatus(editor);
@@ -16596,26 +17897,26 @@ function activate(context) {
     highlighter.refreshVisibleEditors();
     updateSqlDiagnostics(editor?.document, editor?.selection);
   }));
-  context.subscriptions.push(vscode27.window.onDidChangeTextEditorSelection((event) => {
+  context.subscriptions.push(vscode30.window.onDidChangeTextEditorSelection((event) => {
     highlightActiveSqlSection(event.textEditor);
     updateSqlDiagnostics(event.textEditor.document, event.selections[0]);
   }));
-  context.subscriptions.push(vscode27.workspace.onDidChangeTextDocument((event) => {
+  context.subscriptions.push(vscode30.workspace.onDidChangeTextDocument((event) => {
     autoSaveQueryConsoleDocument(event.document);
-    const editor = vscode27.window.activeTextEditor;
+    const editor = vscode30.window.activeTextEditor;
     if (editor?.document.uri.toString() === event.document.uri.toString()) {
       queryMap.updateFromEditor(editor);
       highlightActiveSqlSection(editor);
     }
     updateSqlDiagnostics(event.document, editor?.selection);
   }));
-  context.subscriptions.push(vscode27.workspace.onDidCloseTextDocument((document) => {
+  context.subscriptions.push(vscode30.workspace.onDidCloseTextDocument((document) => {
     const documentUri = document.uri.toString();
     consoleAutoSaves.delete(documentUri);
     consoleAutoSaveQueued.delete(documentUri);
     sqlDiagnostics.delete(document.uri);
   }));
-  context.subscriptions.push(vscode27.workspace.onDidChangeConfiguration((event) => {
+  context.subscriptions.push(vscode30.workspace.onDidChangeConfiguration((event) => {
     if (event.affectsConfiguration("database.ai")) {
       refreshAiAvailability();
     }
@@ -16629,30 +17930,52 @@ function activate(context) {
     }
   };
   context.subscriptions.push(
-    vscode27.languages.registerDocumentFormattingEditProvider("sql", sqlFormatter),
-    vscode27.languages.registerDocumentRangeFormattingEditProvider("sql", sqlFormatter)
+    vscode30.languages.registerDocumentFormattingEditProvider("sql", sqlFormatter),
+    vscode30.languages.registerDocumentRangeFormattingEditProvider("sql", sqlFormatter),
+    vscode30.languages.registerCodeActionsProvider("sql", new SqlMetadataCodeActionProvider(), {
+      providedCodeActionKinds: SqlMetadataCodeActionProvider.providedCodeActionKinds
+    }),
+    vscode30.languages.registerCodeActionsProvider("sql", new SqlGroupByCodeActionProvider(), {
+      providedCodeActionKinds: SqlGroupByCodeActionProvider.providedCodeActionKinds
+    })
   );
   refreshQueryMap();
   void schemaContext.warmFromDisk(connectionManager.getConnections());
-  queryMap.updateFromEditor(vscode27.window.activeTextEditor);
+  queryMap.updateFromEditor(vscode30.window.activeTextEditor);
   queryMap.updateResults(results.getTabs());
-  highlightActiveSqlSection(vscode27.window.activeTextEditor);
-  updateSqlConnectionStatus(vscode27.window.activeTextEditor);
-  for (const document of vscode27.workspace.textDocuments) {
+  highlightActiveSqlSection(vscode30.window.activeTextEditor);
+  updateSqlConnectionStatus(vscode30.window.activeTextEditor);
+  for (const document of vscode30.workspace.textDocuments) {
     updateSqlDiagnostics(document);
   }
   const register = (command, callback) => {
-    context.subscriptions.push(vscode27.commands.registerCommand(command, async (...args) => {
+    context.subscriptions.push(vscode30.commands.registerCommand(command, async (...args) => {
       try {
         return await callback(...args);
       } catch (error) {
         logger.error(command, error);
-        void vscode27.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+        void vscode30.window.showErrorMessage(error instanceof Error ? error.message : String(error));
         return void 0;
       }
     }));
   };
   connectionManager.setConnectionCreator(createConnectionFromEditor);
+  register(SQL_METADATA_REFRESH_COMMAND, async (documentUri, schemaName) => {
+    const uri = documentUri && typeof documentUri.toString === "function" ? documentUri : vscode30.window.activeTextEditor?.document.uri;
+    if (!uri) {
+      return;
+    }
+    const document = await vscode30.workspace.openTextDocument(uri);
+    const resolved = resolveConnectionForDocument(document);
+    if (!resolved.connection) {
+      void vscode30.window.showInformationMessage("No database connection is selected for this SQL editor.");
+      return;
+    }
+    const schemas = typeof schemaName === "string" && schemaName ? [schemaName] : [];
+    await refreshSqlMetadata(connectionManager, schemaContext, resolved.connection, schemas);
+    tree.refresh();
+    updateSqlDiagnostics(document);
+  });
   if (process.env.QUERYDECK_ENABLE_TEST_COMMANDS === "true") {
     register("database.internal.seedAndConnectForMarketplaceMedia", async (configsArg) => {
       const configs = configsArg;
@@ -16853,7 +18176,7 @@ function activate(context) {
     updateQueryRunningContext();
   }
   function updateQueryRunningContext() {
-    void vscode27.commands.executeCommand("setContext", "database.queryRunning", runningQueries.size > 0);
+    void vscode30.commands.executeCommand("setContext", "database.queryRunning", runningQueries.size > 0);
   }
   function trackRunningProgress(running, progress) {
     if (!progress.executionId) {
@@ -16882,7 +18205,7 @@ function activate(context) {
         return runningTab;
       }
     }
-    const activeDocumentUri = vscode27.window.activeTextEditor?.document.uri.toString();
+    const activeDocumentUri = vscode30.window.activeTextEditor?.document.uri.toString();
     if (activeDocumentUri) {
       const runningForDocument = [...runningQueries.values()].filter((running) => running.documentUri === activeDocumentUri).sort((a, b) => b.startedAt - a.startedAt)[0];
       if (runningForDocument) {
@@ -16894,12 +18217,12 @@ function activate(context) {
   async function cancelRunningQuery(tabId) {
     const running = runningQueryForCancellation(tabId);
     if (!running) {
-      void vscode27.window.showInformationMessage("No query is currently running.");
+      void vscode30.window.showInformationMessage("No query is currently running.");
       return;
     }
     running.cancelRequested = true;
     if (!running.executionIds.size) {
-      void vscode27.window.showInformationMessage(`Cancel requested for ${running.title}.`);
+      void vscode30.window.showInformationMessage(`Cancel requested for ${running.title}.`);
       return;
     }
     const executionIds = [...running.executionIds];
@@ -16911,14 +18234,14 @@ function activate(context) {
     if (failures.length) {
       logger.error("database.cancelCurrentQuery", failures.map((failure) => failure.reason).join("\n"));
     }
-    void vscode27.window.showInformationMessage(`Cancel requested for ${running.title}.`);
+    void vscode30.window.showInformationMessage(`Cancel requested for ${running.title}.`);
   }
   function createStatementStatusUpdater(editor, range, sql) {
     const statements = splitSqlStatements(sql);
     const sqlParts = statements.length ? statements : [{ sql, start: 0, end: sql.length }];
     const baseOffset = editor.document.offsetAt(range.start);
     const statuses = sqlParts.map((statement) => ({
-      range: new vscode27.Range(
+      range: new vscode30.Range(
         editor.document.positionAt(baseOffset + statement.start),
         editor.document.positionAt(baseOffset + statement.start)
       ),
@@ -17020,13 +18343,13 @@ function activate(context) {
     if (document.lineCount === 0) {
       return [];
     }
-    const targetRange = range ?? new vscode27.Range(0, 0, document.lineCount - 1, document.lineAt(document.lineCount - 1).range.end.character);
+    const targetRange = range ?? new vscode30.Range(0, 0, document.lineCount - 1, document.lineAt(document.lineCount - 1).range.end.character);
     const source = document.getText(targetRange);
     const formatted = await formatSqlText(source, sqlFormatterDialect(connectionForDocument(document)));
     if (formatted === source) {
       return [];
     }
-    return [vscode27.TextEdit.replace(targetRange, formatted)];
+    return [vscode30.TextEdit.replace(targetRange, formatted)];
   }
   function connectionFromArg(node) {
     const id = connectionIdFromArg(node);
@@ -17040,7 +18363,7 @@ function activate(context) {
     ).connection?.id;
   }
   function activeConnectionId() {
-    const editor = vscode27.window.activeTextEditor;
+    const editor = vscode30.window.activeTextEditor;
     return editor?.document.languageId === "sql" ? connectionForDocument(editor.document)?.id : void 0;
   }
   function syncResultsToEditor(editor) {
@@ -17114,7 +18437,7 @@ function activate(context) {
     if (!id) {
       return;
     }
-    const answer = await vscode27.window.showWarningMessage("Delete this connection?", { modal: true }, "Delete");
+    const answer = await vscode30.window.showWarningMessage("Delete this connection?", { modal: true }, "Delete");
     if (answer === "Delete") {
       await connectionManager.delete(id);
       await schemaContext.deletePersistent(id);
@@ -17128,7 +18451,7 @@ function activate(context) {
       return;
     }
     const message = await connectionManager.test(id);
-    void vscode27.window.showInformationMessage(`Connection successful: ${message}`);
+    void vscode30.window.showInformationMessage(`Connection successful: ${message}`);
   });
   register("database.connect", async (node) => {
     const id = connectionIdFromArg(node) ?? (await connectionManager.pickConnection())?.id;
@@ -17172,14 +18495,14 @@ function activate(context) {
   });
   register("database.showResults", () => results.show(activeConnectionId()));
   register("database.focusResults", () => results.show(activeConnectionId()));
-  register("database.focusExplorer", () => vscode27.commands.executeCommand("databaseExplorer.focus"));
+  register("database.focusExplorer", () => vscode30.commands.executeCommand("databaseExplorer.focus"));
   register("database.goToDatabaseObject", async () => {
     const objects = await collectDatabaseObjects();
     if (!objects.length) {
-      void vscode27.window.showInformationMessage("No cached database objects found yet.");
+      void vscode30.window.showInformationMessage("No cached database objects found yet.");
       return;
     }
-    const picked = await vscode27.window.showQuickPick(objects, {
+    const picked = await vscode30.window.showQuickPick(objects, {
       placeHolder: "Go to database object",
       matchOnDetail: true,
       matchOnDescription: true
@@ -17189,13 +18512,13 @@ function activate(context) {
     }
     await treeView.reveal(picked.node, { expand: true, focus: true, select: true });
     if (picked.objectKind === "table") {
-      await vscode27.commands.executeCommand("database.openTableData", picked.node);
+      await vscode30.commands.executeCommand("database.openTableData", picked.node);
     }
   });
   register("database.sessionMonitor", async (node) => {
     const connection = connectionFromArg(node) ?? connectionManager.getPreferredConnection();
     if (!connection) {
-      void vscode27.window.showInformationMessage("Pick a database connection first.");
+      void vscode30.window.showInformationMessage("Pick a database connection first.");
       return;
     }
     await SessionMonitorPanel.open(context, connectionManager, connection);
@@ -17212,40 +18535,40 @@ function activate(context) {
   register("database.openSqlConsole", async (node) => {
     const connection = connectionFromArg(node) ?? connectionManager.getPreferredConnection() ?? await connectionManager.pickConnection();
     const doc = await consoleStore.openOrCreate(connection, "", { reuse: false });
-    await vscode27.window.showTextDocument(doc, { viewColumn: vscode27.ViewColumn.Active, preview: false });
+    await vscode30.window.showTextDocument(doc, { viewColumn: vscode30.ViewColumn.Active, preview: false });
     results.setActiveConnection(connection?.id);
     if (connection) {
       void warmSqlMetadata(connection, "Query console");
     }
     refreshQueryMap();
-    queryMap.updateFromEditor(vscode27.window.activeTextEditor);
+    queryMap.updateFromEditor(vscode30.window.activeTextEditor);
   });
   register("database.openQueryFile", async (node) => {
     const connection = connectionFromArg(node) ?? connectionManager.getPreferredConnection();
     const doc = await consoleStore.openOrCreate(connection, "", { reuse: false });
-    await vscode27.window.showTextDocument(doc, { viewColumn: vscode27.ViewColumn.Active, preview: false });
+    await vscode30.window.showTextDocument(doc, { viewColumn: vscode30.ViewColumn.Active, preview: false });
     results.setActiveConnection(connection?.id);
     if (connection) {
       void warmSqlMetadata(connection, "Query file");
     }
     refreshQueryMap();
-    queryMap.updateFromEditor(vscode27.window.activeTextEditor);
+    queryMap.updateFromEditor(vscode30.window.activeTextEditor);
   });
   register("database.executeCurrentQuery", () => executeFromEditor("run"));
   register("database.executeSelection", () => executeFromEditor("selection"));
   register("database.executeFile", () => executeFromEditor("run"));
   register("database.cancelCurrentQuery", () => cancelRunningQuery());
   register("database.executeStatementRange", async (uriText, startLine, startCharacter, endLine, endCharacter) => {
-    const editor = vscode27.window.activeTextEditor;
+    const editor = vscode30.window.activeTextEditor;
     if (!editor || typeof uriText !== "string" || editor.document.uri.toString() !== uriText) {
       return;
     }
     if (![startLine, startCharacter, endLine, endCharacter].every((value) => typeof value === "number")) {
       return;
     }
-    const range = new vscode27.Range(
-      new vscode27.Position(startLine, startCharacter),
-      new vscode27.Position(endLine, endCharacter)
+    const range = new vscode30.Range(
+      new vscode30.Position(startLine, startCharacter),
+      new vscode30.Position(endLine, endCharacter)
     );
     const selections = selectedSqlDetections(editor);
     if (shouldRunSelectionForStatement(selections, range)) {
@@ -17270,8 +18593,8 @@ function activate(context) {
     if (!(node instanceof TableNode)) {
       return;
     }
-    const report = await vscode27.window.withProgress({
-      location: vscode27.ProgressLocation.Notification,
+    const report = await vscode30.window.withProgress({
+      location: vscode30.ProgressLocation.Notification,
       title: `Analyzing ${qualifiedName(node.table.schema, node.table.name)}`,
       cancellable: false
     }, () => tablePerformanceAdvisor.analyzeTable(node.connection, node.table.schema, node.table.name));
@@ -17281,10 +18604,10 @@ function activate(context) {
     if (!(node instanceof TableNode)) {
       return;
     }
-    const configuredSampleRows = vscode27.workspace.getConfiguration("database").get("dataProfile.sampleRows", 5e3);
+    const configuredSampleRows = vscode30.workspace.getConfiguration("database").get("dataProfile.sampleRows", 5e3);
     const sampleRows = Number.isFinite(configuredSampleRows) && configuredSampleRows && configuredSampleRows > 0 ? Math.floor(configuredSampleRows) : 5e3;
-    const report = await vscode27.window.withProgress({
-      location: vscode27.ProgressLocation.Notification,
+    const report = await vscode30.window.withProgress({
+      location: vscode30.ProgressLocation.Notification,
       title: `Profiling ${qualifiedName(node.table.schema, node.table.name)}`,
       cancellable: false
     }, () => dataProfiler.profileTable(node.connection, node.table.schema, node.table.name, sampleRows));
@@ -17301,7 +18624,7 @@ function activate(context) {
     const stats = await connectionManager.getDriver(target.connection.type).getTableStats(target.connection.id, target.schema, target.name);
     const sql = maintenanceScriptFromStats(stats);
     if (!sql) {
-      void vscode27.window.showInformationMessage(`No Redshift maintenance SQL was generated for ${qualifiedName(target.schema, target.name)}.`);
+      void vscode30.window.showInformationMessage(`No Redshift maintenance SQL was generated for ${qualifiedName(target.schema, target.name)}.`);
       return;
     }
     await openSqlScript(`Maintenance ${target.name}`, `${sql}
@@ -17324,10 +18647,10 @@ function activate(context) {
     }
     const sourceSchema = await schemaContext.loadSchema(source.connection, source.schema);
     if (sourceSchema.status !== "ready") {
-      void vscode27.window.showWarningMessage(`Could not load source schema ${source.schema}: ${sourceSchema.errorMessage ?? "metadata unavailable"}`);
+      void vscode30.window.showWarningMessage(`Could not load source schema ${source.schema}: ${sourceSchema.errorMessage ?? "metadata unavailable"}`);
       return;
     }
-    const targetSchemaName = await vscode27.window.showInputBox({
+    const targetSchemaName = await vscode30.window.showInputBox({
       title: "Target schema",
       prompt: "Schema to compare against",
       value: source.schema,
@@ -17338,7 +18661,7 @@ function activate(context) {
     }
     const targetSchema = await schemaContext.loadSchema(targetConnection, targetSchemaName.trim());
     if (targetSchema.status !== "ready") {
-      void vscode27.window.showWarningMessage(`Could not load target schema ${targetSchemaName.trim()}: ${targetSchema.errorMessage ?? "metadata unavailable"}`);
+      void vscode30.window.showWarningMessage(`Could not load target schema ${targetSchemaName.trim()}: ${targetSchema.errorMessage ?? "metadata unavailable"}`);
       return;
     }
     const report = compareSchemas({
@@ -17348,31 +18671,31 @@ function activate(context) {
       sourceSchema: snapshotFromSchemaEntry(sourceSchema),
       targetSchema: snapshotFromSchemaEntry(targetSchema)
     });
-    const doc = await vscode27.workspace.openTextDocument({
+    const doc = await vscode30.workspace.openTextDocument({
       language: "markdown",
       content: formatSchemaDiffMarkdown(report)
     });
-    await vscode27.window.showTextDocument(doc, { preview: true, viewColumn: vscode27.ViewColumn.Beside });
+    await vscode30.window.showTextDocument(doc, { preview: true, viewColumn: vscode30.ViewColumn.Beside });
   });
   register("database.showErDiagram", async (node) => {
     const target = schemaLikeTarget(node);
     if (!target) {
       return;
     }
-    const report = await vscode27.window.withProgress({
-      location: vscode27.ProgressLocation.Notification,
+    const report = await vscode30.window.withProgress({
+      location: vscode30.ProgressLocation.Notification,
       title: `Building ER diagram for ${target.schema}`,
       cancellable: false
     }, () => erDiagramService.build({ connection: target.connection, schemaName: target.schema }));
     await ErDiagramPanel.open(context, report);
   });
   register("database.insertQuerySnippet", async () => {
-    const editor = vscode27.window.activeTextEditor;
+    const editor = vscode30.window.activeTextEditor;
     if (!editor || editor.document.languageId !== "sql") {
-      void vscode27.window.showInformationMessage("Open a SQL editor before inserting a query snippet.");
+      void vscode30.window.showInformationMessage("Open a SQL editor before inserting a query snippet.");
       return;
     }
-    const picked = await vscode27.window.showQuickPick(querySnippets().map((snippet) => ({
+    const picked = await vscode30.window.showQuickPick(querySnippets().map((snippet) => ({
       label: snippet.label,
       description: snippet.description,
       snippet
@@ -17382,18 +18705,18 @@ function activate(context) {
     if (!picked) {
       return;
     }
-    await editor.insertSnippet(new vscode27.SnippetString(picked.snippet.snippet));
+    await editor.insertSnippet(new vscode30.SnippetString(picked.snippet.snippet));
   });
   register("database.copyName", async (node) => {
     const name = objectName(node);
     if (name) {
-      await vscode27.env.clipboard.writeText(name);
+      await vscode30.env.clipboard.writeText(name);
     }
   });
   register("database.copyQualifiedName", async (node) => {
     const name = qualifiedObjectName(node);
     if (name) {
-      await vscode27.env.clipboard.writeText(name);
+      await vscode30.env.clipboard.writeText(name);
     }
   });
   register("database.importTableData", async (node) => {
@@ -17401,7 +18724,7 @@ function activate(context) {
       return;
     }
     try {
-      const files = await vscode27.window.showOpenDialog({
+      const files = await vscode30.window.showOpenDialog({
         canSelectMany: false,
         openLabel: "Import data",
         filters: {
@@ -17412,7 +18735,7 @@ function activate(context) {
       if (!file) {
         return;
       }
-      const fileBytes = await vscode27.workspace.fs.readFile(file);
+      const fileBytes = await vscode30.workspace.fs.readFile(file);
       const fileText = Buffer.from(fileBytes).toString("utf8");
       if (!connectionManager.isConnected(node.connection.id)) {
         await connectionManager.connect(node.connection.id);
@@ -17429,8 +18752,8 @@ function activate(context) {
       }, async (mapping) => {
         const data = buildTableImportData(file.path, fileText, mapping);
         const statements = buildTableImportStatements(node.connection.type, node.table.schema, node.table.name, data);
-        await vscode27.window.withProgress({
-          location: vscode27.ProgressLocation.Notification,
+        await vscode30.window.withProgress({
+          location: vscode30.ProgressLocation.Notification,
           title: `Importing ${data.rows.length.toLocaleString()} rows into ${qualifiedName(node.table.schema, node.table.name)}`,
           cancellable: false
         }, async (progress) => {
@@ -17440,12 +18763,12 @@ function activate(context) {
             await driver.executeQuery({ connectionId: node.connection.id, sql });
           }
         });
-        void vscode27.window.showInformationMessage(`Imported ${data.rows.length.toLocaleString()} rows into ${qualifiedName(node.table.schema, node.table.name)}.`);
+        void vscode30.window.showInformationMessage(`Imported ${data.rows.length.toLocaleString()} rows into ${qualifiedName(node.table.schema, node.table.name)}.`);
         tree.refresh(node);
         return { rowCount: data.rows.length };
       });
     } catch (error) {
-      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+      void vscode30.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
   });
   register("database.copyTableToConnection", async (node) => {
@@ -17463,7 +18786,7 @@ function activate(context) {
     if (!canGenerateSqlScript(destination, "Copy table")) {
       return;
     }
-    const targetSchema = await vscode27.window.showInputBox({
+    const targetSchema = await vscode30.window.showInputBox({
       title: "Target schema",
       prompt: "Schema to create the copied table in",
       value: destination.defaultSchema ?? sourceConnection.defaultSchema ?? node.table.schema,
@@ -17472,7 +18795,7 @@ function activate(context) {
     if (!targetSchema) {
       return;
     }
-    const targetTable = await vscode27.window.showInputBox({
+    const targetTable = await vscode30.window.showInputBox({
       title: "Target table",
       prompt: "Name of the copied table",
       value: `${node.table.name}_copy`,
@@ -17485,8 +18808,8 @@ function activate(context) {
       await connectionManager.connect(sourceConnection.id);
     }
     try {
-      const [columns, sourceRows, sourceDdl] = await vscode27.window.withProgress({
-        location: vscode27.ProgressLocation.Notification,
+      const [columns, sourceRows, sourceDdl] = await vscode30.window.withProgress({
+        location: vscode30.ProgressLocation.Notification,
         title: `Copying ${qualifiedName(node.table.schema, node.table.name)}`,
         cancellable: false
       }, async () => Promise.all([
@@ -17519,7 +18842,7 @@ function activate(context) {
       await openSqlScript(`Copy ${node.table.name} to ${destination.name}`, `${header}${preview.sql}
 `, destination);
     } catch (error) {
-      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+      void vscode30.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
   });
   async function openSqlScript(title, content, connection) {
@@ -17530,7 +18853,7 @@ function activate(context) {
     await sqlDocumentConnections.set(doc.uri.toString(), connection.id);
     await connectionManager.setSelectedConnection(connection.id);
     results.setActiveConnection(connection.id);
-    updateSqlConnectionStatus(vscode27.window.activeTextEditor);
+    updateSqlConnectionStatus(vscode30.window.activeTextEditor);
     refreshQueryMap();
     sqlCodeLensRefresh.fire();
   }
@@ -17542,7 +18865,7 @@ function activate(context) {
     try {
       await openSqlScript(title, newObjectTemplate(node, kind), target.connection);
     } catch (error) {
-      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+      void vscode30.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
   }
   register("database.showObjectDdl", async (node) => {
@@ -17553,7 +18876,7 @@ function activate(context) {
 `, schemaFromNode(node).connection);
       }
     } catch (error) {
-      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+      void vscode30.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
   });
   register("database.generateSelect", async (node) => {
@@ -17562,7 +18885,7 @@ function activate(context) {
       try {
         await openSqlScript(`SELECT ${target.name}`, selectTableSql(target.connection.type, target.schema, target.name, 100), target.connection);
       } catch (error) {
-        void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+        void vscode30.window.showWarningMessage(error instanceof Error ? error.message : String(error));
       }
     }
   });
@@ -17575,7 +18898,7 @@ function activate(context) {
     try {
       await openSqlScript(`INSERT ${target.name}`, insertTemplateSql(target.connection.type, target.schema, target.name, columns), target.connection);
     } catch (error) {
-      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+      void vscode30.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
   });
   register("database.generateUpdate", async (node) => {
@@ -17586,7 +18909,7 @@ function activate(context) {
     try {
       await openSqlScript(`UPDATE ${target.name}`, updateTemplateSql(target.connection.type, target.schema, target.name), target.connection);
     } catch (error) {
-      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+      void vscode30.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
   });
   register("database.generateDelete", async (node) => {
@@ -17595,7 +18918,7 @@ function activate(context) {
       try {
         await openSqlScript(`DELETE ${target.name}`, deleteTemplateSql(target.connection.type, target.schema, target.name), target.connection);
       } catch (error) {
-        void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+        void vscode30.window.showWarningMessage(error instanceof Error ? error.message : String(error));
       }
     }
   });
@@ -17605,7 +18928,7 @@ function activate(context) {
       try {
         await openSqlScript(`ALTER ${target.name}`, addColumnSql(target.connection.type, target.schema, target.name), target.connection);
       } catch (error) {
-        void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+        void vscode30.window.showWarningMessage(error instanceof Error ? error.message : String(error));
       }
     }
   });
@@ -17616,7 +18939,7 @@ function activate(context) {
         await openSqlScript(`Rename ${objectName(node)}`, sql, schemaFromNode(node).connection);
       }
     } catch (error) {
-      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+      void vscode30.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
   });
   register("database.dropObject", async (node) => {
@@ -17626,11 +18949,11 @@ function activate(context) {
         await openSqlScript(`Drop ${objectName(node)}`, sql, schemaFromNode(node).connection);
       }
     } catch (error) {
-      void vscode27.window.showWarningMessage(error instanceof Error ? error.message : String(error));
+      void vscode30.window.showWarningMessage(error instanceof Error ? error.message : String(error));
     }
   });
   register("database.newObject", async (node) => {
-    const picked = await vscode27.window.showQuickPick([
+    const picked = await vscode30.window.showQuickPick([
       { label: "Query Console", command: "database.openSqlConsole" },
       { label: "Query File", command: "database.openQueryFile" },
       { label: "CREATE TABLE script", command: "database.newTable" },
@@ -17645,7 +18968,7 @@ function activate(context) {
       { label: "CREATE SEQUENCE script", command: "database.newSequence" }
     ], { placeHolder: "Generate database SQL script" });
     if (picked) {
-      await vscode27.commands.executeCommand(picked.command, node);
+      await vscode30.commands.executeCommand(picked.command, node);
     }
   });
   register("database.newTable", async (node) => openGeneratedObjectScript("New Table", node, "table"));
@@ -17661,19 +18984,19 @@ function activate(context) {
   register("database.quickDocumentation", async (node) => {
     const docs = await quickDocumentation(connectionManager, node);
     if (docs) {
-      void vscode27.window.showInformationMessage(docs, { modal: true });
+      void vscode30.window.showInformationMessage(docs, { modal: true });
     }
   });
   register("database.showQueryHistory", async () => {
     const connection = connectionManager.getPreferredConnection();
-    const picked = await vscode27.window.showQuickPick(queryConsoleHistoryItems().filter((item) => !connection || item.connectionId === connection.id).map((item) => ({
+    const picked = await vscode30.window.showQuickPick(queryConsoleHistoryItems().filter((item) => !connection || item.connectionId === connection.id).map((item) => ({
       label: `${item.favorite ? "$(star-full) " : ""}${item.sql.replace(/\s+/g, " ").slice(0, 90)}`,
       description: `${item.status}${item.rowCount !== void 0 ? ` - ${item.rowCount} rows` : ""}`,
       detail: `${new Date(item.executedAt).toLocaleString()}${item.sourceFile ? ` - ${item.sourceFile}` : ""}`,
       item
     })), { placeHolder: "Query console history", matchOnDetail: true });
     if (picked) {
-      const action = await vscode27.window.showQuickPick([
+      const action = await vscode30.window.showQuickPick([
         { label: "Open in Console", action: "open" },
         { label: picked.item.favorite ? "Remove Favorite" : "Favorite", action: "favorite" },
         { label: "Copy SQL", action: "copy" },
@@ -17684,7 +19007,7 @@ function activate(context) {
       } else if (action?.action === "favorite") {
         await historyStore.update({ ...picked.item, favorite: !picked.item.favorite });
       } else if (action?.action === "copy") {
-        await vscode27.env.clipboard.writeText(picked.item.sql);
+        await vscode30.env.clipboard.writeText(picked.item.sql);
       } else if (action?.action === "delete") {
         await historyStore.delete(picked.item.id);
       }
@@ -17695,17 +19018,17 @@ function activate(context) {
   register("database.visualExplainSql", () => runVisualExplain(false));
   register("database.visualExplainAnalyzeSql", () => runVisualExplain(true));
   async function executeFromEditor(mode, options = {}) {
-    const editor = vscode27.window.activeTextEditor;
+    const editor = vscode30.window.activeTextEditor;
     if (!editor) {
       return;
     }
     const selectedDetections = mode === "file" ? [] : selectedSqlDetections(editor);
     let detections;
     if (mode === "file") {
-      detections = [{ sql: editor.document.getText(), range: new vscode27.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length)) }];
+      detections = [{ sql: editor.document.getText(), range: new vscode30.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length)) }];
     } else if (mode === "run") {
       const detected = sectionService.detectExecutable(editor.document, editor.selection);
-      detections = selectedDetections.length > 0 ? selectedDetections : detected ? [detected] : [{ sql: editor.document.getText(), range: new vscode27.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length)) }];
+      detections = selectedDetections.length > 0 ? selectedDetections : detected ? [detected] : [{ sql: editor.document.getText(), range: new vscode30.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length)) }];
     } else if (mode === "selection" || selectedDetections.length > 0) {
       detections = selectedDetections;
     } else {
@@ -17713,7 +19036,7 @@ function activate(context) {
       detections = detected ? [detected] : [];
     }
     if (!detections.some((detected) => detected.sql.trim())) {
-      void vscode27.window.showInformationMessage("No SQL section to run.");
+      void vscode30.window.showInformationMessage("No SQL section to run.");
       return;
     }
     const forceNewResultTab = detections.length > 1;
@@ -17724,15 +19047,15 @@ function activate(context) {
   async function compareResultTabs(sourceTab, resultSetIndex) {
     const sourceResultSet = sourceTab.resultSets[resultSetIndex] ?? sourceTab.resultSets[0];
     if (!sourceResultSet) {
-      void vscode27.window.showInformationMessage("This result tab does not contain rows to compare.");
+      void vscode30.window.showInformationMessage("This result tab does not contain rows to compare.");
       return;
     }
     const candidates = results.getTabs().filter((tab) => tab.id !== sourceTab.id && tab.resultSets.length > 0);
     if (!candidates.length) {
-      void vscode27.window.showInformationMessage("Open another result tab on the same connection to compare against.");
+      void vscode30.window.showInformationMessage("Open another result tab on the same connection to compare against.");
       return;
     }
-    const picked = await vscode27.window.showQuickPick(candidates.map((tab) => ({
+    const picked = await vscode30.window.showQuickPick(candidates.map((tab) => ({
       label: tab.customTitle ?? tab.title,
       description: `${tab.executionStatus}${tab.executionTimeMs !== void 0 ? ` - ${tab.executionTimeMs}ms` : ""}`,
       detail: `${tab.databaseName ?? "database"} \u2022 ${tab.resultSets[0]?.rowCount ?? 0} rows`,
@@ -17745,7 +19068,7 @@ function activate(context) {
     }
     const targetResultSet = picked.tab.resultSets[resultSetIndex] ?? picked.tab.resultSets[0];
     if (!targetResultSet) {
-      void vscode27.window.showInformationMessage("The selected comparison tab does not contain a matching result set.");
+      void vscode30.window.showInformationMessage("The selected comparison tab does not contain a matching result set.");
       return;
     }
     const report = compareResultSets(
@@ -17754,21 +19077,21 @@ function activate(context) {
       sourceTab.customTitle ?? sourceTab.title,
       picked.tab.customTitle ?? picked.tab.title
     );
-    const doc = await vscode27.workspace.openTextDocument({
+    const doc = await vscode30.workspace.openTextDocument({
       language: "markdown",
       content: formatResultSetDiffMarkdown(report)
     });
-    await vscode27.window.showTextDocument(doc, { preview: true, viewColumn: vscode27.ViewColumn.Beside });
+    await vscode30.window.showTextDocument(doc, { preview: true, viewColumn: vscode30.ViewColumn.Beside });
   }
   async function runVisualExplain(analyze) {
-    const editor = vscode27.window.activeTextEditor;
+    const editor = vscode30.window.activeTextEditor;
     if (!editor || editor.document.languageId !== "sql") {
-      void vscode27.window.showInformationMessage("Open a SQL editor before running Visual Explain.");
+      void vscode30.window.showInformationMessage("Open a SQL editor before running Visual Explain.");
       return;
     }
     const resolved = resolveConnectionForDocument(editor.document);
     if (resolved.isBound && !resolved.connection) {
-      void vscode27.window.showErrorMessage(`This SQL console is bound to a connection that no longer exists: ${resolved.boundConnectionId}`);
+      void vscode30.window.showErrorMessage(`This SQL console is bound to a connection that no longer exists: ${resolved.boundConnectionId}`);
       return;
     }
     const connection = resolved.connection ?? await connectionManager.pickConnection();
@@ -17776,7 +19099,7 @@ function activate(context) {
       return;
     }
     if (analyze) {
-      const answer = await vscode27.window.showWarningMessage(
+      const answer = await vscode30.window.showWarningMessage(
         "EXPLAIN ANALYZE executes the SQL to collect runtime timings.",
         { modal: true },
         "Run EXPLAIN ANALYZE"
@@ -17793,7 +19116,7 @@ function activate(context) {
     }
     const detected = selectedSqlDetections(editor)[0] ?? sectionService.detectExecutable(editor.document, editor.selection);
     if (!detected?.sql.trim()) {
-      void vscode27.window.showInformationMessage("No SQL section to explain.");
+      void vscode30.window.showInformationMessage("No SQL section to explain.");
       return;
     }
     const sourceSql = detected.sql;
@@ -17815,8 +19138,8 @@ function activate(context) {
       range: sourceRange
     }), { forceNew: true });
     try {
-      const plan = await vscode27.window.withProgress({
-        location: vscode27.ProgressLocation.Notification,
+      const plan = await vscode30.window.withProgress({
+        location: vscode30.ProgressLocation.Notification,
         title: `${analyze ? "Running EXPLAIN ANALYZE" : "Running EXPLAIN"} for ${connection.name}`,
         cancellable: false
       }, () => queryPlanAnalyzer.explain(connection, executableSql, { analyze }));
@@ -17847,7 +19170,7 @@ function activate(context) {
     }
   }
   async function executeActiveMultiStatementSelection(maxRows) {
-    const editor = vscode27.window.activeTextEditor;
+    const editor = vscode30.window.activeTextEditor;
     if (!editor || editor.document.languageId !== "sql") {
       return false;
     }
@@ -17913,10 +19236,10 @@ function activate(context) {
     diagnosticTimers.set(documentUri, timer);
   }
   async function showSqlMetadataStatus() {
-    const editor = vscode27.window.activeTextEditor;
+    const editor = vscode30.window.activeTextEditor;
     const connection = editor?.document.languageId === "sql" ? connectionForDocument(editor.document) : connectionManager.getPreferredConnection();
     if (!connection) {
-      void vscode27.window.showInformationMessage("No database connection is selected for this SQL editor.");
+      void vscode30.window.showInformationMessage("No database connection is selected for this SQL editor.");
       return;
     }
     const status2 = await schemaContext.metadataStatus(connection);
@@ -17951,20 +19274,20 @@ function activate(context) {
       `- Storage fallback: ${status2.storageError ? `in-memory only (${status2.storageError})` : "disk cache available"}`,
       ""
     ].join("\n");
-    const doc = await vscode27.workspace.openTextDocument({ language: "markdown", content });
-    await vscode27.window.showTextDocument(doc, { preview: true, viewColumn: vscode27.ViewColumn.Beside });
+    const doc = await vscode30.workspace.openTextDocument({ language: "markdown", content });
+    await vscode30.window.showTextDocument(doc, { preview: true, viewColumn: vscode30.ViewColumn.Beside });
   }
   async function warmSqlMetadata(connection, surface) {
     try {
       await connectAndRefreshSqlMetadata(connectionManager, schemaContext, connection);
     } catch (error) {
-      void vscode27.window.showWarningMessage(`${surface} is bound to ${connection.name}, but metadata refresh could not connect: ${error instanceof Error ? error.message : String(error)}`);
+      void vscode30.window.showWarningMessage(`${surface} is bound to ${connection.name}, but metadata refresh could not connect: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   async function setSqlFileConnection(resource) {
     const document = await sqlDocumentFromArg(resource);
     if (!document) {
-      void vscode27.window.showInformationMessage("Open a SQL file before selecting a database connection.");
+      void vscode30.window.showInformationMessage("Open a SQL file before selecting a database connection.");
       return;
     }
     const connection = await connectionManager.pickConnection();
@@ -17978,18 +19301,18 @@ function activate(context) {
         await connectionManager.connect(connection.id);
       }
     } catch (error) {
-      void vscode27.window.showWarningMessage(`SQL file is bound to ${connection.name}, but connection failed: ${error instanceof Error ? error.message : String(error)}`);
+      void vscode30.window.showWarningMessage(`SQL file is bound to ${connection.name}, but connection failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     schemaContext.invalidate(connection.id);
     schemaContext.refreshDefaultSchemaInBackground(connection);
     results.setActiveConnection(connection.id);
-    updateSqlConnectionStatus(vscode27.window.activeTextEditor);
-    updateSqlDiagnostics(document, vscode27.window.activeTextEditor?.document.uri.toString() === document.uri.toString() ? vscode27.window.activeTextEditor.selection : void 0);
+    updateSqlConnectionStatus(vscode30.window.activeTextEditor);
+    updateSqlDiagnostics(document, vscode30.window.activeTextEditor?.document.uri.toString() === document.uri.toString() ? vscode30.window.activeTextEditor.selection : void 0);
     refreshQueryMap();
     sqlCodeLensRefresh.fire();
   }
   async function sqlDocumentFromArg(resource) {
-    const document = resource instanceof vscode27.Uri ? await vscode27.workspace.openTextDocument(resource) : vscode27.window.activeTextEditor?.document;
+    const document = resource instanceof vscode30.Uri ? await vscode30.workspace.openTextDocument(resource) : vscode30.window.activeTextEditor?.document;
     if (!document) {
       return void 0;
     }
@@ -17999,7 +19322,7 @@ function activate(context) {
   async function executeDetected(editor, detected, options = {}) {
     const resolved = resolveConnectionForDocument(editor.document);
     if (resolved.isBound && !resolved.connection) {
-      void vscode27.window.showErrorMessage(`This SQL console is bound to a connection that no longer exists: ${resolved.boundConnectionId}`);
+      void vscode30.window.showErrorMessage(`This SQL console is bound to a connection that no longer exists: ${resolved.boundConnectionId}`);
       return;
     }
     const connection = resolved.connection ?? await connectionManager.pickConnection();
@@ -18020,7 +19343,7 @@ function activate(context) {
     if (executableSql === void 0) {
       return;
     }
-    const decoration = vscode27.window.createTextEditorDecorationType({ backgroundColor: new vscode27.ThemeColor("editor.findMatchHighlightBackground") });
+    const decoration = vscode30.window.createTextEditorDecorationType({ backgroundColor: new vscode30.ThemeColor("editor.findMatchHighlightBackground") });
     editor.setDecorations(decoration, [detected.range]);
     let endDocumentExecution;
     let runningTabId;
@@ -18161,24 +19484,24 @@ function activate(context) {
   function resultTitle(sql, fileName) {
     const normalized = sql.replace(/\s+/g, " ").trim();
     const from = normalized.match(/\bfrom\s+("?[\w.]+"?)/i)?.[1];
-    const keyword = normalized.match(/^\w+/)?.[0]?.toUpperCase() ?? "SQL";
+    const keyword2 = normalized.match(/^\w+/)?.[0]?.toUpperCase() ?? "SQL";
     if (from) {
-      return `${keyword} ${from.replace(/"/g, "")}`;
+      return `${keyword2} ${from.replace(/"/g, "")}`;
     }
     if (normalized) {
-      return keyword;
+      return keyword2;
     }
     return fileName?.split(/[\\/]/).pop() ?? "SQL";
   }
   async function runAi(action) {
     if (!await aiAdapter.isAvailable()) {
-      void vscode27.window.showInformationMessage("AI SQL actions need a VS Code language model provider or configured database.ai.openAiCompatible settings.");
+      void vscode30.window.showInformationMessage("AI SQL actions need a VS Code language model provider or configured database.ai.openAiCompatible settings.");
       return;
     }
-    const editor = vscode27.window.activeTextEditor;
+    const editor = vscode30.window.activeTextEditor;
     const connection = editor ? connectionForDocument(editor.document) : void 0;
     if (!editor || !connection) {
-      void vscode27.window.showInformationMessage("Open a SQL editor and select a connection first.");
+      void vscode30.window.showInformationMessage("Open a SQL editor and select a connection first.");
       return;
     }
     const section = sectionService.detect(editor.document, editor.selection);
@@ -18198,22 +19521,22 @@ function activate(context) {
         }))
       }
     });
-    const doc = await vscode27.workspace.openTextDocument({ language: "sql", content: `${sql}
+    const doc = await vscode30.workspace.openTextDocument({ language: "sql", content: `${sql}
 ` });
-    await vscode27.window.showTextDocument(doc, { preview: true, viewColumn: vscode27.ViewColumn.Beside });
+    await vscode30.window.showTextDocument(doc, { preview: true, viewColumn: vscode30.ViewColumn.Beside });
   }
   async function openHistoryItem(item) {
     if (item.documentUri) {
       try {
-        const doc2 = await vscode27.workspace.openTextDocument(vscode27.Uri.parse(item.documentUri));
-        const editor2 = await vscode27.window.showTextDocument(doc2, { preview: false });
+        const doc2 = await vscode30.workspace.openTextDocument(vscode30.Uri.parse(item.documentUri));
+        const editor2 = await vscode30.window.showTextDocument(doc2, { preview: false });
         const currentText = doc2.getText();
         if (item.sourceRange && currentText.includes(item.sql.trim())) {
           const range = rangeFromPlain2(item.sourceRange);
-          editor2.selection = new vscode27.Selection(range.start, range.end);
+          editor2.selection = new vscode30.Selection(range.start, range.end);
           editor2.revealRange(range);
         } else {
-          const fullRange = new vscode27.Range(doc2.positionAt(0), doc2.positionAt(currentText.length));
+          const fullRange = new vscode30.Range(doc2.positionAt(0), doc2.positionAt(currentText.length));
           await editor2.edit((edit) => edit.replace(fullRange, `${item.sql}
 `));
         }
@@ -18225,7 +19548,7 @@ function activate(context) {
     }
     const doc = await consoleStore.openOrCreate(connectionManager.getConnection(item.connectionId), `${item.sql}
 `, { reuse: false });
-    const editor = await vscode27.window.showTextDocument(doc, { preview: false });
+    const editor = await vscode30.window.showTextDocument(doc, { preview: false });
     results.setActiveConnection(item.connectionId);
     refreshQueryMap();
   }
@@ -18234,7 +19557,7 @@ function activate(context) {
       return;
     }
     await highlighter.reveal(tab.sourceDocumentUri, tab.sourceRange, tab.queryText);
-    const editor = vscode27.window.activeTextEditor;
+    const editor = vscode30.window.activeTextEditor;
     queryMap.updateFromEditor(editor?.document.uri.toString() === tab.sourceDocumentUri ? editor : void 0);
   }
 }
@@ -18256,7 +19579,7 @@ function trimSelection(document, selection) {
   const trailing = text.match(/\s*$/)?.[0].length ?? 0;
   const startOffset = document.offsetAt(selection.start) + leading;
   const endOffset = document.offsetAt(selection.end) - trailing;
-  return new vscode27.Range(document.positionAt(startOffset), document.positionAt(Math.max(startOffset, endOffset)));
+  return new vscode30.Range(document.positionAt(startOffset), document.positionAt(Math.max(startOffset, endOffset)));
 }
 function compareRanges(a, b) {
   return a.start.compareTo(b.start) || a.end.compareTo(b.end);
@@ -18336,12 +19659,12 @@ function registerSqlCompletions(connectionManager, schemaContext, sectionService
     "having",
     "union all"
   ];
-  return vscode27.languages.registerCompletionItemProvider("sql", {
+  return vscode30.languages.registerCompletionItemProvider("sql", {
     async provideCompletionItems(document, position) {
       const linePrefix = document.lineAt(position).text.slice(0, position.character);
-      const items = keywords.map((keyword) => {
-        const item = new vscode27.CompletionItem(keyword, vscode27.CompletionItemKind.Keyword);
-        item.insertText = keyword;
+      const items = keywords.map((keyword2) => {
+        const item = new vscode30.CompletionItem(keyword2, vscode30.CompletionItemKind.Keyword);
+        item.insertText = keyword2;
         return item;
       });
       const connection = getConnectionForDocument(document);
@@ -18366,8 +19689,8 @@ async function getMetadataCompletionItems(connectionManager, schemaContext, sect
   if (connectionManager.isConnected(config.id)) {
     schemaContext.refreshDefaultSchemaInBackground(config);
   }
-  const section = sectionService.detect(document, new vscode27.Selection(position, position));
-  const statementPrefix = section ? document.getText(new vscode27.Range(section.range.start, position)) : linePrefix;
+  const section = sectionService.detect(document, new vscode30.Selection(position, position));
+  const statementPrefix = section ? document.getText(new vscode30.Range(section.range.start, position)) : linePrefix;
   const relationContext = relationCompletionContext(linePrefix);
   if (relationContext?.schema) {
     const entry2 = await schemaContext.getCachedForConnection(config, defaultSchema);
@@ -18375,7 +19698,7 @@ async function getMetadataCompletionItems(connectionManager, schemaContext, sect
       return [];
     }
     return relationCompletionCandidates(entry2, relationContext).slice(0, 300).map((relation) => {
-      const item = new vscode27.CompletionItem(relation.name, vscode27.CompletionItemKind.Struct);
+      const item = new vscode30.CompletionItem(relation.name, vscode30.CompletionItemKind.Struct);
       item.detail = `${relation.schema}.${relation.name}`;
       item.insertText = relation.name;
       return item;
@@ -18392,7 +19715,7 @@ async function getMetadataCompletionItems(connectionManager, schemaContext, sect
       return [];
     }
     return columns.slice(0, 300).map((column) => {
-      const item = new vscode27.CompletionItem(column.name, vscode27.CompletionItemKind.Field);
+      const item = new vscode30.CompletionItem(column.name, vscode30.CompletionItemKind.Field);
       item.detail = column.dataType;
       item.insertText = column.name;
       return item;
@@ -18407,10 +19730,10 @@ async function getMetadataCompletionItems(connectionManager, schemaContext, sect
   }
   const items = [];
   for (const schema of entry.schemas.slice(0, 30)) {
-    items.push(new vscode27.CompletionItem(schema.name, vscode27.CompletionItemKind.Module));
+    items.push(new vscode30.CompletionItem(schema.name, vscode30.CompletionItemKind.Module));
   }
   for (const table of [...entry.tables, ...entry.views].slice(0, 300)) {
-    const tableItem = new vscode27.CompletionItem(table.name, vscode27.CompletionItemKind.Struct);
+    const tableItem = new vscode30.CompletionItem(table.name, vscode30.CompletionItemKind.Struct);
     tableItem.detail = `${table.schema}.${table.name}`;
     tableItem.insertText = table.name;
     items.push(tableItem);
@@ -18425,7 +19748,7 @@ async function getSectionColumnCompletionItems(schemaContext, config, tables, de
       if (items.some((item2) => item2.label === column.name)) {
         continue;
       }
-      const item = new vscode27.CompletionItem(column.name, vscode27.CompletionItemKind.Field);
+      const item = new vscode30.CompletionItem(column.name, vscode30.CompletionItemKind.Field);
       item.detail = `${table.schema ?? defaultSchema}.${table.table} ${column.dataType}`;
       item.insertText = column.name;
       items.push(item);
@@ -18439,28 +19762,28 @@ async function showFirstSchemaCompletionMessage(context, connection) {
     return;
   }
   await context.globalState.update(key, true);
-  void vscode27.window.showInformationMessage(`Schema-backed SQL completions are ready for ${connection.name}.`);
+  void vscode30.window.showInformationMessage(`Schema-backed SQL completions are ready for ${connection.name}.`);
 }
 function filterMetadataItems(items, linePrefix) {
   if (/\b(from|join|update|into)\s+[\w"]*$/i.test(linePrefix) || /\.$/.test(linePrefix)) {
     return items;
   }
-  return items.filter((item) => item.kind === vscode27.CompletionItemKind.Keyword);
+  return items.filter((item) => item.kind === vscode30.CompletionItemKind.Keyword);
 }
 function registerSqlConnectionCodeLens(connectionLensTitle, sectionService, refreshEvent) {
-  const emitter = new vscode27.EventEmitter();
-  const documentEvents = vscode27.workspace.onDidChangeTextDocument((event) => {
+  const emitter = new vscode30.EventEmitter();
+  const documentEvents = vscode30.workspace.onDidChangeTextDocument((event) => {
     if (event.document.languageId === "sql") {
       emitter.fire();
     }
   });
   const refreshEvents = refreshEvent?.(() => emitter.fire());
-  const provider = vscode27.languages.registerCodeLensProvider("sql", {
+  const provider = vscode30.languages.registerCodeLensProvider("sql", {
     onDidChangeCodeLenses: emitter.event,
     provideCodeLenses(document) {
-      const top = new vscode27.Range(0, 0, 0, 0);
+      const top = new vscode30.Range(0, 0, 0, 0);
       const lenses = [
-        new vscode27.CodeLens(top, {
+        new vscode30.CodeLens(top, {
           title: connectionLensTitle(document),
           tooltip: "Select the database connection for this SQL file",
           command: "database.setSqlFileConnection",
@@ -18471,8 +19794,8 @@ function registerSqlConnectionCodeLens(connectionLensTitle, sectionService, refr
         if (!section.sql.trim()) {
           continue;
         }
-        const range = new vscode27.Range(section.range.start, section.range.start);
-        lenses.push(new vscode27.CodeLens(range, {
+        const range = new vscode30.Range(section.range.start, section.range.start);
+        lenses.push(new vscode30.CodeLens(range, {
           title: "$(play) Execute SQL Section",
           tooltip: "Run this SQL section.",
           command: "database.executeStatementRange",
@@ -18488,7 +19811,7 @@ function registerSqlConnectionCodeLens(connectionLensTitle, sectionService, refr
       return lenses;
     }
   });
-  return refreshEvents ? vscode27.Disposable.from(documentEvents, refreshEvents, provider, emitter) : vscode27.Disposable.from(documentEvents, provider, emitter);
+  return refreshEvents ? vscode30.Disposable.from(documentEvents, refreshEvents, provider, emitter) : vscode30.Disposable.from(documentEvents, provider, emitter);
 }
 function stripQuotes3(value) {
   return value.replace(/^"|"$/g, "");
@@ -18505,20 +19828,20 @@ function rangeToPlain(range) {
   };
 }
 async function openSqlEditor(connectionManager, title, content = "", connection = connectionManager.getPreferredConnection()) {
-  const uri = vscode27.Uri.parse(`untitled:${title}${connection ? ` - ${connection.name}` : ""}.sql`);
-  const doc = await vscode27.workspace.openTextDocument(uri);
-  const editor = await vscode27.window.showTextDocument(doc, {
-    viewColumn: vscode27.ViewColumn.Active,
+  const uri = vscode30.Uri.parse(`untitled:${title}${connection ? ` - ${connection.name}` : ""}.sql`);
+  const doc = await vscode30.workspace.openTextDocument(uri);
+  const editor = await vscode30.window.showTextDocument(doc, {
+    viewColumn: vscode30.ViewColumn.Active,
     preview: false
   });
-  await vscode27.languages.setTextDocumentLanguage(doc, "sql");
+  await vscode30.languages.setTextDocumentLanguage(doc, "sql");
   if (content && doc.getText().length === 0) {
-    await editor.edit((edit) => edit.insert(new vscode27.Position(0, 0), content));
+    await editor.edit((edit) => edit.insert(new vscode30.Position(0, 0), content));
   }
   return doc;
 }
 function configuredDefaultMaxRows() {
-  const maxRows = vscode27.workspace.getConfiguration("database").get("defaultMaxRows", 500);
+  const maxRows = vscode30.workspace.getConfiguration("database").get("defaultMaxRows", 500);
   return Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : void 0;
 }
 function objectName(node) {
@@ -18602,10 +19925,10 @@ function tableLikeTarget(node) {
 async function pickDestinationConnection(connectionManager, sourceConnectionId) {
   const connections = connectionManager.getConnections().filter((connection) => connection.id !== sourceConnectionId);
   if (!connections.length) {
-    void vscode27.window.showInformationMessage("Add another database connection before copying a table.");
+    void vscode30.window.showInformationMessage("Add another database connection before copying a table.");
     return void 0;
   }
-  const picked = await vscode27.window.showQuickPick(connections.map((connection) => ({
+  const picked = await vscode30.window.showQuickPick(connections.map((connection) => ({
     label: connection.name,
     description: `${connection.type}${connection.production ? " - prod" : ""}`,
     detail: `${connection.username}@${connection.host}:${connection.port}/${connection.database}`,
@@ -18646,7 +19969,7 @@ function canGenerateSqlScript(connection, feature) {
   if (connection.type !== "redis") {
     return true;
   }
-  void vscode27.window.showWarningMessage(`${feature} is not available for Redis connections because Redis uses commands instead of SQL scripts.`);
+  void vscode30.window.showWarningMessage(`${feature} is not available for Redis connections because Redis uses commands instead of SQL scripts.`);
   return false;
 }
 async function objectDdl(connectionManager, node) {
