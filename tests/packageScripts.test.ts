@@ -84,10 +84,12 @@ describe('package scripts', () => {
     expect(copyNativeRuntimes).not.toContain("['oracledb/plugins'");
   });
 
-  it('pins Marketplace media capture to the last-known-good VS Code version', () => {
+  it('does not rely on environment injection to enable Marketplace capture commands', () => {
     const captureScript = readFileSync(join(root, 'scripts', 'captureMarketplaceMedia.js'), 'utf8');
 
-    expect(captureScript).toContain("run('npx', ['vscode-test', '--code-version', '1.128.1']");
+    expect(captureScript).toContain("run('npx', ['vscode-test']");
+    expect(captureScript).not.toContain('QUERYDECK_ENABLE_TEST_COMMANDS');
+    expect(captureScript).not.toContain('--code-version');
   });
 
   it('rebuilds packaged runtime assets before unit tests import dist chunks in CI', () => {
