@@ -1,73 +1,50 @@
-# Task 3 Report
+# Task 3 Report: SQL Server Temporal Result Preservation
 
-## Status
+## Implementation
 
-Implemented database object resolution and compact Markdown hover rendering in commit `c050df6` (`feat: resolve and format database object metadata`).
+- Added exported `formatSqlServerTemporalValue` using `Date#toISOString()`, which is based on UTC components and therefore cannot shift a stored SQL Server calendar date through the machine's local timezone.
+- SQL Server `date` becomes `YYYY-MM-DD`; `time` becomes `HH:mm:ss.sss`; `datetime`, `datetime2`, and `smalldatetime` become timezone-free `YYYY-MM-DDTHH:mm:ss.sss`; `datetimeoffset` remains an ISO instant ending in `Z`.
+- Null remains null and milliseconds available on the JavaScript `Date` are retained.
+- Connection setup registers mssql `valueHandler` entries for only Date, Time, DateTime, DateTime2, SmallDateTime, and DateTimeOffset. Existing handlers are not replaced, making repeated connection registration idempotent. Non-temporal tokens are untouched.
+- The integration-style mock test verifies all six handlers are installed before querying, repeated connection preserves handler identities, and an integer result remains numeric.
 
-## RED evidence
+## Strict TDD Evidence
+
+### RED
 
 Command:
 
-`npx vitest run tests/databaseObjectMetadata.test.ts tests/databaseObjectHover.test.ts`
+`npm test -- tests/temporalResultValues.test.ts tests/additionalDrivers.test.ts`
 
-Initial result: exit 1. Both suites failed during collection because `../src/services/databaseObjectMetadata` and `../src/services/databaseObjectHover` did not exist. This was the expected missing-import failure before production code was written.
+Observed exit code 1: 8 failures and 8 passes. All seven pure formatter cases failed with `formatSqlServerTemporalValue is not a function`; the registration test failed because `valueHandler.has(type)` was false. These are the expected missing-feature failures.
 
-## GREEN and verification evidence
+### GREEN
 
-Commands:
+Focused command:
 
-`npx vitest run tests/databaseObjectMetadata.test.ts tests/databaseObjectHover.test.ts`
+`npm test -- tests/temporalResultValues.test.ts tests/additionalDrivers.test.ts`
 
-Result: exit 0; 2 test files passed, 9 tests passed.
+Observed exit code 0: 2 files passed, 16 tests passed.
+
+Full suite command:
+
+`npm test`
+
+Observed exit code 0: 35 files passed and 2 skipped; 408 tests passed and 7 skipped.
+
+Type-check command:
 
 `npm run lint`
 
-Result: exit 0; `tsc -p ./ --noEmit` completed without errors.
+Observed exit code 0 (`tsc -p ./ --noEmit`).
 
-`git diff --check -- src/services/databaseObjectMetadata.ts src/services/databaseObjectHover.ts tests/databaseObjectMetadata.test.ts tests/databaseObjectHover.test.ts`
+## datetimeoffset Representation Limit
 
-Result: exit 0 with no whitespace errors.
+Inspection of installed `tedious` 19.2.1 (`lib/value-parser.js`, `readDateTimeOffset`) shows that the parser reads but discards the two encoded offset bytes, then constructs a UTC JavaScript `Date`. By the time mssql's `valueHandler` runs, the original textual offset (for example `+02:00`) is unavailable. The formatter therefore emits the preserved instant in canonical UTC form with `Z`; it cannot honestly reconstruct or retain the discarded original offset. JavaScript `Date` also limits fractional precision to milliseconds, so any sub-millisecond SQL Server precision already discarded by the driver cannot be recovered.
 
 ## Self-review
 
-- Resolver is UI-independent and returns a discriminated union for tables, views, functions, procedures, and triggers.
-- Resolution uses qualified/default schemas, cached metadata before live loading, dialect-aware case folding, context-specific object sets, and argument-count overload filtering. Missing and ambiguous matches return `undefined`.
-- Table metadata includes ordered columns, primary keys, and foreign keys when the supplied schema context exposes foreign-key retrieval; disconnected cached columns remain usable without forcing a live schema load.
-- Renderer escapes database-supplied Markdown text, contains no command links, and excludes indexes, row counts, storage sizes, notifications, guesses, and native-definition synthesis.
-
-## Concerns
-
-- The parser returns normalized identifier text without quote metadata, so the resolver can apply existing dialect folding and exact-first matching but cannot independently distinguish a quoted mixed-case token from an unquoted token with identical text.
-
-## Review follow-up
-
-Review findings were resolved in commit `4fd246d` (`fix: harden database object hover metadata`).
-
-### Follow-up RED evidence
-
-Command:
-
-`npx vitest run tests/databaseObjectMetadata.test.ts tests/databaseObjectHover.test.ts tests/schemaContextService.test.ts tests/schemaMetadataCacheStore.test.ts`
-
-Result before production changes: exit 1; 5 targeted failures. The failures demonstrated the absent `SchemaContextService.getForeignKeys`, absent `markdownCodeSpan`, missing foreign-key cache migration, nested `numeric(10,2)` being counted as two arguments, and exact case variants resolving ambiguously. A separate renderer RED run confirmed leading/trailing code-span padding was not preserved.
-
-### Follow-up GREEN evidence
-
-Commands:
-
-`npx vitest run tests/databaseObjectMetadata.test.ts tests/databaseObjectHover.test.ts tests/schemaContextService.test.ts tests/schemaMetadataCacheStore.test.ts`
-
-Result: exit 0; 4 files and 20 tests passed.
-
-`npm run lint`
-
-Result: exit 0; `tsc -p ./ --noEmit` completed without errors.
-
-### Follow-up self-review
-
-- Foreign-key retrieval is now a required typed schema-context capability backed by the versioned persistent metadata cache; version 1 and 2 snapshots hydrate with an empty foreign-key map.
-- All database identifiers and types use delimiter-sized, padded Markdown code spans with newline normalization. Plain Markdown escaping is limited to non-code text.
-- Routine fallback parsing counts only top-level commas while respecting nested type syntax and quoted content; structured `arguments` remain authoritative.
-- Object selection prefers exact names across each candidate set before applying dialect case folding.
-
-Remaining concern: SQL reference quote metadata is still unavailable from Task 1, so exact-first selection is the best possible distinction at this layer between quoted and unquoted same-text references.
+- Scope is limited to the requested driver and tests plus this report; no execution timestamp or localization code changed.
+- UTC-derived slicing ensures timezone-free SQL Server types do not gain `Z` and avoids local calendar shifts.
+- Handler registration neither overwrites pre-existing custom handlers nor changes non-temporal values.
+- No bundled runtime artifact change was required because the runtime exposes the same mssql module-level type tokens and `valueHandler` map.
