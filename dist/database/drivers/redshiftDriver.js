@@ -4,9 +4,31 @@ exports.RedshiftDriver = void 0;
 const postgresDriver_1 = require("./postgresDriver");
 const queryPlanService_1 = require("../../services/queryPlanService");
 const identifiers_1 = require("../../utils/identifiers");
+const driverUtils_1 = require("./driverUtils");
 class RedshiftDriver extends postgresDriver_1.PostgresDriver {
     id = 'redshift';
     displayName = 'Amazon Redshift';
+    async getObjectDefinition(connectionId, object) {
+        try {
+            if (object.kind === 'table') {
+                const result = await this.requirePool(connectionId).query(`show table ${(0, identifiers_1.qualifiedName)(object.schema, object.name)}`);
+                const row = result.rows[0];
+                return row ? nativeDefinition(Object.values(row)[0]) : undefined;
+            }
+            if (object.kind === 'view') {
+                const result = await this.requirePool(connectionId).query('select definition from pg_views where schemaname = $1 and viewname = $2', [object.schema, object.name]);
+                return nativeDefinition(result.rows[0]?.definition);
+            }
+            // Redshift exposes routine bodies in pg_proc, but not an unambiguous native
+            // CREATE statement. A body selected by name alone is unsafe for overloads.
+            if (object.kind === 'function' || object.kind === 'procedure')
+                return undefined;
+            return undefined;
+        }
+        catch (error) {
+            throw (0, driverUtils_1.toQueryError)(error);
+        }
+    }
     async getSchemas(connectionId) {
         const pool = this.requirePool(connectionId);
         try {
@@ -190,9 +212,9 @@ class RedshiftDriver extends postgresDriver_1.PostgresDriver {
     shouldRetryWithoutSsl(_config, _error) {
         return false;
     }
-    toPoolConfig(config, max) {
+    toPoolConfig(config, max, defaultTypes) {
         return {
-            ...super.toPoolConfig({ ...config, sslMode: config.sslMode === 'disable' ? 'prefer' : config.sslMode }, max),
+            ...super.toPoolConfig({ ...config, sslMode: config.sslMode === 'disable' ? 'prefer' : config.sslMode }, max, defaultTypes),
             port: config.port || 5439
         };
     }
@@ -204,6 +226,9 @@ function optionalString(value) {
     }
     const next = String(value).trim();
     return next || undefined;
+}
+function nativeDefinition(value) {
+    return value === null || value === undefined || value === '' ? undefined : String(value);
 }
 function booleanFromDb(value) {
     if (typeof value === 'boolean') {
