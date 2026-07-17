@@ -18,7 +18,30 @@ type MssqlPool = {
 
 type MssqlRuntime = {
   ConnectionPool: new (config: Record<string, unknown>) => MssqlPool;
+  valueHandler: Map<unknown, (value: Date | null) => string | null>;
+  Date: unknown;
+  Time: unknown;
+  DateTime: unknown;
+  DateTime2: unknown;
+  SmallDateTime: unknown;
+  DateTimeOffset: unknown;
 };
+
+export type SqlServerTemporalType = 'date' | 'time' | 'datetime' | 'datetime2' | 'smalldatetime' | 'datetimeoffset';
+
+export function formatSqlServerTemporalValue(type: SqlServerTemporalType, value: Date | null): string | null {
+  if (value === null) {
+    return null;
+  }
+  const iso = value.toISOString();
+  if (type === 'date') {
+    return iso.slice(0, 10);
+  }
+  if (type === 'time') {
+    return iso.slice(11, -1);
+  }
+  return type === 'datetimeoffset' ? iso : iso.slice(0, -1);
+}
 
 export class SqlServerDriver extends BasicDatabaseDriver {
   readonly id = 'sqlserver' as const;
@@ -28,6 +51,7 @@ export class SqlServerDriver extends BasicDatabaseDriver {
   async connect(config: ConnectionConfigWithPassword): Promise<DbConnection> {
     await this.disconnect(config.id);
     const mssql = await loadMssql();
+    registerTemporalValueHandlers(mssql);
     const pool = new mssql.ConnectionPool({
       server: config.host,
       port: config.port,
@@ -179,6 +203,22 @@ export class SqlServerDriver extends BasicDatabaseDriver {
       throw new Error('Connection is not active. Connect first.');
     }
     return pool;
+  }
+}
+
+function registerTemporalValueHandlers(mssql: MssqlRuntime): void {
+  const temporalTypes: Array<[unknown, SqlServerTemporalType]> = [
+    [mssql.Date, 'date'],
+    [mssql.Time, 'time'],
+    [mssql.DateTime, 'datetime'],
+    [mssql.DateTime2, 'datetime2'],
+    [mssql.SmallDateTime, 'smalldatetime'],
+    [mssql.DateTimeOffset, 'datetimeoffset']
+  ];
+  for (const [token, type] of temporalTypes) {
+    if (!mssql.valueHandler.has(token)) {
+      mssql.valueHandler.set(token, (value) => formatSqlServerTemporalValue(type, value));
+    }
   }
 }
 
