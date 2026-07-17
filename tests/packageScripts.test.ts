@@ -84,6 +84,12 @@ describe('package scripts', () => {
     expect(copyNativeRuntimes).not.toContain("['oracledb/plugins'");
   });
 
+  it('pins Marketplace media capture to the last-known-good VS Code version', () => {
+    const captureScript = readFileSync(join(root, 'scripts', 'captureMarketplaceMedia.js'), 'utf8');
+
+    expect(captureScript).toContain("run('npx', ['vscode-test', '--code-version', '1.128.1']");
+  });
+
   it('rebuilds packaged runtime assets before unit tests import dist chunks in CI', () => {
     const workflow = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
     const buildIndex = workflow.indexOf('run: npm run build');
