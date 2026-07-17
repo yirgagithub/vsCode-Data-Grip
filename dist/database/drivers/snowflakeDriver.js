@@ -149,6 +149,20 @@ class SnowflakeDriver extends driverUtils_1.BasicDatabaseDriver {
         const sql = `select * from ${(0, identifiers_1.qualifiedName)(schema, table)}${(0, driverUtils_1.safeFilterClause)(options?.where)}${orderBy}${pageLimit ? `\nlimit ${pageLimit}${offset ? ` offset ${offset}` : ''}` : ''}`;
         return this.executeQuery({ connectionId, sql, maxRows: 0 });
     }
+    async getObjectDefinition(connectionId, object) {
+        if (object.kind === 'trigger')
+            return undefined;
+        const type = object.kind === 'procedure' ? 'PROCEDURE' : object.kind.toUpperCase();
+        const name = object.signature ?? (0, identifiers_1.qualifiedName)(object.schema, object.name);
+        const escapedName = name.replace(/'/g, "''");
+        try {
+            const rows = await this.query(connectionId, `select GET_DDL('${type}', '${escapedName}') as "definition"`);
+            return nativeDefinition(rows[0]?.definition ?? rows[0]?.DEFINITION);
+        }
+        catch (error) {
+            throw (0, driverUtils_1.toQueryError)(error);
+        }
+    }
     async getRoutines(connectionId, schema, kind) {
         const rows = await this.query(connectionId, `select routine_schema as "schema", routine_name as "name", data_type as "returnType" from information_schema.routines where routine_schema = upper('${escapeSql(schema)}') and routine_type = '${kind}' order by routine_name`);
         return rows.map((row) => ({
@@ -190,6 +204,7 @@ function executeSnowflake(connection, sql) {
     return new Promise((resolve, reject) => {
         connection.execute({
             sqlText: sql,
+            fetchAsString: ['Date'],
             complete: (error, statement, rows = []) => {
                 if (error) {
                     reject(error);
@@ -218,5 +233,8 @@ function snowflakeAccount(host) {
 }
 function escapeSql(value) {
     return value.replace(/'/g, "''");
+}
+function nativeDefinition(value) {
+    return value === null || value === undefined || value === '' ? undefined : String(value);
 }
 //# sourceMappingURL=snowflakeDriver.js.map

@@ -94,11 +94,21 @@ class OracleDriver extends driverUtils_1.BasicDatabaseDriver {
         const oracle = await loadOracle();
         const connection = await this.requirePool(params.connectionId).getConnection();
         const results = [];
+        const temporalTypes = new Set([
+            oracle.DB_TYPE_DATE,
+            oracle.DB_TYPE_TIMESTAMP,
+            oracle.DB_TYPE_TIMESTAMP_TZ,
+            oracle.DB_TYPE_TIMESTAMP_LTZ
+        ]);
         try {
             for (const sql of statements) {
                 const started = Date.now();
                 try {
-                    const result = await connection.execute(sql, [], { outFormat: oracle.OUT_FORMAT_OBJECT, autoCommit: true });
+                    const result = await connection.execute(sql, [], {
+                        outFormat: oracle.OUT_FORMAT_OBJECT,
+                        autoCommit: true,
+                        fetchTypeHandler: (metadata) => temporalTypes.has(metadata.dbType) ? { type: oracle.STRING } : undefined
+                    });
                     const rows = (result.rows ?? []);
                     const dataTypes = Object.fromEntries((result.metaData ?? []).map((field) => [field.name, field.dbTypeName ?? '']));
                     results.push(rows.length ? (0, driverUtils_1.executionResultFromRows)(rows, started, sql, dataTypes) : (0, driverUtils_1.emptyExecutionResult)(started, sql, result.rowsAffected ?? 0));
@@ -155,6 +165,28 @@ class OracleDriver extends driverUtils_1.BasicDatabaseDriver {
         const sql = `select * from ${(0, identifiers_1.qualifiedName)(schema, table)}${(0, driverUtils_1.safeFilterClause)(options?.where)}${orderBy}${paging}`;
         return this.executeQuery({ connectionId, sql, maxRows: 0 });
     }
+    async getObjectDefinition(connectionId, object) {
+        const type = object.kind === 'procedure' ? 'PROCEDURE' : object.kind.toUpperCase();
+        const oracle = await loadOracle();
+        const connection = await this.requirePool(connectionId).getConnection();
+        try {
+            const result = object.kind === 'function' || object.kind === 'procedure' || object.kind === 'trigger'
+                ? await connection.execute(`select text as "text" from all_source where owner = upper(:owner) and name = upper(:name) and type = :type order by line`, [object.schema, object.name, type], { outFormat: oracle.OUT_FORMAT_OBJECT })
+                : await connection.execute(`select dbms_metadata.get_ddl(:type, upper(:name), upper(:owner)) as "definition" from dual`, [type, object.name, object.schema], { outFormat: oracle.OUT_FORMAT_OBJECT });
+            if (object.kind === 'function' || object.kind === 'procedure' || object.kind === 'trigger') {
+                const text = (result.rows ?? []).map((row) => String(row.text ?? row.TEXT ?? '')).join('');
+                return nativeDefinition(text);
+            }
+            const row = result.rows?.[0];
+            return nativeDefinition(row?.definition ?? row?.DEFINITION);
+        }
+        catch (error) {
+            throw (0, driverUtils_1.toQueryError)(error);
+        }
+        finally {
+            await connection.close();
+        }
+    }
     async getRoutines(connectionId, schema, kind) {
         const rows = await this.query(connectionId, `select owner as "schema", object_name as "name" from all_objects where owner = upper('${escapeSql(schema)}') and object_type = '${kind}' order by object_name`);
         return rows.map((row) => ({ schema: String(row.schema ?? row.SCHEMA), name: String(row.name ?? row.NAME), kind: kind === 'PROCEDURE' ? 'procedure' : 'function' }));
@@ -184,5 +216,8 @@ async function loadOracle() {
 }
 function escapeSql(value) {
     return value.replace(/'/g, "''");
+}
+function nativeDefinition(value) {
+    return value === null || value === undefined || value === '' ? undefined : String(value);
 }
 //# sourceMappingURL=oracleDriver.js.map
