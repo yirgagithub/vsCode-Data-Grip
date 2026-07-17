@@ -17,7 +17,7 @@ Each SQL driver will request string output for temporal columns using its client
 - PostgreSQL and Redshift: install result parsers that return the server text for temporal OIDs.
 - MySQL: enable string output for temporal types in pool configuration.
 - SQL Server: use driver configuration or row normalization that preserves the database field representation without UTC serialization.
-- Oracle: request string fetching for temporal types.
+- Oracle: convert native temporal values to canonical UTC strings with millisecond precision. In node-oracledb thin mode, the native value has already lost fractional precision beyond milliseconds, the original timezone offset, and the database's textual representation; QueryDeck does not attempt to reconstruct unavailable information.
 - Snowflake: configure or normalize temporal results to stable strings before constructing `QueryExecutionResult`.
 - SQLite: preserve its native scalar values; do not infer dates from strings or numbers.
 - Redis: no temporal coercion; preserve returned scalar values.

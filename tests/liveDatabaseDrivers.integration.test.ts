@@ -193,12 +193,15 @@ run('live database drivers', () => {
 
       const result = await driver.executeQuery({ connectionId: config.id, sql: `select NAME as "name" from ${table} where ID = 1` });
       expectValue(result.rows, 'name', 'Ada');
-      expectTemporalStrings((await driver.executeQuery({
-        connectionId: config.id,
-        sql: "select to_date('2025-11-09', 'YYYY-MM-DD') as date_value, to_timestamp('2025-11-09 14:23:45.123456', 'YYYY-MM-DD HH24:MI:SS.FF6') as timestamp_value, to_timestamp_tz('2025-11-09 14:23:45.123456 +05:30', 'YYYY-MM-DD HH24:MI:SS.FF6 TZH:TZM') as timestamp_tz_value from dual"
-      })).rows, {
-        date_value: '09-NOV-25',
-        timestamp_value: '09-NOV-25 02.23.45.123456 PM'
+      const temporalResults = await driver.executeStatements(params(config), [
+        "alter session set time_zone = 'UTC'",
+        "select to_date('2025-11-09', 'YYYY-MM-DD') as date_value, to_timestamp('2025-11-09 14:23:45.123456', 'YYYY-MM-DD HH24:MI:SS.FF6') as timestamp_value, to_timestamp_tz('2025-11-09 14:23:45.123456 +05:30', 'YYYY-MM-DD HH24:MI:SS.FF6 TZH:TZM') as timestamp_tz_value, cast(to_timestamp('2025-11-09 14:23:45.123456', 'YYYY-MM-DD HH24:MI:SS.FF6') as timestamp with local time zone) as timestamp_ltz_value from dual"
+      ]);
+      expectTemporalStrings(temporalResults.at(-1)?.rows ?? [], {
+        date_value: '2025-11-09T00:00:00.000Z',
+        timestamp_value: '2025-11-09T14:23:45.123Z',
+        timestamp_tz_value: '2025-11-09T08:53:45.123Z',
+        timestamp_ltz_value: '2025-11-09T14:23:45.123Z'
       });
       expectName(await driver.getSchemas(config.id), config.defaultSchema ?? config.username);
       expectName(await driver.getTables(config.id, config.defaultSchema ?? config.username), table);

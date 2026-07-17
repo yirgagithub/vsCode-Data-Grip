@@ -10,7 +10,6 @@ type OracleConnection = {
 
 type OracleRuntime = {
   OUT_FORMAT_OBJECT: number;
-  STRING: unknown;
   DB_TYPE_DATE: unknown;
   DB_TYPE_TIMESTAMP: unknown;
   DB_TYPE_TIMESTAMP_TZ: unknown;
@@ -90,7 +89,7 @@ export class OracleDriver extends BasicDatabaseDriver {
           const result = await connection.execute(sql, [], {
             outFormat: oracle.OUT_FORMAT_OBJECT,
             autoCommit: true,
-            fetchTypeHandler: (metadata: { dbType: unknown }) => temporalTypes.has(metadata.dbType) ? { type: oracle.STRING } : undefined
+            fetchTypeHandler: (metadata: { dbType: unknown }) => temporalTypes.has(metadata.dbType) ? { converter: formatOracleTemporalValue } : undefined
           });
           const rows = (result.rows ?? []) as Record<string, unknown>[];
           const dataTypes = Object.fromEntries((result.metaData ?? []).map((field) => [field.name, field.dbTypeName ?? '']));
@@ -198,6 +197,18 @@ export class OracleDriver extends BasicDatabaseDriver {
     }
     return pool;
   }
+}
+
+function formatOracleTemporalValue(value: unknown): unknown {
+  if (value === null) {
+    return null;
+  }
+  if (!(value instanceof Date)) {
+    return value;
+  }
+  const pad = (part: number, width = 2) => String(part).padStart(width, '0');
+  return `${pad(value.getUTCFullYear(), 4)}-${pad(value.getUTCMonth() + 1)}-${pad(value.getUTCDate())}`
+    + `T${pad(value.getUTCHours())}:${pad(value.getUTCMinutes())}:${pad(value.getUTCSeconds())}.${pad(value.getUTCMilliseconds(), 3)}Z`;
 }
 
 async function loadOracle(): Promise<OracleRuntime> {
