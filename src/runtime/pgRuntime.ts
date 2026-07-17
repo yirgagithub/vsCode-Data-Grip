@@ -1,1 +1,1 @@
-export { Pool } from 'pg';
+export { Pool, types } from 'pg';

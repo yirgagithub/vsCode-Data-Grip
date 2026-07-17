@@ -90,4 +90,12 @@ describe('lazy runtime chunks', () => {
       expect(typeof moduleExports[runtime.exportName], `${runtime.chunk}.${runtime.exportName}`).toBe('function');
     });
   });
+
+  it('packages the postgres default type parser registry', () => {
+    const moduleExports = requireFromRoot(join(root, 'dist/runtime/pgRuntime.js')) as {
+      types?: { getTypeParser?: unknown };
+    };
+
+    expect(typeof moduleExports.types?.getTypeParser).toBe('function');
+  });
 });

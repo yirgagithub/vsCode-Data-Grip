@@ -257,6 +257,15 @@ describe('PostgresDriver session monitor', () => {
 });
 
 describe('RedshiftDriver metadata', () => {
+  it('fetches temporal values through the per-pool parser registry', async () => {
+    const driver = new RedshiftDriver();
+    await driver.connect(config({ type: 'redshift', port: 5439 }));
+
+    const registry = pgMock.pools[0].config.types!;
+    expect(registry.getTypeParser(1184)('2026-07-17 15:30:00+02')).toBe('2026-07-17 15:30:00+02');
+    expect(registry.getTypeParser(23)('42')).toBe('parsed:23:text:42');
+  });
+
   beforeEach(() => {
     pgMock.failSsl = false;
     pgMock.queries.length = 0;
