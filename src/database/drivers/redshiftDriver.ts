@@ -3,6 +3,7 @@ import { ActiveSessionInfo, ColumnInfo, ConnectionConfigWithPassword, DatabaseOb
 import { textExplainPlan } from '../../services/queryPlanService';
 import { qualifiedName } from '../../utils/identifiers';
 import { toQueryError } from './driverUtils';
+import type { PoolConfig } from 'pg';
 
 export class RedshiftDriver extends PostgresDriver {
   override readonly id = 'redshift' as const;
@@ -237,9 +238,9 @@ export class RedshiftDriver extends PostgresDriver {
     return false;
   }
 
-  protected override toPoolConfig(config: ConnectionConfigWithPassword, max: number) {
+  protected override toPoolConfig(config: ConnectionConfigWithPassword, max: number, defaultTypes?: NonNullable<PoolConfig['types']>) {
     return {
-      ...super.toPoolConfig({ ...config, sslMode: config.sslMode === 'disable' ? 'prefer' : config.sslMode }, max),
+      ...super.toPoolConfig({ ...config, sslMode: config.sslMode === 'disable' ? 'prefer' : config.sslMode }, max, defaultTypes),
       port: config.port || 5439
     };
   }
