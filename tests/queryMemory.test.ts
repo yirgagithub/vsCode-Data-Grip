@@ -14,6 +14,8 @@ import { QueryMemorySearch } from '../src/services/queryMemorySearch';
 import { QueryMemoryService } from '../src/services/queryMemoryService';
 import { normalizeExplainJsonPlan } from '../src/services/queryPlanService';
 import { QueryConsoleStore } from '../src/persistence/queryConsoleStore';
+import { QueryMemoryStore } from '../src/persistence/queryMemoryStore';
+import { compatibilityContext } from './helpers/inMemoryExtensionContext';
 import { SchemaContextService } from '../src/services/schemaContextService';
 import { connectionMetadataFingerprint, parseStoredSchemaCacheEntry, SCHEMA_METADATA_CACHE_VERSION, serializeSchemaCacheEntry } from '../src/services/schemaMetadataCacheStore';
 import { SqlDiagnosticsService } from '../src/services/sqlDiagnosticsService';
@@ -394,6 +396,13 @@ describe('QueryExecutor batch execution', () => {
 });
 
 describe('QueryConsoleStore storage', () => {
+  it('reads the reviewed legacy console and memory fixtures', () => {
+    const context = compatibilityContext();
+
+    expect(new QueryConsoleStore(context).getAll().find(({ id }) => id === 'legacy-console')?.schemaName).toBe('public');
+    expect(new QueryMemoryStore(context).get('legacy-memory')?.sourceId).toBe('legacy-history');
+  });
+
   it('creates new query console files in extension global storage even when a workspace is open', async () => {
     const workspaceMock = vscode.workspace as unknown as {
       workspaceFolders: Array<{ uri: unknown }>;
