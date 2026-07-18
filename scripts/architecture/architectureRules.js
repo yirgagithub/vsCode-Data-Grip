@@ -1,14 +1,29 @@
-const path = require('path');
 const manifest = require('../../architecture/modules.json');
 
-const normalize = (value) => value.split(path.sep).join('/').replace(/^\.\//, '');
+validateManifest(manifest);
+
+const normalize = (value) => value.replace(/\\/g, '/').replace(/^\.\//, '');
+
+function validateManifest(value) {
+  if (!value.roots || typeof value.roots !== 'object' || !Array.isArray(value.legacyRoots)) {
+    throw new Error('Architecture manifest must define roots and legacyRoots');
+  }
+  if (Object.values(value.roots).some((root) => typeof root !== 'string') || value.legacyRoots.some((root) => typeof root !== 'string')) {
+    throw new Error('Architecture manifest roots must be strings');
+  }
+}
+
+function matchesManifestPath(file, configuredPath) {
+  return configuredPath.endsWith('/') ? file.startsWith(configuredPath) : file === configuredPath;
+}
 
 function classifyModule(file) {
   const normalized = normalize(file);
   for (const [kind, root] of Object.entries(manifest.roots)) {
-    if (normalized.startsWith(root)) return kind;
+    if (matchesManifestPath(normalized, root)) return kind;
   }
-  return 'legacy';
+  if (manifest.legacyRoots.some((root) => matchesManifestPath(normalized, root))) return 'legacy';
+  return 'unknown';
 }
 
 function isFeaturePublicEntry(file) {
@@ -19,6 +34,7 @@ function isFeaturePublicEntry(file) {
 function isAllowedDependency(from, to) {
   const fromKind = classifyModule(from);
   const toKind = classifyModule(to);
+  if (fromKind === 'unknown' || toKind === 'unknown') return false;
   if (fromKind === 'legacy' || toKind === 'legacy') return true;
   if (fromKind === 'core') return toKind === 'core';
   if (fromKind === 'feature') {
