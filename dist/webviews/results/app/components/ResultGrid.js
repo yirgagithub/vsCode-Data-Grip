@@ -6,6 +6,7 @@ exports.matchesColumnFilter = matchesColumnFilter;
 const jsx_runtime_1 = require("react/jsx-runtime");
 const react_1 = require("react");
 const format_1 = require("../format");
+const resultFilters_1 = require("../resultFilters");
 const vscode_1 = require("../vscode");
 const format_2 = require("../format");
 const Icon_1 = require("./Icon");
@@ -13,7 +14,8 @@ const ROW_HEIGHT = 32;
 const BUFFER = 12;
 const DEFAULT_COLUMN_WIDTH = 220;
 const MIN_COLUMN_WIDTH = 112;
-const MAX_FILTER_OPTIONS = 250;
+const FILTER_OPTION_HEIGHT = 28;
+const FILTER_OPTION_WINDOW = 16;
 const FILTER_POPOVER_WIDTH = 448;
 const VIEWPORT_PADDING = 8;
 const NUMERIC_TYPE_IDS = new Set([20, 21, 23, 700, 701, 790, 1700]);
@@ -57,13 +59,15 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
         gridTemplateColumns: `var(--row-number-width) ${fields.map((field) => `${columnWidths[field.name] ?? DEFAULT_COLUMN_WIDTH}px`).join(' ')}`
     };
     const visibleRows = (0, react_1.useMemo)(() => {
-        const filtered = rows.filter((row) => filters.every((filter) => matchesColumnFilter(row[filter.column], filter)));
+        const fieldMap = new Map(fields.map((field) => [field.name, field]));
+        const filtered = rows.filter((row) => filters.every((filter) => (0, resultFilters_1.matchesColumnFilter)(row[filter.column], filter, fieldMap.get(filter.column))));
         if (!sort) {
             return filtered;
         }
         return [...filtered].sort((a, b) => {
-            const av = (0, format_1.formatValue)(a[sort.column]);
-            const bv = (0, format_1.formatValue)(b[sort.column]);
+            const sortField = fields.find((field) => field.name === sort.column);
+            const av = (0, format_1.formatFieldValue)(a[sort.column], sortField);
+            const bv = (0, format_1.formatFieldValue)(b[sort.column], sortField);
             return sort.direction === 'asc'
                 ? av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' })
                 : bv.localeCompare(av, undefined, { numeric: true, sensitivity: 'base' });
@@ -256,10 +260,10 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
                                                 const rowIndex = start + index;
                                                 const value = row[field.name];
                                                 const isSelected = selectedCell?.rowIndex === rowIndex && selectedCell.column === field.name;
-                                                return ((0, jsx_runtime_1.jsx)("div", { className: `cell data-cell ${value === null ? 'null' : ''} ${selectedColumn === field.name ? 'selected-column' : ''} ${isSelected ? 'selected' : ''}`, title: (0, format_1.formatValue)(value) || 'NULL', onClick: () => setSelection({ type: 'cell', rowIndex, column: field.name, value }), onContextMenu: (event) => {
+                                                return ((0, jsx_runtime_1.jsx)("div", { className: `cell data-cell ${value === null ? 'null' : ''} ${selectedColumn === field.name ? 'selected-column' : ''} ${isSelected ? 'selected' : ''}`, title: (0, format_1.formatFieldValue)(value, field) || 'NULL', onClick: () => setSelection({ type: 'cell', rowIndex, column: field.name, value }), onContextMenu: (event) => {
                                                         setSelection({ type: 'cell', rowIndex, column: field.name, value });
                                                         openContextMenu(event, { rowIndex, column: field.name, value, row });
-                                                    }, role: "gridcell", "aria-selected": isSelected, children: value === null ? 'NULL' : (0, format_1.formatValue)(value) }, field.name));
+                                                    }, role: "gridcell", "aria-selected": isSelected, children: value === null ? 'NULL' : (0, format_1.formatFieldValue)(value, field) }, field.name));
                                             })] }, start + index))) }) })] }), inspectorOpen && ((0, jsx_runtime_1.jsxs)("aside", { className: "cell-inspector", children: [(0, jsx_runtime_1.jsxs)("div", { className: "inspector-title", children: [(0, jsx_runtime_1.jsx)("strong", { children: selectedCell?.column ?? 'Cell' }), (0, jsx_runtime_1.jsx)("button", { className: "tool", "aria-label": "Close cell inspector", onClick: () => setInspectorOpen(false), children: "Close" })] }), (0, jsx_runtime_1.jsx)("pre", { children: selectedCell ? prettyValue(selectedCell.value) : 'No cell selected' })] }))] }), contextMenu && ((0, jsx_runtime_1.jsxs)("div", { className: "context-menu grid-context-menu", style: { left: contextMenu.x, top: contextMenu.y }, role: "menu", onClick: (event) => event.stopPropagation(), children: [(0, jsx_runtime_1.jsxs)("button", { role: "menuitem", onClick: () => {
                             const text = contextMenu.value !== undefined ? (0, format_1.formatValue)(contextMenu.value) : selectedText();
                             vscode_1.vscode.postMessage({ type: 'copy', text });
@@ -278,11 +282,11 @@ function ResultGrid({ tab, resultSet, columnFiltersVisible }) {
                         }, children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "symbol-field" }), (0, jsx_runtime_1.jsx)("span", { children: "Copy Column" })] }), (0, jsx_runtime_1.jsxs)("button", { role: "menuitem", onClick: () => {
                             vscode_1.vscode.postMessage({ type: 'copy', text: (0, format_2.rowsToCsv)(visibleRows) });
                             setContextMenu(undefined);
-                        }, children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "desktop-download" }), (0, jsx_runtime_1.jsx)("span", { children: "Copy Visible as CSV" })] })] })), columnFiltersVisible && openFilter && ((0, jsx_runtime_1.jsx)(ColumnFilterPopover, { column: openFilter.column, rows: rows, filter: filters.find((filter) => filter.column === openFilter.column), style: openFilter.style, onApply: (filter) => {
+                        }, children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "desktop-download" }), (0, jsx_runtime_1.jsx)("span", { children: "Copy Visible as CSV" })] })] })), columnFiltersVisible && openFilter && ((0, jsx_runtime_1.jsx)(ColumnFilterPopover, { column: openFilter.column, rows: (0, resultFilters_1.rowsForColumnOptions)(rows, filters, openFilter.column, fields), field: fields.find((field) => field.name === openFilter.column) ?? { name: openFilter.column }, filter: filters.find((filter) => filter.column === openFilter.column), style: openFilter.style, onApply: (filter) => {
                     updateFilters((current) => [...current.filter((item) => item.column !== openFilter.column), filter]);
                 }, onClear: () => {
                     updateFilters((current) => current.filter((item) => item.column !== openFilter.column));
-                } })), selection?.type === 'column' && ((0, jsx_runtime_1.jsxs)("div", { className: "selection-summary", title: selectedColumnStats ? `${selection.column}: sum ${formatNumber(selectedColumnStats.sum)}, average ${formatNumber(selectedColumnStats.average)}` : `${selection.column}: ${visibleRows.length.toLocaleString()} rows selected`, children: [(0, jsx_runtime_1.jsx)("span", { className: "summary-column", children: selection.column }), selectedColumnStats ? ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [(0, jsx_runtime_1.jsxs)("span", { children: [selectedColumnStats.numericCount.toLocaleString(), " values"] }), (0, jsx_runtime_1.jsxs)("span", { children: ["Sum ", formatNumber(selectedColumnStats.sum)] }), (0, jsx_runtime_1.jsxs)("span", { children: ["Avg ", formatNumber(selectedColumnStats.average)] })] })) : ((0, jsx_runtime_1.jsxs)("span", { children: [visibleRows.length.toLocaleString(), " rows selected"] }))] })), (0, jsx_runtime_1.jsx)("div", { className: "result-pager", children: (0, jsx_runtime_1.jsxs)("span", { className: "pager-group", children: [(0, jsx_runtime_1.jsx)("button", { className: "pager-button", title: "First page", "aria-label": "First page", disabled: currentOffset === 0 || pageSize === 'all', onClick: () => postRerun(pageSize === 'all' ? null : pageSize, 0), children: (0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "debug-step-back" }) }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", title: "Previous page", "aria-label": "Previous page", disabled: currentOffset === 0 || pageSize === 'all', onClick: () => postRerun(pageSize === 'all' ? null : pageSize, Math.max(0, currentOffset - Number(pageSize))), children: (0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "chevron-left" }) }), (0, jsx_runtime_1.jsxs)("select", { value: pageSize === 'all' ? 'all' : String(pageSize), onChange: (event) => changePageSize(event.target.value), "aria-label": "Rows per page", title: "Rows per page", children: [[20, 50, 100, 250, 500].map((count) => ((0, jsx_runtime_1.jsx)("option", { value: String(count), children: `${count} rows` }, count))), (0, jsx_runtime_1.jsx)("option", { value: "all", children: "All rows" })] }), (0, jsx_runtime_1.jsxs)("span", { children: ["of ", hasMore ? `${(currentOffset + visibleRows.length + 1).toLocaleString()}+` : (currentOffset + visibleRows.length).toLocaleString()] }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", title: "Next page", "aria-label": "Next page", disabled: !hasMore || pageSize === 'all', onClick: () => postRerun(pageSize === 'all' ? null : pageSize, currentOffset + Number(pageSize)), children: (0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "chevron-right" }) })] }) })] }));
+                }, onFilterInSql: () => setOpenFilter(undefined) }, openFilter.column)), selection?.type === 'column' && ((0, jsx_runtime_1.jsxs)("div", { className: "selection-summary", title: selectedColumnStats ? `${selection.column}: sum ${formatNumber(selectedColumnStats.sum)}, average ${formatNumber(selectedColumnStats.average)}` : `${selection.column}: ${visibleRows.length.toLocaleString()} rows selected`, children: [(0, jsx_runtime_1.jsx)("span", { className: "summary-column", children: selection.column }), selectedColumnStats ? ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [(0, jsx_runtime_1.jsxs)("span", { children: [selectedColumnStats.numericCount.toLocaleString(), " values"] }), (0, jsx_runtime_1.jsxs)("span", { children: ["Sum ", formatNumber(selectedColumnStats.sum)] }), (0, jsx_runtime_1.jsxs)("span", { children: ["Avg ", formatNumber(selectedColumnStats.average)] })] })) : ((0, jsx_runtime_1.jsxs)("span", { children: [visibleRows.length.toLocaleString(), " rows selected"] }))] })), (0, jsx_runtime_1.jsx)("div", { className: "result-pager", children: (0, jsx_runtime_1.jsxs)("span", { className: "pager-group", children: [(0, jsx_runtime_1.jsx)("button", { className: "pager-button", title: "First page", "aria-label": "First page", disabled: currentOffset === 0 || pageSize === 'all', onClick: () => postRerun(pageSize === 'all' ? null : pageSize, 0), children: (0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "debug-step-back" }) }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", title: "Previous page", "aria-label": "Previous page", disabled: currentOffset === 0 || pageSize === 'all', onClick: () => postRerun(pageSize === 'all' ? null : pageSize, Math.max(0, currentOffset - Number(pageSize))), children: (0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "chevron-left" }) }), (0, jsx_runtime_1.jsxs)("select", { value: pageSize === 'all' ? 'all' : String(pageSize), onChange: (event) => changePageSize(event.target.value), "aria-label": "Rows per page", title: "Rows per page", children: [[20, 50, 100, 250, 500].map((count) => ((0, jsx_runtime_1.jsx)("option", { value: String(count), children: `${count} rows` }, count))), (0, jsx_runtime_1.jsx)("option", { value: "all", children: "All rows" })] }), (0, jsx_runtime_1.jsxs)("span", { children: ["of ", hasMore ? `${(currentOffset + visibleRows.length + 1).toLocaleString()}+` : (currentOffset + visibleRows.length).toLocaleString()] }), (0, jsx_runtime_1.jsx)("button", { className: "pager-button", title: "Next page", "aria-label": "Next page", disabled: !hasMore || pageSize === 'all', onClick: () => postRerun(pageSize === 'all' ? null : pageSize, currentOffset + Number(pageSize)), children: (0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "chevron-right" }) })] }) })] }));
 }
 function calculateColumnStats(field, rows) {
     if (!isNumericAggregateColumn(field)) {
@@ -339,18 +343,35 @@ function numericValue(value) {
 function formatNumber(value) {
     return new Intl.NumberFormat(undefined, { maximumFractionDigits: 6 }).format(value);
 }
-function ColumnFilterPopover({ column, rows, filter, style, onApply, onClear }) {
-    const options = (0, react_1.useMemo)(() => columnFilterOptions(rows, column), [rows, column]);
+function ColumnFilterPopover({ column, rows, field, filter, style, onApply, onClear, onFilterInSql }) {
+    const analysis = (0, react_1.useMemo)(() => (0, resultFilters_1.analyzeFilterCardinality)(rows, field), [rows, field]);
+    const [allowLargeList, setAllowLargeList] = (0, react_1.useState)(false);
+    const options = (0, react_1.useMemo)(() => {
+        if (analysis.warned && !allowLargeList)
+            return [];
+        const available = (0, resultFilters_1.buildColumnFilterOptions)(rows, field);
+        const keys = new Set(available.map((option) => option.key));
+        const unavailableSelections = (filter?.values ?? [])
+            .filter((key) => !keys.has(key))
+            .map((key) => ({ key, label: key, count: 0 }));
+        return [...available, ...unavailableSelections];
+    }, [rows, field, filter, analysis.warned, allowLargeList]);
     const allKeys = (0, react_1.useMemo)(() => options.map((option) => option.key), [options]);
-    const initialSelection = initialColumnFilterSelection(filter, allKeys);
+    const initialSelection = analysis.warned && !allowLargeList ? (filter?.values ?? []) : initialColumnFilterSelection(filter, allKeys);
     const [search, setSearch] = (0, react_1.useState)('');
     const [selectedValues, setSelectedValues] = (0, react_1.useState)(() => new Set(initialSelection));
+    const [listScrollTop, setListScrollTop] = (0, react_1.useState)(0);
+    const selectAllRef = (0, react_1.useRef)(null);
     const normalizedSearch = search.trim().toLowerCase();
     const matchingOptions = options.filter((option) => option.label.toLowerCase().includes(normalizedSearch));
-    const visibleOptions = matchingOptions.slice(0, MAX_FILTER_OPTIONS);
-    const matchingKeys = matchingOptions.map((option) => option.key);
-    const allMatchingSelected = matchingKeys.length > 0 && matchingKeys.every((key) => selectedValues.has(key));
+    const listStart = Math.max(0, Math.floor(listScrollTop / FILTER_OPTION_HEIGHT) - 2);
+    const visibleOptions = matchingOptions.slice(listStart, listStart + FILTER_OPTION_WINDOW);
+    const state = (0, resultFilters_1.selectionState)(selectedValues, allKeys);
     const activeCount = selectedValues.size;
+    (0, react_1.useEffect)(() => {
+        if (selectAllRef.current)
+            selectAllRef.current.indeterminate = state === 'partial';
+    }, [state]);
     const commitSelection = (next) => {
         if (next.size === allKeys.length) {
             onClear();
@@ -359,13 +380,7 @@ function ColumnFilterPopover({ column, rows, filter, style, onApply, onClear }) 
         onApply({ column, operator: 'values', value: '', values: [...next] });
     };
     const toggleVisible = () => {
-        const next = new Set(selectedValues);
-        if (allMatchingSelected) {
-            matchingKeys.forEach((key) => next.delete(key));
-        }
-        else {
-            matchingKeys.forEach((key) => next.add(key));
-        }
+        const next = (0, resultFilters_1.toggleAllValues)(selectedValues, allKeys);
         setSelectedValues(next);
         commitSelection(next);
     };
@@ -380,21 +395,7 @@ function ColumnFilterPopover({ column, rows, filter, style, onApply, onClear }) 
         setSelectedValues(next);
         commitSelection(next);
     };
-    return ((0, jsx_runtime_1.jsxs)("div", { className: "filter-popover value-filter-popover", style: style, onClick: (event) => event.stopPropagation(), children: [(0, jsx_runtime_1.jsxs)("div", { className: "filter-title", children: ["Local Filter For '", column, "'"] }), (0, jsx_runtime_1.jsxs)("label", { className: "filter-search", children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "search" }), (0, jsx_runtime_1.jsx)("input", { value: search, onChange: (event) => setSearch(event.target.value), autoFocus: true })] }), (0, jsx_runtime_1.jsxs)("label", { className: "filter-option filter-option-heading", children: [(0, jsx_runtime_1.jsx)("input", { type: "checkbox", checked: allMatchingSelected, onChange: toggleVisible, disabled: matchingKeys.length === 0 }), (0, jsx_runtime_1.jsx)("span", { children: "Value" }), (0, jsx_runtime_1.jsx)("span", { className: "filter-count", children: "Count" })] }), (0, jsx_runtime_1.jsx)("div", { className: "filter-option-list", children: visibleOptions.length > 0 ? visibleOptions.map((option) => ((0, jsx_runtime_1.jsxs)("label", { className: "filter-option", children: [(0, jsx_runtime_1.jsx)("input", { type: "checkbox", checked: selectedValues.has(option.key), onChange: () => toggleValue(option.key) }), (0, jsx_runtime_1.jsx)("span", { title: option.label, children: option.label }), (0, jsx_runtime_1.jsx)("span", { className: "filter-count", children: option.count.toLocaleString() })] }, option.key))) : (0, jsx_runtime_1.jsx)("div", { className: "filter-empty", children: "No values in fetched rows." }) }), matchingOptions.length > visibleOptions.length && ((0, jsx_runtime_1.jsxs)("div", { className: "filter-list-note", children: ["Showing ", visibleOptions.length.toLocaleString(), " of ", matchingOptions.length.toLocaleString(), " values"] })), (0, jsx_runtime_1.jsxs)("div", { className: "filter-live-status", children: [activeCount.toLocaleString(), " selected"] })] }));
-}
-function columnFilterOptions(rows, column) {
-    const counts = new Map();
-    for (const row of rows) {
-        const key = filterKey(row[column]);
-        const existing = counts.get(key);
-        if (existing) {
-            existing.count += 1;
-        }
-        else {
-            counts.set(key, { key, label: filterLabel(row[column]), count: 1 });
-        }
-    }
-    return [...counts.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' }));
+    return ((0, jsx_runtime_1.jsxs)("div", { className: "filter-popover value-filter-popover", style: style, onClick: (event) => event.stopPropagation(), children: [(0, jsx_runtime_1.jsxs)("div", { className: "filter-title", children: ["Local Filter For '", column, "'"] }), analysis.warned && !allowLargeList ? ((0, jsx_runtime_1.jsxs)("div", { className: "filter-cardinality-warning", children: [(0, jsx_runtime_1.jsx)("strong", { children: "Large value list" }), (0, jsx_runtime_1.jsxs)("span", { children: [analysis.truncated ? 'At least ' : '', analysis.uniqueCount.toLocaleString(), " unique values may use about ", (analysis.estimatedBytes / 1024 / 1024).toFixed(1), " MB."] }), (0, jsx_runtime_1.jsx)("span", { children: "Filter in SQL with a WHERE condition, or continue anyway." }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("button", { type: "button", onClick: onFilterInSql, children: "Filter in SQL" }), (0, jsx_runtime_1.jsx)("button", { type: "button", onClick: () => setAllowLargeList(true), children: "Continue anyway" })] })] })) : (0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [(0, jsx_runtime_1.jsxs)("label", { className: "filter-search", children: [(0, jsx_runtime_1.jsx)(Icon_1.Icon, { name: "search" }), (0, jsx_runtime_1.jsx)("input", { value: search, onChange: (event) => setSearch(event.target.value), autoFocus: true })] }), (0, jsx_runtime_1.jsxs)("label", { className: "filter-option filter-option-heading", children: [(0, jsx_runtime_1.jsx)("input", { ref: selectAllRef, type: "checkbox", checked: state === 'all', onChange: toggleVisible, disabled: allKeys.length === 0 }), (0, jsx_runtime_1.jsx)("span", { children: "Value" }), (0, jsx_runtime_1.jsx)("span", { className: "filter-count", children: "Count" })] }), (0, jsx_runtime_1.jsx)("div", { className: "filter-option-list", onScroll: (event) => setListScrollTop(event.currentTarget.scrollTop), children: (0, jsx_runtime_1.jsx)("div", { style: { height: matchingOptions.length * FILTER_OPTION_HEIGHT, position: 'relative' }, children: (0, jsx_runtime_1.jsx)("div", { style: { transform: `translateY(${listStart * FILTER_OPTION_HEIGHT}px)` }, children: visibleOptions.length > 0 ? visibleOptions.map((option) => ((0, jsx_runtime_1.jsxs)("label", { className: "filter-option", style: { height: FILTER_OPTION_HEIGHT }, children: [(0, jsx_runtime_1.jsx)("input", { type: "checkbox", checked: selectedValues.has(option.key), onChange: () => toggleValue(option.key) }), (0, jsx_runtime_1.jsx)("span", { title: option.label, children: option.label }), (0, jsx_runtime_1.jsx)("span", { className: "filter-count", children: option.count.toLocaleString() })] }, option.key))) : (0, jsx_runtime_1.jsx)("div", { className: "filter-empty", children: "No values in fetched rows." }) }) }) }), (0, jsx_runtime_1.jsxs)("div", { className: "filter-live-status", children: [activeCount.toLocaleString(), " selected"] })] })] }));
 }
 function initialColumnFilterSelection(filter, allKeys) {
     if (filter?.operator !== 'values' || !filter.values) {
@@ -403,44 +404,8 @@ function initialColumnFilterSelection(filter, allKeys) {
     const available = new Set(allKeys);
     return filter.values.filter((value) => available.has(value));
 }
-function filterKey(value) {
-    if (value === null || value === undefined) {
-        return '<NULL>';
-    }
-    return (0, format_1.formatValue)(value);
-}
-function filterLabel(value) {
-    if (value === null || value === undefined) {
-        return 'NULL';
-    }
-    const next = (0, format_1.formatValue)(value);
-    return next === '' ? '(empty)' : next;
-}
 function matchesColumnFilter(value, filter) {
-    if (filter.operator === 'values') {
-        return filter.values ? filter.values.includes(filterKey(value)) : true;
-    }
-    const text = (0, format_1.formatValue)(value).toLowerCase();
-    const expected = (filter.value ?? '').toLowerCase();
-    if (filter.operator === 'is null') {
-        return value === null || value === undefined;
-    }
-    if (filter.operator === 'is not null') {
-        return value !== null && value !== undefined;
-    }
-    if (filter.operator === 'equals') {
-        return text === expected;
-    }
-    if (filter.operator === 'not equals') {
-        return text !== expected;
-    }
-    if (filter.operator === 'starts with') {
-        return text.startsWith(expected);
-    }
-    if (filter.operator === 'ends with') {
-        return text.endsWith(expected);
-    }
-    return text.includes(expected);
+    return (0, resultFilters_1.matchesColumnFilter)(value, filter);
 }
 function parseOrderBy(value, columns) {
     const [first] = value.split(',');

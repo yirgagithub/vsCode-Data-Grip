@@ -7,6 +7,7 @@ exports.optionalString = optionalString;
 exports.numberFromDb = numberFromDb;
 exports.toQueryError = toQueryError;
 exports.clientLimit = clientLimit;
+exports.canApplyClientLimit = canApplyClientLimit;
 exports.safeFilterClause = safeFilterClause;
 const crypto_1 = require("crypto");
 const sqlDialect_1 = require("../../services/sqlDialect");
@@ -75,6 +76,9 @@ class BasicDatabaseDriver {
         const columns = await this.getColumns(connectionId, schema, table);
         return (0, sqlDialect_1.createTableSql)(this.id, schema, table, columns);
     }
+    async getObjectDefinition(connectionId, object) {
+        return undefined;
+    }
     async getTableStats(_connectionId, schema, table) {
         return { schema, table, databaseType: this.id, columns: [] };
     }
@@ -132,9 +136,79 @@ function clientLimit(sql, maxRows, offset, quote = '"') {
     const limit = Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : undefined;
     const nextOffset = Number.isFinite(offset) && offset && offset > 0 ? Math.floor(offset) : 0;
     const pageLimit = limit ? limit + 1 : undefined;
-    return pageLimit && /^(select|with)\b/i.test(sql.trim())
+    return pageLimit && canApplyClientLimit(sql)
         ? `select * from (${sql.replace(/;+\s*$/, '')}) ${quote}__dg_query${quote} limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ''}`
         : sql;
+}
+function canApplyClientLimit(sql) {
+    const normalized = stripCommentsLiteralsAndQuotedIdentifiers(sql).trim().toLowerCase();
+    if (normalized.startsWith('select')) {
+        return true;
+    }
+    if (!normalized.startsWith('with')) {
+        return false;
+    }
+    return !/\b(insert|update|delete|merge)\b/.test(normalized);
+}
+function stripCommentsLiteralsAndQuotedIdentifiers(sql) {
+    let result = '';
+    let index = 0;
+    while (index < sql.length) {
+        const char = sql[index];
+        const next = sql[index + 1];
+        if (char === '-' && next === '-') {
+            index += 2;
+            while (index < sql.length && sql[index] !== '\n') {
+                index += 1;
+            }
+            result += ' ';
+            continue;
+        }
+        if (char === '/' && next === '*') {
+            index += 2;
+            while (index < sql.length && !(sql[index] === '*' && sql[index + 1] === '/')) {
+                index += 1;
+            }
+            index = Math.min(index + 2, sql.length);
+            result += ' ';
+            continue;
+        }
+        if (char === '\'' || char === '"' || char === '`') {
+            index = consumeQuoted(sql, index, char);
+            result += ' ';
+            continue;
+        }
+        if (char === '[') {
+            index += 1;
+            while (index < sql.length && sql[index] !== ']') {
+                index += 1;
+            }
+            index = Math.min(index + 1, sql.length);
+            result += ' ';
+            continue;
+        }
+        result += char;
+        index += 1;
+    }
+    return result.replace(/^--.*$/gm, '');
+}
+function consumeQuoted(sql, start, quote) {
+    let index = start + 1;
+    while (index < sql.length) {
+        if (sql[index] === quote) {
+            if (sql[index + 1] === quote) {
+                index += 2;
+                continue;
+            }
+            return index + 1;
+        }
+        if (quote === '\'' && sql[index] === '\\') {
+            index += 2;
+            continue;
+        }
+        index += 1;
+    }
+    return index;
 }
 function safeFilterClause(where) {
     const trimmed = where?.trim();

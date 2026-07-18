@@ -48,6 +48,9 @@ const REDIS_TABLES = [
 class RedisDriver extends driverUtils_1.BasicDatabaseDriver {
     id = 'redis';
     displayName = 'Redis';
+    async getObjectDefinition() {
+        return undefined;
+    }
     clients = new Map();
     configs = new Map();
     async beginTransaction(_connectionId) { }

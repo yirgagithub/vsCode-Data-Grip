@@ -38,7 +38,7 @@ const crypto_1 = require("crypto");
 const identifiers_1 = require("../../utils/identifiers");
 const queryPlanService_1 = require("../../services/queryPlanService");
 const runtimeLoader_1 = require("../../runtime/runtimeLoader");
-const sqlDialect_1 = require("../../services/sqlDialect");
+const driverUtils_1 = require("./driverUtils");
 class PostgresDriver {
     id = 'postgres';
     displayName = 'PostgreSQL';
@@ -263,6 +263,8 @@ class PostgresDriver {
         const result = await this.requirePool(connectionId).query(`select n.nspname as schema,
               p.proname as name,
               'function' as kind,
+              format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) as signature,
+              array(select format_type(arg, null) from unnest(p.proargtypes::oid[]) arg) as arguments,
               pg_get_function_result(p.oid) as "returnType",
               l.lanname as language,
               obj_description(p.oid, 'pg_proc') as comment
@@ -277,6 +279,8 @@ class PostgresDriver {
         const result = await this.requirePool(connectionId).query(`select n.nspname as schema,
               p.proname as name,
               'procedure' as kind,
+              format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) as signature,
+              array(select format_type(arg, null) from unnest(p.proargtypes::oid[]) arg) as arguments,
               pg_get_function_result(p.oid) as "returnType",
               l.lanname as language,
               obj_description(p.oid, 'pg_proc') as comment
@@ -423,7 +427,35 @@ class PostgresDriver {
     }
     async getTableDDL(connectionId, schema, table) {
         const columns = await this.getColumns(connectionId, schema, table);
-        return (0, sqlDialect_1.createTableSql)(this.id, schema, table, columns);
+        const body = columns.map((column) => {
+            const nullable = column.nullable ? '' : ' not null';
+            const defaultValue = column.defaultValue == null ? '' : ` default ${column.defaultValue}`;
+            return `  ${(0, identifiers_1.quoteIdentifier)(column.name)} ${column.dataType}${defaultValue}${nullable}`;
+        }).join(',\n');
+        return `create table ${(0, identifiers_1.qualifiedName)(schema, table)} (\n${body}\n);`;
+    }
+    async getObjectDefinition(connectionId, object) {
+        if (object.kind === 'table') {
+            return this.getTableDDL(connectionId, object.schema, object.name);
+        }
+        const pool = this.requirePool(connectionId);
+        try {
+            if (object.kind === 'view') {
+                const result = await pool.query(`select pg_get_viewdef(c.oid, true) as definition from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relname = $2 and c.relkind in ('v', 'm')`, [object.schema, object.name]);
+                const body = nativeDefinition(result.rows[0]?.definition);
+                return body === undefined ? undefined : `CREATE VIEW ${(0, identifiers_1.qualifiedName)(object.schema, object.name)} AS\n${body}`;
+            }
+            if (object.kind === 'function' || object.kind === 'procedure') {
+                const identity = object.signature ?? `${object.schema}.${object.name}`;
+                const result = await pool.query('select pg_get_functiondef(to_regprocedure($1)) as definition', [identity]);
+                return nativeDefinition(result.rows[0]?.definition);
+            }
+            const result = await pool.query(`select pg_get_triggerdef(t.oid, true) as definition from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and t.tgname = $2 and not t.tgisinternal`, [object.schema, object.name]);
+            return nativeDefinition(result.rows[0]?.definition);
+        }
+        catch (error) {
+            throw this.toQueryError(error);
+        }
     }
     async getTableStats(connectionId, schema, table) {
         const pool = this.requirePool(connectionId);
@@ -475,7 +507,7 @@ class PostgresDriver {
         }
         return pool;
     }
-    toPoolConfig(config, max) {
+    toPoolConfig(config, max, defaultTypes) {
         return {
             host: config.host,
             port: config.port,
@@ -485,7 +517,12 @@ class PostgresDriver {
             max,
             connectionTimeoutMillis: config.connectTimeoutMs ?? 10000,
             query_timeout: config.queryTimeoutMs,
-            ssl: config.sslMode === 'disable' ? false : { rejectUnauthorized: false }
+            ssl: config.sslMode === 'disable' ? false : { rejectUnauthorized: false },
+            types: defaultTypes && {
+                getTypeParser: (oid, format) => TEMPORAL_TYPE_OIDS.has(oid)
+                    ? (value) => value
+                    : defaultTypes.getTypeParser(oid, format)
+            }
         };
     }
     shouldRetryWithoutSsl(config, error) {
@@ -493,8 +530,8 @@ class PostgresDriver {
         return config.sslMode === 'prefer' && /server does not support ssl connections/i.test(message);
     }
     async createVerifiedPool(config, max) {
-        const { Pool } = await loadPg();
-        const pool = new Pool(this.toPoolConfig(config, max));
+        const { Pool, types } = await loadPg();
+        const pool = new Pool(this.toPoolConfig(config, max, types));
         try {
             await pool.query('select 1');
             return pool;
@@ -504,7 +541,7 @@ class PostgresDriver {
             if (!this.shouldRetryWithoutSsl(config, error)) {
                 throw error;
             }
-            const fallbackPool = new Pool(this.toPoolConfig({ ...config, sslMode: 'disable' }, max));
+            const fallbackPool = new Pool(this.toPoolConfig({ ...config, sslMode: 'disable' }, max, types));
             try {
                 await fallbackPool.query('select 1');
                 return fallbackPool;
@@ -540,15 +577,11 @@ class PostgresDriver {
         }
         return value instanceof Date ? value.toISOString() : String(value);
     }
-    canApplyClientLimit(sql) {
-        const normalized = sql.trim().replace(/^--.*$/gm, '').trim().toLowerCase();
-        return normalized.startsWith('select') || normalized.startsWith('with');
-    }
     sqlWithClientLimit(sql, maxRows, offset) {
         const limit = Number.isFinite(maxRows) && maxRows && maxRows > 0 ? Math.floor(maxRows) : undefined;
         const nextOffset = Number.isFinite(offset) && offset && offset > 0 ? Math.floor(offset) : 0;
         const pageLimit = limit ? limit + 1 : undefined;
-        return pageLimit && this.canApplyClientLimit(sql)
+        return pageLimit && (0, driverUtils_1.canApplyClientLimit)(sql)
             ? `select * from (${sql.replace(/;+\s*$/, '')}) __dg_query limit ${pageLimit}${nextOffset ? ` offset ${nextOffset}` : ''}`
             : sql;
     }
@@ -581,6 +614,7 @@ class PostgresDriver {
     }
 }
 exports.PostgresDriver = PostgresDriver;
+const TEMPORAL_TYPE_OIDS = new Set([1082, 1083, 1114, 1184, 1186, 1266]);
 let pgRuntime;
 function loadPg() {
     pgRuntime ??= loadPgRuntime();
@@ -602,6 +636,9 @@ function optionalString(value) {
     }
     const next = String(value).trim();
     return next || undefined;
+}
+function nativeDefinition(value) {
+    return value === null || value === undefined || value === '' ? undefined : String(value);
 }
 function triggerEvents(definition) {
     if (!definition) {

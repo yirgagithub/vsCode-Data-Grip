@@ -33,9 +33,12 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SqlDiagnosticsService = void 0;
+exports.SqlDiagnosticsService = exports.SQL_METADATA_MISSING_COLUMN = exports.SQL_METADATA_MISSING_RELATION = exports.SQL_METADATA_DIAGNOSTIC_SOURCE = exports.SQL_GROUP_BY_DIAGNOSTIC_CODE = exports.SQL_GROUP_BY_DIAGNOSTIC_SOURCE = void 0;
 const vscode = __importStar(require("vscode"));
 const sqlParameters_1 = require("./sqlParameters");
+const sqlGroupByError_1 = require("./sqlGroupByError");
+exports.SQL_GROUP_BY_DIAGNOSTIC_SOURCE = 'QueryDeck planner';
+exports.SQL_GROUP_BY_DIAGNOSTIC_CODE = 'querydeck.planner.groupBy';
 const SQL_COLUMN_CONTEXT_KEYWORDS = new Set([
     'all',
     'and',
@@ -68,6 +71,9 @@ const SQL_COLUMN_CONTEXT_KEYWORDS = new Set([
     'when',
     'where'
 ]);
+exports.SQL_METADATA_DIAGNOSTIC_SOURCE = 'QueryDeck metadata';
+exports.SQL_METADATA_MISSING_RELATION = 'querydeck.metadata.missingRelation';
+exports.SQL_METADATA_MISSING_COLUMN = 'querydeck.metadata.missingColumn';
 class SqlDiagnosticsService {
     connectionManager;
     schemaContext;
@@ -117,7 +123,7 @@ class SqlDiagnosticsService {
                 }
                 const schema = alias.schema ?? defaultSchema;
                 if (!knownRelations.has(this.relationKey(schema, alias.table))) {
-                    diagnostics.push(new vscode.Diagnostic(this.findIdentifierRange(document, section, alias.schema ? `${alias.schema}.${alias.table}` : alias.table), `Table or view "${alias.schema ? `${alias.schema}.` : ''}${alias.table}" does not exist in ${schema}.`, vscode.DiagnosticSeverity.Error));
+                    diagnostics.push(this.metadataDiagnostic(this.findIdentifierRange(document, section, alias.schema ? `${alias.schema}.${alias.table}` : alias.table), `Table or view "${alias.schema ? `${alias.schema}.` : ''}${alias.table}" does not exist in ${schema}.`, exports.SQL_METADATA_MISSING_RELATION, schema));
                 }
             }
             diagnostics.push(...await this.getColumnDiagnostics(document, connection, section, cteNames, scriptRelations));
@@ -152,7 +158,7 @@ class SqlDiagnosticsService {
             }
             if (!columns.some((item) => item.name.toLowerCase() === column.toLowerCase())) {
                 const start = section.start + match.index + match[0].lastIndexOf(column);
-                diagnostics.push(new vscode.Diagnostic(new vscode.Range(document.positionAt(start), document.positionAt(start + column.length)), `Column "${column}" does not exist on ${alias.schema ? `${alias.schema}.` : ''}${alias.table}.`, vscode.DiagnosticSeverity.Error));
+                diagnostics.push(this.metadataDiagnostic(new vscode.Range(document.positionAt(start), document.positionAt(start + column.length)), `Column "${column}" does not exist on ${alias.schema ? `${alias.schema}.` : ''}${alias.table}.`, exports.SQL_METADATA_MISSING_COLUMN, alias.schema ?? defaultSchema));
             }
         }
         diagnostics.push(...await this.getUnqualifiedColumnDiagnostics(document, connection, section, cteNames, scriptRelations));
@@ -208,7 +214,7 @@ class SqlDiagnosticsService {
                     continue;
                 }
                 seen.add(key);
-                diagnostics.push(new vscode.Diagnostic(new vscode.Range(document.positionAt(section.start + tokenStart), document.positionAt(section.start + tokenStart + token.length)), `Column "${token}" does not exist on ${relation.schema}.${relation.table}.`, vscode.DiagnosticSeverity.Error));
+                diagnostics.push(this.metadataDiagnostic(new vscode.Range(document.positionAt(section.start + tokenStart), document.positionAt(section.start + tokenStart + token.length)), `Column "${token}" does not exist on ${relation.schema}.${relation.table}.`, exports.SQL_METADATA_MISSING_COLUMN, relation.schema));
             }
         }
         return diagnostics;
@@ -230,7 +236,19 @@ class SqlDiagnosticsService {
         if (result.ok || !result.error) {
             return undefined;
         }
-        return new vscode.Diagnostic(this.errorRange(document, section, result.error), this.errorMessage(result.error), vscode.DiagnosticSeverity.Error);
+        const diagnostic = new vscode.Diagnostic(this.errorRange(document, section, result.error), this.errorMessage(result.error), vscode.DiagnosticSeverity.Error);
+        const groupBy = (0, sqlGroupByError_1.normalizeGroupByError)(connection.type, result.error);
+        if (groupBy) {
+            diagnostic.source = exports.SQL_GROUP_BY_DIAGNOSTIC_SOURCE;
+            diagnostic.code = `${exports.SQL_GROUP_BY_DIAGNOSTIC_CODE}:${encodeURIComponent(groupBy.expression)}`;
+        }
+        return diagnostic;
+    }
+    metadataDiagnostic(range, message, kind, schema) {
+        const diagnostic = new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Warning);
+        diagnostic.source = exports.SQL_METADATA_DIAGNOSTIC_SOURCE;
+        diagnostic.code = `${kind}:${schema}`;
+        return diagnostic;
     }
     findIdentifierRange(document, section, identifier) {
         const index = section.sql.toLowerCase().indexOf(identifier.toLowerCase());

@@ -566,7 +566,7 @@ export class PostgresDriver implements DatabaseDriver {
     return pool;
   }
 
-  protected toPoolConfig(config: ConnectionConfigWithPassword, max: number): PoolConfig {
+  protected toPoolConfig(config: ConnectionConfigWithPassword, max: number, defaultTypes?: PgRuntime['types']): PoolConfig {
     return {
       host: config.host,
       port: config.port,
@@ -576,7 +576,12 @@ export class PostgresDriver implements DatabaseDriver {
       max,
       connectionTimeoutMillis: config.connectTimeoutMs ?? 10000,
       query_timeout: config.queryTimeoutMs,
-      ssl: config.sslMode === 'disable' ? false : { rejectUnauthorized: false }
+      ssl: config.sslMode === 'disable' ? false : { rejectUnauthorized: false },
+      types: defaultTypes && {
+        getTypeParser: (oid, format) => TEMPORAL_TYPE_OIDS.has(oid)
+          ? (value: string) => value
+          : defaultTypes.getTypeParser(oid, format)
+      }
     };
   }
 
@@ -586,8 +591,8 @@ export class PostgresDriver implements DatabaseDriver {
   }
 
   private async createVerifiedPool(config: ConnectionConfigWithPassword, max: number): Promise<Pool> {
-    const { Pool } = await loadPg();
-    const pool = new Pool(this.toPoolConfig(config, max));
+    const { Pool, types } = await loadPg();
+    const pool = new Pool(this.toPoolConfig(config, max, types));
     try {
       await pool.query('select 1');
       return pool;
@@ -597,7 +602,7 @@ export class PostgresDriver implements DatabaseDriver {
         throw error;
       }
 
-      const fallbackPool = new Pool(this.toPoolConfig({ ...config, sslMode: 'disable' }, max));
+      const fallbackPool = new Pool(this.toPoolConfig({ ...config, sslMode: 'disable' }, max, types));
       try {
         await fallbackPool.query('select 1');
         return fallbackPool;
@@ -678,7 +683,10 @@ export class PostgresDriver implements DatabaseDriver {
 
 type PgRuntime = {
   Pool: new (config: PoolConfig) => Pool;
+  types: NonNullable<PoolConfig['types']>;
 };
+
+const TEMPORAL_TYPE_OIDS = new Set([1082, 1083, 1114, 1184, 1186, 1266]);
 
 let pgRuntime: Promise<PgRuntime> | undefined;
 

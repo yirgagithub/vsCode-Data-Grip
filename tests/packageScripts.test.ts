@@ -84,6 +84,14 @@ describe('package scripts', () => {
     expect(copyNativeRuntimes).not.toContain("['oracledb/plugins'");
   });
 
+  it('does not rely on environment injection to enable Marketplace capture commands', () => {
+    const captureScript = readFileSync(join(root, 'scripts', 'captureMarketplaceMedia.js'), 'utf8');
+
+    expect(captureScript).toContain("run('npx', ['vscode-test']");
+    expect(captureScript).not.toContain('QUERYDECK_ENABLE_TEST_COMMANDS');
+    expect(captureScript).not.toContain('--code-version');
+  });
+
   it('rebuilds packaged runtime assets before unit tests import dist chunks in CI', () => {
     const workflow = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
     const buildIndex = workflow.indexOf('run: npm run build');
