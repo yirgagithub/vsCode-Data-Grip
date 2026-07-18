@@ -40,9 +40,18 @@ describe('persisted record compatibility', () => {
   });
 
   it('reads connection records through ConnectionStore', () => {
-    const record = new ConnectionStore(compatibilityContext()).getAll().find(({ id }) => id === 'legacy-connection');
+    const store = new ConnectionStore(compatibilityContext());
+    const record = store.getAll().find(({ id }) => id === 'legacy-connection');
     expect(record?.database).toBe('synthetic_app');
     expect(record).not.toHaveProperty('password');
+    expect(store.getSelectedConnectionId()).toBe('legacy-connection');
+  });
+
+  it('loads the real ConnectionStore secret key separately from metadata', async () => {
+    const store = new ConnectionStore(compatibilityContext());
+    const record = store.getAll().find(({ id }) => id === 'legacy-connection')!;
+    expect(await store.withPassword(record)).toEqual({ ...record, password: 'synthetic-secret' });
+    expect(JSON.stringify(persistedRecords)).not.toContain('synthetic-secret');
   });
 
   it('reads query console records through QueryConsoleStore', () => {
