@@ -487,6 +487,7 @@ export class MySQLDriver implements DatabaseDriver {
       connectionLimit: max,
       waitForConnections: true,
       connectTimeout: config.connectTimeoutMs ?? 10000,
+      dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'],
       ssl
     };
   }

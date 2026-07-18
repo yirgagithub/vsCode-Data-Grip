@@ -5131,7 +5131,8 @@ var require_lib2 = __commonJS({
 // src/runtime/pgRuntime.ts
 var pgRuntime_exports = {};
 __export(pgRuntime_exports, {
-  Pool: () => Pool
+  Pool: () => Pool,
+  types: () => types
 });
 module.exports = __toCommonJS(pgRuntime_exports);
 
@@ -5150,6 +5151,7 @@ var TypeOverrides = import_lib.default.TypeOverrides;
 var defaults = import_lib.default.defaults;
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
-  Pool
+  Pool,
+  types
 });
 //# sourceMappingURL=pgRuntime.js.map

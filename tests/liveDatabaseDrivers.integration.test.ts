@@ -46,6 +46,10 @@ run('live database drivers', () => {
 
       const result = await driver.executeQuery({ connectionId: config.id, sql: `select name from public.${table} where id = 1` });
       expectValue(result.rows, 'name', 'Ada');
+      expectTemporalStrings((await driver.executeQuery({
+        connectionId: config.id,
+        sql: "select date '2025-11-09' as date_value, time '14:23:45.123456' as time_value, timestamp '2025-11-09 14:23:45.123456' as timestamp_value, timestamptz '2025-11-09 14:23:45.123456+05:30' as timestamp_tz_value"
+      })).rows, { date_value: '2025-11-09', time_value: '14:23:45.123456' });
       expectName(await driver.getSchemas(config.id), 'public');
       expectName(await driver.getTables(config.id, 'public'), table);
       expectColumnNames(await driver.getColumns(config.id, 'public', table), ['id', 'name']);
@@ -76,6 +80,10 @@ run('live database drivers', () => {
 
       const result = await driver.executeQuery({ connectionId: config.id, sql: `select name from \`${table}\` where id = 1` });
       expectValue(result.rows, 'name', 'Ada');
+      expectTemporalStrings((await driver.executeQuery({
+        connectionId: config.id,
+        sql: "select cast('2025-11-09' as date) as date_value, cast('14:23:45.123456' as time(6)) as time_value, cast('2025-11-09 14:23:45.123456' as datetime(6)) as timestamp_value"
+      })).rows, { date_value: '2025-11-09', time_value: '14:23:45.123456' });
       expectName(await driver.getSchemas(config.id), config.database);
       expectName(await driver.getTables(config.id, config.database), table);
       expectColumnNames(await driver.getColumns(config.id, config.database, table), ['id', 'name']);
@@ -100,11 +108,15 @@ run('live database drivers', () => {
       await driver.executeStatements(params(config), [
         'FLUSHDB',
         'SET vdg:live:string Ada',
+        'SET vdg:live:temporal 2025-11-09T14:23:45.123456+05:30',
         'HSET vdg:live:hash name Ada'
       ]);
 
       const result = await driver.executeQuery({ connectionId: config.id, sql: 'GET vdg:live:string' });
       expectValue(result.rows, 'value', 'Ada');
+      expectTemporalStrings((await driver.executeQuery({ connectionId: config.id, sql: 'GET vdg:live:temporal' })).rows, {
+        value: '2025-11-09T14:23:45.123456+05:30'
+      });
       expectName(await driver.getSchemas(config.id), `db${config.database}`);
       expectName(await driver.getTables(config.id, `db${config.database}`), 'strings');
       expectColumnNames(await driver.getColumns(config.id, `db${config.database}`, 'strings'), ['key', 'type', 'ttl', 'size', 'value']);
@@ -137,6 +149,13 @@ run('live database drivers', () => {
 
       const result = await driver.executeQuery({ connectionId: config.id, sql: `select name from dbo.${table} where id = 1` });
       expectValue(result.rows, 'name', 'Ada');
+      expectTemporalStrings((await driver.executeQuery({
+        connectionId: config.id,
+        sql: "select cast('2025-11-09' as date) as date_value, cast('14:23:45.123456' as time(6)) as time_value, cast('2025-11-09 14:23:45.123456' as datetime2(6)) as timestamp_value, cast('2025-11-09T14:23:45.123456+05:30' as datetimeoffset(6)) as timestamp_tz_value"
+      })).rows, {
+        date_value: '2025-11-09',
+        timestamp_tz_value: '2025-11-09T08:53:45.123Z'
+      });
       expectName(await driver.getSchemas(config.id), 'dbo');
       expectName(await driver.getTables(config.id, 'dbo'), table);
       expectColumnNames(await driver.getColumns(config.id, 'dbo', table), ['id', 'name']);
@@ -174,6 +193,16 @@ run('live database drivers', () => {
 
       const result = await driver.executeQuery({ connectionId: config.id, sql: `select NAME as "name" from ${table} where ID = 1` });
       expectValue(result.rows, 'name', 'Ada');
+      const temporalResults = await driver.executeStatements(params(config), [
+        "alter session set time_zone = 'UTC'",
+        "select to_date('2025-11-09', 'YYYY-MM-DD') as date_value, to_timestamp('2025-11-09 14:23:45.123456', 'YYYY-MM-DD HH24:MI:SS.FF6') as timestamp_value, to_timestamp_tz('2025-11-09 14:23:45.123456 +05:30', 'YYYY-MM-DD HH24:MI:SS.FF6 TZH:TZM') as timestamp_tz_value, cast(to_timestamp('2025-11-09 14:23:45.123456', 'YYYY-MM-DD HH24:MI:SS.FF6') as timestamp with local time zone) as timestamp_ltz_value from dual"
+      ]);
+      expectTemporalStrings(temporalResults.at(-1)?.rows ?? [], {
+        date_value: '2025-11-09T00:00:00.000Z',
+        timestamp_value: '2025-11-09T14:23:45.123Z',
+        timestamp_tz_value: '2025-11-09T08:53:45.123Z',
+        timestamp_ltz_value: '2025-11-09T14:23:45.123Z'
+      });
       expectName(await driver.getSchemas(config.id), config.defaultSchema ?? config.username);
       expectName(await driver.getTables(config.id, config.defaultSchema ?? config.username), table);
       expectColumnNames(await driver.getColumns(config.id, config.defaultSchema ?? config.username, table), ['ID', 'NAME']);
@@ -207,6 +236,13 @@ run('live database drivers', () => {
 
       const result = await driver.executeQuery({ connectionId: config.id, sql: `select name from ${table} where id = 1` });
       expectValue(result.rows, 'name', 'Ada');
+      expectTemporalStrings((await driver.executeQuery({
+        connectionId: config.id,
+        sql: "select '2025-11-09' as date_value, '14:23:45.123456' as time_value, '2025-11-09 14:23:45.123456' as timestamp_value, '2025-11-09T14:23:45.123456+05:30' as timestamp_tz_value"
+      })).rows, {
+        date_value: '2025-11-09',
+        timestamp_tz_value: '2025-11-09T14:23:45.123456+05:30'
+      });
       expectName(await driver.getSchemas(config.id), 'main');
       expectName(await driver.getTables(config.id, 'main'), table);
       expectColumnNames(await driver.getColumns(config.id, 'main', table), ['id', 'name']);
@@ -312,6 +348,17 @@ function expectColumnNames(items: Array<{ name: string }>, expected: string[]): 
 
 function expectValue(rows: Record<string, unknown>[], column: string, expected: unknown): void {
   expect(rows.map((row) => valueAt(row, column))).toContain(expected);
+}
+
+function expectTemporalStrings(rows: Record<string, unknown>[], expected: Record<string, string>): void {
+  expect(rows).toHaveLength(1);
+  expect(Object.values(rows[0]).length).toBeGreaterThan(0);
+  for (const value of Object.values(rows[0])) {
+    expect(typeof value).toBe('string');
+  }
+  for (const [column, value] of Object.entries(expected)) {
+    expect(valueAt(rows[0], column)).toBe(value);
+  }
 }
 
 function valueAt(row: Record<string, unknown>, column: string): unknown {

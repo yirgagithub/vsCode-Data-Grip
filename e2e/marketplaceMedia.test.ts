@@ -45,6 +45,10 @@ suite('QueryDeck marketplace media capture', () => {
       );
     }, 420_000);
 
+    assert.ok(
+      Array.isArray(connectedIds),
+      `database.internal.seedAndConnectForMarketplaceMedia must return an array, received ${String(connectedIds)}`
+    );
     assert.deepStrictEqual(new Set(connectedIds), new Set(marketplaceConnections().map((connection) => connection.id)));
 
     await vscode.commands.executeCommand('workbench.view.extension.database');

@@ -146,6 +146,21 @@ describe('AgentDatabaseService MCP tools', () => {
     ]);
   });
 
+  it('returns temporal strings unchanged through the MCP query service', async () => {
+    const driver = new FakeDriver();
+    driver.rows = [{
+      date_value: '2025-11-09',
+      time_value: '14:23:45.123456',
+      timestamp_value: '2025-11-09 14:23:45.123456',
+      timestamp_tz_value: '2025-11-09T14:23:45.123456+05:30'
+    }];
+    const { service } = createService(driver);
+
+    const [result] = await service.runReadOnlyQuery({ connectionId: 'local', sql: 'select temporal_values' });
+
+    expect(result.rows).toEqual(driver.rows);
+  });
+
   it('clamps excessive configured default row limits', async () => {
     const driver = new FakeDriver();
     driver.rows = Array.from({ length: 1001 }, (_, index) => ({ id: index + 1 }));
