@@ -138,7 +138,16 @@
           "id": "synthetic-result-set",
           "title": "Result 1",
           "fields": [{ "name": "synthetic_id", "dataTypeName": "integer" }],
-          "rows": [{ "synthetic_id": 42 }],
+          "rows": [{
+            "synthetic_id": 42,
+            "null_value": null,
+            "date_value": "2025-11-09",
+            "timestamp_tz_value": "2025-11-09T14:23:45.123456+05:30",
+            "numeric_value": "12345678901234567890.123456789",
+            "binary_value": { "type": "Buffer", "data": [0, 127, 255] },
+            "json_value": { "nested": [true, null, "value"] },
+            "engine_value": "infinity"
+          }],
           "rowCount": 1,
           "hasMore": false,
           "maxRows": 500,

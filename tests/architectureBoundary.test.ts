@@ -14,6 +14,7 @@ function fixture(files: Record<string, string>): string {
     mkdirSync(dirname(destination), { recursive: true });
     writeFileSync(destination, contents);
   }
+  if (!files['tsconfig.json']) writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { moduleResolution: 'node' }, include: ['src/**/*'] }));
   return root;
 }
 
@@ -79,5 +80,42 @@ describe('repository architecture', () => {
       { from: 'src/core/query.ts', to: 'src/features/results/index.ts' },
       { from: 'src/core/query.ts', to: 'src/features/results/internal.ts' }
     ]);
+  });
+
+  it('fails target-to-legacy dependencies closed', () => {
+    const root = fixture({
+      'src/features/results/index.ts': "import '../../services/sqlDialect';\n",
+      'src/services/sqlDialect.ts': ''
+    });
+    expect(checkArchitecture(root)).toEqual([expect.objectContaining({
+      from: 'src/features/results/index.ts', to: 'src/services/sqlDialect.ts'
+    })]);
+  });
+
+  it('detects self, two-feature, and three-feature cycles', () => {
+    const root = fixture({
+      'src/features/self/index.ts': "import './index';\n",
+      'src/features/a/index.ts': "import '../b';\n",
+      'src/features/b/index.ts': "import '../c';\n",
+      'src/features/c/index.ts': "import '../a';\n",
+      'src/features/d/index.ts': "import '../e';\n",
+      'src/features/e/index.ts': "import '../d';\n"
+    });
+    expect(checkArchitecture(root).filter(({ reason }) => reason.startsWith('circular feature dependency')).map(({ reason }) => reason)).toEqual([
+      'circular feature dependency: a -> b -> c -> a',
+      'circular feature dependency: d -> e -> d',
+      'circular feature dependency: self -> self'
+    ]);
+  });
+
+  it('uses TypeScript config resolution for aliases and import-equals declarations', () => {
+    const root = fixture({
+      'tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@features/*': ['src/features/*'] } }, include: ['src/**/*'] }),
+      'src/core/query.ts': "import Result = require('@features/results');\nimport 'external-package';\n",
+      'src/features/results/index.ts': ''
+    });
+    expect(checkArchitecture(root)).toEqual([expect.objectContaining({
+      from: 'src/core/query.ts', to: 'src/features/results/index.ts'
+    })]);
   });
 });
