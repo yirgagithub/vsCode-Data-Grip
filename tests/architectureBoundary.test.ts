@@ -103,9 +103,21 @@ describe('repository architecture', () => {
     });
     expect(checkArchitecture(root).filter(({ reason }) => reason.startsWith('circular feature dependency')).map(({ reason }) => reason)).toEqual([
       'circular feature dependency: a -> b -> c -> a',
-      'circular feature dependency: d -> e -> d',
-      'circular feature dependency: self -> self'
+      'circular feature dependency: d -> e -> d'
     ]);
+    expect(checkArchitecture(root)).toContainEqual({
+      from: 'src/features/self/index.ts', to: 'src/features/self/index.ts',
+      reason: 'circular module dependency: file imports itself'
+    });
+  });
+
+  it('does not treat imports within one feature as a feature dependency cycle', () => {
+    const root = fixture({
+      'src/features/results/index.ts': "export { value } from './internal';\n",
+      'src/features/results/internal.ts': 'export const value = 1;\n'
+    });
+
+    expect(checkArchitecture(root).filter(({ reason }) => reason.startsWith('circular feature dependency'))).toEqual([]);
   });
 
   it('uses TypeScript config resolution for aliases and import-equals declarations', () => {

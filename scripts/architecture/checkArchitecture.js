@@ -29,6 +29,7 @@ function checkArchitecture(root) {
       if (!isUnder(target, sourceRoot)) continue;
       const fromRelative = relative(root, file);
       const toRelative = relative(root, target);
+      if (fromRelative === toRelative) violations.push({ from: fromRelative, to: toRelative, reason: 'circular module dependency: file imports itself' });
       if (!isAllowedDependency(fromRelative, toRelative)) violations.push({ from: fromRelative, to: toRelative, reason: 'forbidden dependency direction or deep feature import' });
       addFeatureEdge(featureGraph, fromRelative, toRelative);
     }
@@ -56,6 +57,7 @@ function addFeatureEdge(graph, from, to) {
   if (classifyModule(from) !== 'feature' || classifyModule(to) !== 'feature') return;
   const fromFeature = from.split('/')[2];
   const toFeature = to.split('/')[2];
+  if (fromFeature === toFeature) return;
   if (!graph.has(fromFeature)) graph.set(fromFeature, new Set());
   graph.get(fromFeature).add(toFeature);
   if (!graph.has(toFeature)) graph.set(toFeature, new Set());
