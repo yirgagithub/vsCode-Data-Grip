@@ -29,6 +29,14 @@ npx vitest run tests/packageScripts.test.ts
 
 GREEN result: exit code 0; 1 test file and all 9 tests passed.
 
+### Code-quality review fix
+
+The initial workflow assertion searched the entire YAML file, so commands in later jobs could satisfy it. The revised test extracts only the `unit-tests` job, stops at the next same-indentation job, and asserts the complete command order `lint < check:architecture < build < test` within that job. A structural test proves extraction excludes commands from a following job.
+
+Review-fix RED: `npx vitest run tests/packageScripts.test.ts` exited 1 with 1 failed and 9 passed because the new structural test referenced the not-yet-implemented `workflowJob` extractor.
+
+Review-fix GREEN: `npx vitest run tests/packageScripts.test.ts` exited 0; 1 file and all 9 tests passed after replacing the two weaker global assertions with the scoped ordering assertion and adding the structural extractor test.
+
 ## Exact full verification
 
 Run in the required order:
@@ -53,5 +61,5 @@ Neither was changed in Task 6. Both affect the architecture model rather than th
 ## Worktree concerns
 
 - The worktree already contained user-owned changes to `.superpowers/sdd/progress.md`, `.superpowers/sdd/task-1-report.md`, and extensive `node_modules` content. They were not staged or altered by Task 6.
-- The required build refreshed tracked generated `dist/**` and `media/results/**` files. They are verification artifacts and are intentionally excluded from the Task 6 commit.
+- The required build refreshed tracked generated `dist/**` and `media/results/**` files. They were excluded from the Task 6 commit because Task 6 changed no build inputs; these tracked outputs still require final reconciliation against the intended baseline and are not categorically disposable.
 - Repository-wide `git diff --check` reports pre-existing trailing whitespace in modified `node_modules/.bin/*` shims. The scoped Task 6 files have no whitespace errors.
