@@ -144,6 +144,10 @@ docker compose -f docker-compose.live-tests.yml down -v
 
 Use `LIVE_DATABASE_ENGINE=all` after starting the Docker services to run the full live matrix.
 
+## Architecture
+
+See the [contributor architecture map](docs/architecture/README.md) for module boundaries and dependency direction.
+
 ## Status
 
 QueryDeck is early and moving quickly. Try it against a real workflow and open issues for missing drivers, rough edges, or SQL workflows that should be faster.
