@@ -15,7 +15,7 @@ import { QueryMemoryService } from '../src/services/queryMemoryService';
 import { normalizeExplainJsonPlan } from '../src/services/queryPlanService';
 import { QueryConsoleStore } from '../src/persistence/queryConsoleStore';
 import { QueryMemoryStore } from '../src/persistence/queryMemoryStore';
-import { compatibilityContext } from './helpers/inMemoryExtensionContext';
+import { compatibilityContext, createInMemoryExtensionContext } from './helpers/inMemoryExtensionContext';
 import { SchemaContextService } from '../src/services/schemaContextService';
 import { connectionMetadataFingerprint, parseStoredSchemaCacheEntry, SCHEMA_METADATA_CACHE_VERSION, serializeSchemaCacheEntry } from '../src/services/schemaMetadataCacheStore';
 import { SqlDiagnosticsService } from '../src/services/sqlDiagnosticsService';
@@ -415,26 +415,20 @@ describe('QueryConsoleStore storage', () => {
     };
     const globalStorageUri = vscode.Uri.parse('file:///global-storage/data-grip');
     const workspaceUri = vscode.Uri.parse('file:///workspace/project');
-    const records: QueryConsoleRecord[] = [];
     workspaceMock.workspaceFolders = [{ uri: workspaceUri }];
     workspaceMock.fs.createDirectory.mockClear();
     workspaceMock.fs.writeFile.mockClear();
     workspaceMock.fs.stat.mockRejectedValue(Object.assign(new Error('FileNotFound'), { code: 'FileNotFound' }));
     workspaceMock.openTextDocument.mockClear();
 
-    const store = new QueryConsoleStore({
-      globalStorageUri,
-      workspaceState: {
-        get: vi.fn((_key: string, fallback: QueryConsoleRecord[]) => records.length ? records : fallback),
-        update: vi.fn(async (_key: string, value: QueryConsoleRecord[]) => {
-          records.splice(0, records.length, ...value);
-        })
-      }
-    } as never);
+    const context = createInMemoryExtensionContext() as vscode.ExtensionContext & { globalStorageUri: vscode.Uri };
+    Object.defineProperty(context, 'globalStorageUri', { value: globalStorageUri });
+    const store = new QueryConsoleStore(context);
 
     await store.openOrCreate(connection({ id: 'local', name: 'Local', database: 'app' }));
 
     expect(workspaceMock.fs.createDirectory.mock.calls[0][0].toString()).toBe('file:///global-storage/data-grip/query-consoles');
+    const records = store.getAll();
     expect(records[0].documentUri).toContain('file:///global-storage/data-grip/query-consoles/');
     expect(records[0].documentUri).not.toContain('/workspace/project');
     expect(workspaceMock.fs.writeFile.mock.calls[0][0].toString()).toBe(records[0].documentUri);

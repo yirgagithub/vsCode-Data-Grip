@@ -12,13 +12,74 @@ export interface PersistedRecords {
   queryHistory: QueryHistoryItem[];
   queryMemory: QueryMemoryItem[];
   resultSessions: QueryResultTab[];
-  documentConnections: SqlDocumentConnectionRecord[];
+  documentConnections: Array<SqlDocumentConnectionRecord & { id: string }>;
 }
 
-export const persistedRecords = JSON.parse(readFileSync(
+const rawPersistedRecords: unknown = JSON.parse(readFileSync(
   join(process.cwd(), 'tests/fixtures/compatibility/persisted-records.json'),
   'utf8'
-)) as PersistedRecords;
+));
+
+export function assertPersistedRecords(value: unknown): asserts value is PersistedRecords {
+  const root = requiredObject(value, 'persistedRecords');
+  const stores = [
+    'connections', 'queryConsoles', 'queryHistory', 'queryMemory', 'resultSessions', 'documentConnections'
+  ] as const;
+  for (const store of stores) requiredArray(root[store], store);
+
+  validateRecords(root.connections, 'connections', [
+    'id', 'name', 'type', 'host', 'port', 'database', 'username', 'sslMode', 'color'
+  ]);
+  validateRecords(root.queryConsoles, 'queryConsoles', [
+    'id', 'connectionId', 'documentUri', 'createdAt', 'updatedAt'
+  ]);
+  validateRecords(root.queryHistory, 'queryHistory', [
+    'id', 'connectionId', 'databaseType', 'sql', 'executedAt', 'status'
+  ]);
+  validateRecords(root.queryMemory, 'queryMemory', [
+    'id', 'sourceKind', 'sourceId', 'sql', 'summaryStatus', 'tables', 'columns', 'outputColumns', 'indexedAt', 'updatedAt'
+  ]);
+  validateRecords(root.resultSessions, 'resultSessions', [
+    'id', 'title', 'pinned', 'connectionId', 'databaseType', 'queryText', 'executionStatus', 'executionStartedAt',
+    'resultSets', 'activeResultSetIndex', 'filters', 'sort', 'columnState', 'createdAt', 'updatedAt'
+  ]);
+  validateRecords(root.documentConnections, 'documentConnections', [
+    'id', 'documentUri', 'connectionId', 'updatedAt'
+  ]);
+
+  for (const [index, value] of requiredArray(root.resultSessions, 'resultSessions').entries()) {
+    const session = requiredObject(value, `resultSessions[${index}]`);
+    validateRecords(session.resultSets, `resultSessions[${index}].resultSets`, [
+      'id', 'title', 'fields', 'rows', 'rowCount', 'durationMs'
+    ]);
+  }
+}
+
+function validateRecords(value: unknown, path: string, fields: string[]): void {
+  for (const [index, recordValue] of requiredArray(value, path).entries()) {
+    const record = requiredObject(recordValue, `${path}[${index}]`);
+    for (const field of fields) {
+      if (!(field in record) || record[field] === undefined || record[field] === null) {
+        throw new Error(`Missing required fixture field: ${path}[${index}].${field}`);
+      }
+    }
+  }
+}
+
+function requiredArray(value: unknown, path: string): unknown[] {
+  if (!Array.isArray(value)) throw new Error(`Expected fixture array: ${path}`);
+  return value;
+}
+
+function requiredObject(value: unknown, path: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Expected fixture object: ${path}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+assertPersistedRecords(rawPersistedRecords);
+export const persistedRecords = rawPersistedRecords;
 
 export function createInMemoryExtensionContext(initial: {
   globalState?: Record<string, unknown>;
@@ -26,14 +87,16 @@ export function createInMemoryExtensionContext(initial: {
 } = {}): vscode.ExtensionContext {
   const globalState = new Map(Object.entries(initial.globalState ?? {}));
   const workspaceState = new Map(Object.entries(initial.workspaceState ?? {}));
+  const secrets = new Map<string, string>();
+  const secretListeners = new Set<(event: { key: string }) => unknown>();
 
   const memento = (values: Map<string, unknown>) => ({
     get<T>(key: string, fallback?: T): T | undefined {
-      return values.has(key) ? values.get(key) as T : fallback;
+      return values.has(key) ? structuredClone(values.get(key)) as T : fallback;
     },
     async update(key: string, value: unknown): Promise<void> {
       if (value === undefined) values.delete(key);
-      else values.set(key, value);
+      else values.set(key, structuredClone(value));
     },
     keys(): readonly string[] {
       return [...values.keys()];
@@ -44,10 +107,19 @@ export function createInMemoryExtensionContext(initial: {
     globalState: memento(globalState),
     workspaceState: memento(workspaceState),
     secrets: {
-      get: async () => undefined,
-      store: async () => undefined,
-      delete: async () => undefined,
-      onDidChange: (() => ({ dispose() {} })) as never
+      get: async (key: string) => secrets.get(key),
+      store: async (key: string, value: string) => {
+        secrets.set(key, value);
+        secretListeners.forEach((listener) => listener({ key }));
+      },
+      delete: async (key: string) => {
+        secrets.delete(key);
+        secretListeners.forEach((listener) => listener({ key }));
+      },
+      onDidChange: ((listener: (event: { key: string }) => unknown) => {
+        secretListeners.add(listener);
+        return { dispose: () => secretListeners.delete(listener) };
+      }) as vscode.Event<{ key: string }>
     }
   } as vscode.ExtensionContext;
 }
