@@ -99,6 +99,19 @@ class SchemaContextService {
         await this.persistentCache?.persist(connection, entry);
         return keys;
     }
+    async getForeignKeys(connection, schemaName, tableName) {
+        const entry = await this.loadSchema(connection, schemaName);
+        const tableKey = this.tableKey(schemaName, tableName);
+        if (entry.foreignKeys[tableKey])
+            return entry.foreignKeys[tableKey];
+        const foreignKeys = await this.connectionManager.getDriver(connection.type).getForeignKeys(connection.id, schemaName, tableName);
+        entry.foreignKeys[tableKey] = foreignKeys;
+        entry.loadedAt = Date.now();
+        entry.status = 'ready';
+        entry.source = 'live';
+        await this.persistentCache?.persist(connection, entry);
+        return foreignKeys;
+    }
     async getCachedColumns(connection, schemaName, tableName) {
         const entry = await this.getCachedForConnection(connection, schemaName);
         return entry?.columns[this.tableKey(schemaName, tableName)];
@@ -157,10 +170,13 @@ class SchemaContextService {
     async loadSchemaNow(connection, schemaName, base) {
         try {
             const driver = this.connectionManager.getDriver(connection.type);
-            const [schemas, tables, views] = await Promise.all([
+            const [schemas, tables, views, functions, procedures, triggers] = await Promise.all([
                 driver.getSchemas(connection.id),
                 driver.getTables(connection.id, schemaName),
-                driver.getViews(connection.id, schemaName)
+                driver.getViews(connection.id, schemaName),
+                driver.getFunctions(connection.id, schemaName),
+                driver.getProcedures(connection.id, schemaName),
+                driver.getTriggers(connection.id, schemaName)
             ]);
             const columns = await this.loadColumnsForRelations(connection, schemaName, [...tables, ...views]);
             const entry = {
@@ -168,6 +184,9 @@ class SchemaContextService {
                 schemas,
                 tables,
                 views,
+                functions,
+                procedures,
+                triggers,
                 columns,
                 loadedAt: Date.now(),
                 cacheVersion: schemaMetadataCacheStore_1.SCHEMA_METADATA_CACHE_VERSION,
@@ -230,9 +249,13 @@ class SchemaContextService {
             schemas: [],
             tables: [],
             views: [],
+            functions: [],
+            procedures: [],
+            triggers: [],
             columns: {},
             indexes: {},
             keys: {},
+            foreignKeys: {},
             status,
             errorMessage
         };

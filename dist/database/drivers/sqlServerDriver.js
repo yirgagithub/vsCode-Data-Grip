@@ -34,9 +34,35 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SqlServerDriver = void 0;
+exports.formatSqlServerTemporalValue = formatSqlServerTemporalValue;
 const runtimeLoader_1 = require("../../runtime/runtimeLoader");
 const driverUtils_1 = require("./driverUtils");
 const sqlDialect_1 = require("../../services/sqlDialect");
+function formatSqlServerTemporalValue(type, value) {
+    if (value === null) {
+        return null;
+    }
+    // Tedious has already materialized a Date here: the original datetimeoffset offset and
+    // precision beyond JavaScript milliseconds are unavailable, so the best stable fallback
+    // is the equivalent UTC ISO value. mssql.valueHandler is process-global; registering these
+    // handlers intentionally makes QueryDeck the owner of temporal handling in this process.
+    const iso = value.toISOString();
+    if (type === 'date') {
+        return iso.slice(0, 10);
+    }
+    if (type === 'time') {
+        return iso.slice(11, -1);
+    }
+    return type === 'datetimeoffset' ? iso : iso.slice(0, -1);
+}
+const sqlServerTemporalValueHandlers = {
+    date: (value) => formatSqlServerTemporalValue('date', value),
+    time: (value) => formatSqlServerTemporalValue('time', value),
+    datetime: (value) => formatSqlServerTemporalValue('datetime', value),
+    datetime2: (value) => formatSqlServerTemporalValue('datetime2', value),
+    smalldatetime: (value) => formatSqlServerTemporalValue('smalldatetime', value),
+    datetimeoffset: (value) => formatSqlServerTemporalValue('datetimeoffset', value)
+};
 class SqlServerDriver extends driverUtils_1.BasicDatabaseDriver {
     id = 'sqlserver';
     displayName = 'Microsoft SQL Server';
@@ -44,6 +70,7 @@ class SqlServerDriver extends driverUtils_1.BasicDatabaseDriver {
     async connect(config) {
         await this.disconnect(config.id);
         const mssql = await loadMssql();
+        registerTemporalValueHandlers(mssql);
         const pool = new mssql.ConnectionPool({
             server: config.host,
             port: config.port,
@@ -148,13 +175,30 @@ class SqlServerDriver extends driverUtils_1.BasicDatabaseDriver {
         const sql = `select ${pageLimit && !offset ? `top (${pageLimit}) ` : ''}* from ${(0, sqlDialect_1.qualifiedSqlName)(this.id, schema, table)}${(0, driverUtils_1.safeFilterClause)(options?.where)}${orderBy}${pageLimit && offset ? ` offset ${offset} rows fetch next ${pageLimit} rows only` : ''}`;
         return this.executeQuery({ connectionId, sql, maxRows: 0 });
     }
+    async getObjectDefinition(connectionId, object) {
+        if (object.kind === 'table') {
+            const columns = await this.getColumns(connectionId, object.schema, object.name);
+            const body = columns.map((column) => `  ${(0, sqlDialect_1.quoteSqlIdentifier)(this.id, column.name)} ${column.dataType}${column.defaultValue == null ? '' : ` default ${column.defaultValue}`}${column.nullable ? ' null' : ' not null'}`).join(',\n');
+            return `create table ${(0, sqlDialect_1.qualifiedSqlName)(this.id, object.schema, object.name)} (\n${body}\n);`;
+        }
+        try {
+            const qualified = (0, sqlDialect_1.qualifiedSqlName)(this.id, object.schema, object.name).replace(/'/g, "''");
+            const rows = await this.query(connectionId, `select OBJECT_DEFINITION(OBJECT_ID(N'${qualified}')) as definition`);
+            return nativeDefinition(rows[0]?.definition);
+        }
+        catch (error) {
+            throw (0, driverUtils_1.toQueryError)(error);
+        }
+    }
     async getRoutines(connectionId, schema, type) {
-        const rows = await this.query(connectionId, `select routine_schema as [schema], routine_name as name, routine_type as kind, data_type as returnType from information_schema.routines where routine_schema = '${escapeSql(schema)}' and routine_type = '${type}' order by routine_name`);
+        const rows = await this.query(connectionId, `select r.routine_schema as [schema], r.routine_name as name, r.routine_type as kind, r.data_type as returnType, concat(r.specific_schema, '.', r.specific_name) as signature, string_agg(concat(p.parameter_mode, ' ', p.parameter_name, ' ', p.data_type), ', ') within group (order by p.ordinal_position) as arguments from information_schema.routines r left join information_schema.parameters p on p.specific_schema = r.specific_schema and p.specific_name = r.specific_name where r.routine_schema = '${escapeSql(schema)}' and r.routine_type = '${type}' group by r.routine_schema, r.routine_name, r.routine_type, r.data_type, r.specific_schema, r.specific_name order by r.routine_name`);
         return rows.map((row) => ({
             schema: String(row.schema),
             name: String(row.name),
             kind: type === 'PROCEDURE' ? 'procedure' : 'function',
-            returnType: (0, driverUtils_1.optionalString)(row.returnType)
+            returnType: (0, driverUtils_1.optionalString)(row.returnType),
+            signature: (0, driverUtils_1.optionalString)(row.signature),
+            arguments: (0, driverUtils_1.optionalString)(row.arguments)?.split(', ').filter(Boolean)
         }));
     }
     async query(connectionId, sql) {
@@ -170,6 +214,19 @@ class SqlServerDriver extends driverUtils_1.BasicDatabaseDriver {
     }
 }
 exports.SqlServerDriver = SqlServerDriver;
+function registerTemporalValueHandlers(mssql) {
+    const temporalTypes = [
+        [mssql.Date, 'date'],
+        [mssql.Time, 'time'],
+        [mssql.DateTime, 'datetime'],
+        [mssql.DateTime2, 'datetime2'],
+        [mssql.SmallDateTime, 'smalldatetime'],
+        [mssql.DateTimeOffset, 'datetimeoffset']
+    ];
+    for (const [token, type] of temporalTypes) {
+        mssql.valueHandler.set(token, sqlServerTemporalValueHandlers[type]);
+    }
+}
 async function loadMssql() {
     const bundled = (0, runtimeLoader_1.loadBundledRuntime)('mssqlRuntime');
     if (bundled) {
@@ -182,5 +239,8 @@ async function loadMssql() {
 }
 function escapeSql(value) {
     return value.replace(/'/g, "''");
+}
+function nativeDefinition(value) {
+    return value === null || value === undefined || value === '' ? undefined : String(value);
 }
 //# sourceMappingURL=sqlServerDriver.js.map

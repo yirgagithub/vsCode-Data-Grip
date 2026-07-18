@@ -6,13 +6,14 @@ const pgMock = vi.hoisted(() => ({
   failDefinition: false,
   queries: [] as Array<{ sql: unknown; params: unknown[] }>,
   pools: [] as Array<{
-    config: { ssl?: unknown };
+    config: { ssl?: unknown; types?: { getTypeParser: (oid: number, format?: string) => (value: string) => unknown } };
     query: ReturnType<typeof vi.fn>;
     end: ReturnType<typeof vi.fn>;
   }>
 }));
 
 vi.mock('pg', () => {
+  const getTypeParser = vi.fn((oid: number, format?: string) => (value: string) => `parsed:${oid}:${format ?? 'text'}:${value}`);
   class Pool {
     query = vi.fn(async (sql: unknown, ...params: unknown[]) => {
       pgMock.queries.push({ sql, params });
@@ -34,12 +35,12 @@ vi.mock('pg', () => {
 
     end = vi.fn(async () => undefined);
 
-    constructor(public readonly config: { ssl?: unknown }) {
+    constructor(public readonly config: { ssl?: unknown; types?: { getTypeParser: (oid: number, format?: string) => (value: string) => unknown } }) {
       pgMock.pools.push(this);
     }
   }
 
-  return { Pool };
+  return { Pool, types: { getTypeParser } };
 });
 
 import { PostgresDriver } from '../src/database/drivers/postgresDriver';
@@ -53,6 +54,17 @@ describe('PostgresDriver SSL mode', () => {
     pgMock.failDefinition = false;
     pgMock.queries.length = 0;
     pgMock.pools.length = 0;
+  });
+
+  it('fetches temporal values as native text and delegates other types', async () => {
+    const driver = new PostgresDriver();
+    await driver.connect(config());
+
+    const registry = pgMock.pools[0].config.types!;
+    for (const oid of [1082, 1083, 1114, 1184, 1186, 1266]) {
+      expect(registry.getTypeParser(oid)('native temporal text')).toBe('native temporal text');
+    }
+    expect(registry.getTypeParser(23, 'binary')('42')).toBe('parsed:23:binary:42');
   });
 
   it('falls back to non-SSL when sslMode prefer hits a server without SSL support', async () => {
@@ -245,6 +257,15 @@ describe('PostgresDriver session monitor', () => {
 });
 
 describe('RedshiftDriver metadata', () => {
+  it('fetches temporal values through the per-pool parser registry', async () => {
+    const driver = new RedshiftDriver();
+    await driver.connect(config({ type: 'redshift', port: 5439 }));
+
+    const registry = pgMock.pools[0].config.types!;
+    expect(registry.getTypeParser(1184)('2026-07-17 15:30:00+02')).toBe('2026-07-17 15:30:00+02');
+    expect(registry.getTypeParser(23)('42')).toBe('parsed:23:text:42');
+  });
+
   beforeEach(() => {
     pgMock.failSsl = false;
     pgMock.queries.length = 0;

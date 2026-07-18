@@ -329,8 +329,8 @@ export function activate(context: vscode.ExtensionContext): void {
     updateSqlDiagnostics(document);
   });
 
-  if (process.env.QUERYDECK_ENABLE_TEST_COMMANDS === 'true') {
-    register('database.internal.seedAndConnectForMarketplaceMedia', async (configsArg: unknown) => {
+  if (context.extensionMode !== vscode.ExtensionMode.Production) {
+    context.subscriptions.push(vscode.commands.registerCommand('database.internal.seedAndConnectForMarketplaceMedia', async (configsArg: unknown) => {
       const configs = configsArg as ConnectionConfigWithPassword[];
       for (const config of configs) {
         await connectionManager.save(config);
@@ -341,7 +341,7 @@ export function activate(context: vscode.ExtensionContext): void {
       refreshQueryMap();
       tree.refresh();
       return connectionManager.getActiveConnections().map((connection) => connection.config.id);
-    });
+    }));
   }
 
   async function createConnectionFromEditor(): Promise<ConnectionConfig | undefined> {

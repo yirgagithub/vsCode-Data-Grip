@@ -1,32 +1,81 @@
-# Task 1 implementation report
+# Task 1 Report
 
-- Files changed: `src/services/sqlObjectReference.ts`, `tests/sqlObjectReference.test.ts`
-- Test command: `npx vitest run tests/sqlObjectReference.test.ts`
-- Test result: 1 file passed, 18 tests passed
-- Lint result: passed (reported by implementer)
-- Commit: `88e28bb`
-- Self-review: parser remains isolated from VS Code and metadata/provider behavior.
-- Concern: built-in routine filtering is conservative; dialect-specific built-in names may need future expansion.
+Status: DONE
 
-## Review fixes (2026-07-15)
+Commit: `a126c1c fix: preserve postgres and mysql temporal values`
 
-- RED evidence: `npx vitest run tests/sqlObjectReference.test.ts` failed as expected with 12 failures and 18 passes. The failures reproduced statement/nested-scope CTE leakage, `WITH RECURSIVE`/multiple-CTE handling, schema-qualified name suppression, SQL construct and dialect built-in false positives, trigger DDL modifiers, and parenthesis-free `EXEC` calls.
-- Files changed: `src/services/sqlObjectReference.ts`, `tests/sqlObjectReference.test.ts`.
-- Implementation: CTE suppression now records each declaration against its enclosing statement/query scope, handles `RECURSIVE` and comma-separated declarations, and applies only to unqualified names. Routine candidates now require qualification or an explicit `CALL`/`EXEC`/`EXECUTE` context, preventing keyword/scalar/built-in false positives without depending on an exhaustive name list. Trigger parsing skips `IF`/`NOT`/`EXISTS`; explicit procedure invocation supports parenthesis-free SQL Server syntax.
-- Test command/result: `npx vitest run tests/sqlObjectReference.test.ts` -> 1 file passed, 30 tests passed, exit 0 (377 ms).
-- Exact lint command/result from `package.json`: `npm run lint` -> `tsc -p ./ --noEmit`, exit 0.
-- Scoped whitespace check: `git diff --check -- src/services/sqlObjectReference.ts tests/sqlObjectReference.test.ts` -> exit 0.
-- Fix commit: `fef5fd3` (`fix: harden SQL object reference parsing`).
-- Self-review: parser remains pure and dependency-free; source ranges and normalized parts are unchanged; CTE scopes terminate at the matching query parenthesis or same-depth semicolon; qualified physical relations are never treated as CTE references; regression coverage exercises every Important review finding.
-- Concerns: unqualified parenthesized expressions are intentionally conservative and are not returned as routines unless introduced by `CALL`/`EXEC`/`EXECUTE`; metadata resolution can still identify ambiguous names later. The worktree contains extensive pre-existing `node_modules` changes and an earlier report edit, none of which were included in the fix commit.
+## Implementation
 
-## Second review fixes (2026-07-15)
+- PostgreSQL and Redshift pools now receive a per-pool type parser registry. OIDs 1082, 1083, 1114, 1184, 1186, and 1266 use an identity text parser; every other OID and format delegates to the runtime `pg.types.getTypeParser` implementation. Global pg parser state is not mutated.
+- MySQL normal and SSL-fallback pools now use `dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP']`.
+- No result-cell `Date` construction, localization, timezone conversion, or execution-timestamp behavior was introduced.
 
-- RED evidence: `npx vitest run tests/sqlObjectReference.test.ts` produced 1 failed file with 2 failed and 30 passed tests. `SELECT calculate_total(amount) FROM orders` returned `undefined`, while `EXECUTE AS USER` incorrectly returned `AS` as a routine.
-- Files changed: `src/services/sqlObjectReference.ts`, `tests/sqlObjectReference.test.ts`.
-- Implementation: restored unqualified parenthesized routine candidates for later metadata confirmation, while filtering SQL grammar constructs through a dedicated keyword set and retaining the cross-dialect built-in filter. Explicit `EXECUTE` procedure parsing now rejects the `EXECUTE AS` security-context form.
-- Focused test result: `npx vitest run tests/sqlObjectReference.test.ts` -> 1 file passed, 32 tests passed, exit 0 (356 ms before commit).
-- Lint result: `npm run lint` -> `tsc -p ./ --noEmit`, exit 0.
-- Fix commit: `53a390f` (`fix: preserve unqualified SQL routine references`).
-- Self-review: ordinary unqualified UDFs retain exact ranges and argument counts; existing `IN`, `VALUES`, `OVER`, dialect built-in, trigger, CTE, and `EXEC` regressions remain covered; parser stays pure and Task 1-scoped.
-- Concerns: syntactic filtering cannot enumerate every future dialect built-in; later metadata confirmation remains the authority for whether a surviving unqualified candidate is a real routine. The report includes pre-existing edits and is intentionally not part of the source/test fix commit.
+## TDD Evidence
+
+### RED: PostgreSQL/Redshift
+
+Command: `npx vitest run tests/postgresDriver.test.ts`
+
+Expected failure observed: 1 of 16 tests failed. `fetches temporal values as native text and delegates other types` failed with `Cannot read properties of undefined (reading 'getTypeParser')`, proving the pool had no per-pool parser registry.
+
+### RED: MySQL
+
+Command: `npx vitest run tests/mysqlDriver.test.ts`
+
+Expected failure observed: 1 of 9 tests failed. `fetches date, datetime, and timestamp values as strings for all pools` received `undefined` instead of `['DATE', 'DATETIME', 'TIMESTAMP']`.
+
+### GREEN: focused files individually
+
+- `npx vitest run tests/postgresDriver.test.ts`: exit 0; 1 file passed, 16 tests passed.
+- `npx vitest run tests/mysqlDriver.test.ts`: exit 0; 1 file passed, 9 tests passed.
+
+### Final focused verification
+
+Command: `npx vitest run tests/postgresDriver.test.ts tests/mysqlDriver.test.ts`
+
+Output: exit 0; 2 files passed, 25 tests passed.
+
+### Full suite
+
+Command: `npx vitest run`
+
+Output: exit 0; 34 files passed and 2 skipped; 396 tests passed and 7 skipped (403 total).
+
+### Type checking
+
+Command: `npm run lint`
+
+Output: exit 0; `tsc -p ./ --noEmit` completed without diagnostics.
+
+## Self-review
+
+- Reviewed the committed diff and ran `git diff --check`; no whitespace errors were reported.
+- Parser behavior is scoped to each PostgreSQL pool and preserves the default parser for non-temporal values/formats.
+- The MySQL option is built by the shared `toPoolConfig`, so both initial and fallback pools are covered.
+- No unrelated source, tests, or `node_modules` files were staged or committed.
+
+## Concerns
+
+- Vitest emits the repository's existing Vite CJS deprecation warning; it does not affect test results.
+- Live database integration tests remain skipped unless their environment variables are configured.
+
+## Blocking Review Fixes
+
+- Bundled PostgreSQL runtime now exports both `Pool` and `types`, ensuring packaged builds can construct the per-pool temporal parser registry.
+- Redshift's `toPoolConfig` override now accepts and forwards the default parser registry to the PostgreSQL base implementation.
+- Added bundled-runtime contract coverage and Redshift-specific temporal/delegation coverage.
+
+### Review RED evidence
+
+- `npx vitest run tests/runtimeChunks.test.ts`: exit 1; 1 of 3 tests failed because `pgRuntime.types.getTypeParser` was `undefined`.
+- `npx vitest run tests/postgresDriver.test.ts`: exit 1; 1 of 17 tests failed because the Redshift pool's `config.types` was `undefined`.
+
+### Review GREEN evidence
+
+- Runtime rebuild via the installed Windows esbuild binary followed by `npx vitest run tests/postgresDriver.test.ts tests/runtimeChunks.test.ts`: exit 0; 2 files and 20 tests passed.
+- `npx vitest run`: exit 0; 34 files passed and 2 skipped; 398 tests passed and 7 skipped (405 total).
+- `npm run lint`: exit 0; `tsc -p ./ --noEmit` completed without diagnostics.
+
+### Review-fix concern
+
+- `npm run bundle:runtimes` cannot execute in this worktree because `node_modules/esbuild/bin/esbuild` is an ELF binary under Windows. Verification used the already-installed `node_modules/@esbuild/win32-x64/esbuild.exe` with the package script's exact arguments. This is an environment/dependency-installation issue, not a source change.

@@ -3,7 +3,6 @@ const { spawnSync } = require('node:child_process');
 run('npm', ['run', 'build']);
 run('npm', ['run', 'compile:e2e']);
 run('npx', ['vscode-test'], {
-  QUERYDECK_ENABLE_TEST_COMMANDS: 'true',
   MARKETPLACE_MEDIA_CAPTURE_DIR: 'media/marketplace'
 });
 

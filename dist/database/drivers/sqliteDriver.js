@@ -90,6 +90,10 @@ class SQLiteDriver extends driverUtils_1.BasicDatabaseDriver {
         const rows = await all(this.requireDatabase(connectionId), `select name from ${(0, identifiers_1.quoteIdentifier)(schema)}.sqlite_master where type = 'view' order by name`);
         return rows.map((row) => ({ schema, name: String(row.name), type: 'view' }));
     }
+    async getTriggers(connectionId, schema) {
+        const rows = await all(this.requireDatabase(connectionId), `select name, tbl_name as "table" from ${(0, identifiers_1.quoteIdentifier)(schema)}.sqlite_master where type = 'trigger' order by tbl_name, name`);
+        return rows.map((row) => ({ schema, table: String(row.table), name: String(row.name) }));
+    }
     async getColumns(connectionId, schema, table) {
         const rows = await all(this.requireDatabase(connectionId), `pragma ${(0, identifiers_1.quoteIdentifier)(schema)}.table_info(${(0, identifiers_1.quoteIdentifier)(table)})`);
         return rows.map((row) => ({
@@ -149,6 +153,18 @@ class SQLiteDriver extends driverUtils_1.BasicDatabaseDriver {
         const rows = await all(this.requireDatabase(connectionId), `select sql from ${(0, identifiers_1.quoteIdentifier)(schema)}.sqlite_master where name = ? and type in ('table', 'view')`, [table]);
         const ddl = (0, driverUtils_1.optionalString)(rows[0]?.sql);
         return ddl ? `${ddl};` : super.getTableDDL(connectionId, schema, table);
+    }
+    async getObjectDefinition(connectionId, object) {
+        if (object.kind === 'function' || object.kind === 'procedure')
+            return undefined;
+        try {
+            const rows = await all(this.requireDatabase(connectionId), `select sql from ${(0, identifiers_1.quoteIdentifier)(object.schema)}.sqlite_master where name = ? and type = ?`, [object.name, object.kind]);
+            const value = rows[0]?.sql;
+            return value === null || value === undefined || value === '' ? undefined : String(value);
+        }
+        catch (error) {
+            throw (0, driverUtils_1.toQueryError)(error);
+        }
     }
     requireDatabase(connectionId) {
         const database = this.connections.get(connectionId);
