@@ -1,0 +1,892 @@
+{
+  "activationEvents": [
+    "onCommand:database.addConnection",
+    "onCommand:database.aiExplainSql",
+    "onCommand:database.aiFixSql",
+    "onCommand:database.analyzeTablePerformance",
+    "onCommand:database.backfillQueryMemorySummaries",
+    "onCommand:database.cancelCurrentQuery",
+    "onCommand:database.compareSchemas",
+    "onCommand:database.connect",
+    "onCommand:database.copyTableToConnection",
+    "onCommand:database.deleteConnection",
+    "onCommand:database.disconnect",
+    "onCommand:database.editConnection",
+    "onCommand:database.executeCurrentQuery",
+    "onCommand:database.executeFile",
+    "onCommand:database.executeSelection",
+    "onCommand:database.executeStatementRange",
+    "onCommand:database.findPastQuery",
+    "onCommand:database.generateTableMaintenanceSql",
+    "onCommand:database.goToDatabaseObject",
+    "onCommand:database.importTableData",
+    "onCommand:database.insertQuerySnippet",
+    "onCommand:database.openQueryFile",
+    "onCommand:database.openSqlConsole",
+    "onCommand:database.profileTableData",
+    "onCommand:database.sessionMonitor",
+    "onCommand:database.setSqlFileConnection",
+    "onCommand:database.showErDiagram",
+    "onCommand:database.showResults",
+    "onCommand:database.showSqlMetadataStatus",
+    "onCommand:database.testConnection",
+    "onCommand:database.visualExplainAnalyzeSql",
+    "onCommand:database.visualExplainSql",
+    "onLanguage:sql",
+    "onView:databaseExplorer",
+    "onView:databaseQueryMap",
+    "onView:sqlResults"
+  ],
+  "commands": [
+    {
+      "command": "database.addConnection",
+      "title": "Add Database Connection",
+      "category": "Database",
+      "icon": "$(add)"
+    },
+    {
+      "command": "database.aiExplainSql",
+      "title": "AI: Explain SQL",
+      "category": "Database",
+      "icon": "$(comment-discussion)"
+    },
+    {
+      "command": "database.aiFixSql",
+      "title": "AI: Fix SQL",
+      "category": "Database",
+      "icon": "$(sparkle)"
+    },
+    {
+      "command": "database.analyzeTablePerformance",
+      "title": "AI: Analyze Table Performance",
+      "category": "Database",
+      "icon": "$(graph-line)"
+    },
+    {
+      "command": "database.backfillQueryMemorySummaries",
+      "title": "Backfill Query Memory Summaries",
+      "category": "Database"
+    },
+    {
+      "command": "database.cancelCurrentQuery",
+      "title": "Cancel Query",
+      "category": "Database",
+      "icon": "$(debug-stop)",
+      "enablement": "database.queryRunning"
+    },
+    {
+      "command": "database.compareSchemas",
+      "title": "Compare Schemas...",
+      "category": "Database",
+      "icon": "$(diff)"
+    },
+    {
+      "command": "database.connect",
+      "title": "Connect",
+      "category": "Database"
+    },
+    {
+      "command": "database.copyName",
+      "title": "Copy Name",
+      "category": "Database"
+    },
+    {
+      "command": "database.copyQualifiedName",
+      "title": "Copy Qualified Name",
+      "category": "Database"
+    },
+    {
+      "command": "database.copyTableToConnection",
+      "title": "Copy Table to Connection...",
+      "category": "Database",
+      "icon": "$(copy)"
+    },
+    {
+      "command": "database.deleteConnection",
+      "title": "Delete Connection",
+      "category": "Database"
+    },
+    {
+      "command": "database.disconnect",
+      "title": "Disconnect",
+      "category": "Database"
+    },
+    {
+      "command": "database.dropObject",
+      "title": "Generate DROP",
+      "category": "Database"
+    },
+    {
+      "command": "database.editConnection",
+      "title": "Edit Connection",
+      "category": "Database"
+    },
+    {
+      "command": "database.executeFile",
+      "title": "Execute File / Selection",
+      "category": "Database",
+      "icon": {
+        "dark": "media/run-file-dark.svg",
+        "light": "media/run-file-light.svg"
+      }
+    },
+    {
+      "command": "database.findPastQuery",
+      "title": "Find Past Query...",
+      "category": "Database",
+      "icon": "$(search)"
+    },
+    {
+      "command": "database.focusExplorer",
+      "title": "Focus Database Explorer",
+      "category": "Database"
+    },
+    {
+      "command": "database.focusResults",
+      "title": "Focus SQL Results",
+      "category": "Database"
+    },
+    {
+      "command": "database.generateDelete",
+      "title": "Generate DELETE",
+      "category": "Database"
+    },
+    {
+      "command": "database.generateInsert",
+      "title": "Generate INSERT",
+      "category": "Database"
+    },
+    {
+      "command": "database.generateSelect",
+      "title": "Generate SELECT",
+      "category": "Database"
+    },
+    {
+      "command": "database.generateTableMaintenanceSql",
+      "title": "Generate Maintenance SQL",
+      "category": "Database",
+      "icon": "$(warning)"
+    },
+    {
+      "command": "database.generateUpdate",
+      "title": "Generate UPDATE",
+      "category": "Database"
+    },
+    {
+      "command": "database.goToDatabaseObject",
+      "title": "Go to Database Object...",
+      "category": "Database",
+      "icon": "$(symbol-key)"
+    },
+    {
+      "command": "database.importTableData",
+      "title": "Import Table Data...",
+      "category": "Database",
+      "icon": "$(folder-opened)"
+    },
+    {
+      "command": "database.insertQuerySnippet",
+      "title": "Insert Query Snippet...",
+      "category": "Database",
+      "icon": "$(snippet)"
+    },
+    {
+      "command": "database.modifyTable",
+      "title": "Generate ALTER TABLE",
+      "category": "Database"
+    },
+    {
+      "command": "database.newCheck",
+      "title": "Generate CHECK",
+      "category": "Database"
+    },
+    {
+      "command": "database.newColumn",
+      "title": "Generate ADD COLUMN",
+      "category": "Database"
+    },
+    {
+      "command": "database.newForeignKey",
+      "title": "Generate FOREIGN KEY",
+      "category": "Database"
+    },
+    {
+      "command": "database.newIndex",
+      "title": "Generate CREATE INDEX",
+      "category": "Database"
+    },
+    {
+      "command": "database.newMaterializedView",
+      "title": "Generate CREATE MATERIALIZED VIEW",
+      "category": "Database"
+    },
+    {
+      "command": "database.newObject",
+      "title": "New...",
+      "category": "Database",
+      "icon": "$(add)"
+    },
+    {
+      "command": "database.newSchema",
+      "title": "Generate CREATE SCHEMA",
+      "category": "Database"
+    },
+    {
+      "command": "database.newSequence",
+      "title": "Generate CREATE SEQUENCE",
+      "category": "Database"
+    },
+    {
+      "command": "database.newTable",
+      "title": "Generate CREATE TABLE",
+      "category": "Database"
+    },
+    {
+      "command": "database.newUniqueKey",
+      "title": "Generate UNIQUE KEY",
+      "category": "Database"
+    },
+    {
+      "command": "database.newView",
+      "title": "Generate CREATE VIEW",
+      "category": "Database"
+    },
+    {
+      "command": "database.openQueryFile",
+      "title": "Add Query File",
+      "category": "Database"
+    },
+    {
+      "command": "database.openSqlConsole",
+      "title": "Add Query Console",
+      "category": "Database",
+      "icon": "$(new-file)"
+    },
+    {
+      "command": "database.openTableData",
+      "title": "Open Table",
+      "category": "Database"
+    },
+    {
+      "command": "database.profileTableData",
+      "title": "Profile Table Data",
+      "category": "Database",
+      "icon": "$(pulse)"
+    },
+    {
+      "command": "database.quickDocumentation",
+      "title": "Quick Documentation",
+      "category": "Database"
+    },
+    {
+      "command": "database.refreshExplorer",
+      "title": "Refresh Database Explorer",
+      "category": "Database",
+      "icon": "$(refresh)"
+    },
+    {
+      "command": "database.renameObject",
+      "title": "Generate RENAME",
+      "category": "Database"
+    },
+    {
+      "command": "database.sessionMonitor",
+      "title": "Session Monitor",
+      "category": "Database",
+      "icon": "$(pulse)"
+    },
+    {
+      "command": "database.setSqlFileConnection",
+      "title": "Set SQL File Connection",
+      "category": "Database",
+      "icon": "$(database)"
+    },
+    {
+      "command": "database.showErDiagram",
+      "title": "Show ER Diagram",
+      "category": "Database",
+      "icon": "$(graph)"
+    },
+    {
+      "command": "database.showObjectDdl",
+      "title": "Generate DDL",
+      "category": "Database"
+    },
+    {
+      "command": "database.showQueryHistory",
+      "title": "Show Query History",
+      "category": "Database"
+    },
+    {
+      "command": "database.showResults",
+      "title": "Show SQL Results",
+      "category": "Database"
+    },
+    {
+      "command": "database.showSqlMetadataStatus",
+      "title": "Show SQL Metadata Status",
+      "category": "Database"
+    },
+    {
+      "command": "database.testConnection",
+      "title": "Test Database Connection",
+      "category": "Database"
+    },
+    {
+      "command": "database.visualExplainAnalyzeSql",
+      "title": "Visual Explain ANALYZE SQL",
+      "category": "Database",
+      "icon": "$(debug-alt)"
+    },
+    {
+      "command": "database.visualExplainSql",
+      "title": "Visual Explain SQL",
+      "category": "Database",
+      "icon": "$(type-hierarchy-sub)"
+    }
+  ],
+  "menus": {
+    "database.copyPaste": [
+      {
+        "command": "database.copyName",
+        "group": "copy@1"
+      },
+      {
+        "command": "database.copyQualifiedName",
+        "group": "copy@2"
+      },
+      {
+        "command": "database.showObjectDdl",
+        "group": "copy@3",
+        "when": "viewItem == table || viewItem == schema"
+      }
+    ],
+    "database.new": [
+      {
+        "command": "database.addConnection",
+        "group": "datasource@1"
+      },
+      {
+        "command": "database.newCheck",
+        "group": "constraint@5",
+        "when": "viewItem == table || viewItem == column"
+      },
+      {
+        "command": "database.newColumn",
+        "group": "constraint@1",
+        "when": "viewItem == table || viewItem == column"
+      },
+      {
+        "command": "database.newForeignKey",
+        "group": "constraint@3",
+        "when": "viewItem == table || viewItem == column"
+      },
+      {
+        "command": "database.newIndex",
+        "group": "constraint@4",
+        "when": "viewItem == table || viewItem == column"
+      },
+      {
+        "command": "database.newMaterializedView",
+        "group": "object@2"
+      },
+      {
+        "command": "database.newSchema",
+        "group": "object@5"
+      },
+      {
+        "command": "database.newSequence",
+        "group": "object@4"
+      },
+      {
+        "command": "database.newTable",
+        "group": "object@1"
+      },
+      {
+        "command": "database.newUniqueKey",
+        "group": "constraint@2",
+        "when": "viewItem == table || viewItem == column"
+      },
+      {
+        "command": "database.newView",
+        "group": "object@3"
+      },
+      {
+        "command": "database.openQueryFile",
+        "group": "query@1"
+      },
+      {
+        "command": "database.openSqlConsole",
+        "group": "query@0"
+      }
+    ],
+    "database.objectActions": [
+      {
+        "command": "database.analyzeTablePerformance",
+        "group": "data@2",
+        "when": "viewItem == table"
+      },
+      {
+        "command": "database.dropObject",
+        "group": "change@99"
+      },
+      {
+        "command": "database.generateTableMaintenanceSql",
+        "group": "data@4",
+        "when": "viewItem == table"
+      },
+      {
+        "command": "database.importTableData",
+        "group": "data@5",
+        "when": "viewItem == table"
+      },
+      {
+        "command": "database.modifyTable",
+        "group": "data@6",
+        "when": "viewItem == table"
+      },
+      {
+        "command": "database.openTableData",
+        "group": "data@1",
+        "when": "viewItem == table"
+      },
+      {
+        "command": "database.profileTableData",
+        "group": "data@3",
+        "when": "viewItem == table"
+      },
+      {
+        "command": "database.renameObject",
+        "group": "change@1"
+      }
+    ],
+    "database.sqlScripts": [
+      {
+        "command": "database.generateDelete",
+        "group": "generate@4",
+        "when": "viewItem == table"
+      },
+      {
+        "command": "database.generateInsert",
+        "group": "generate@2",
+        "when": "viewItem == table"
+      },
+      {
+        "command": "database.generateSelect",
+        "group": "generate@1"
+      },
+      {
+        "command": "database.generateUpdate",
+        "group": "generate@3",
+        "when": "viewItem == table"
+      },
+      {
+        "command": "database.showObjectDdl",
+        "group": "ddl@1",
+        "when": "viewItem == table"
+      }
+    ],
+    "database.tools": [
+      {
+        "command": "database.aiExplainSql",
+        "group": "ai@2"
+      },
+      {
+        "command": "database.aiFixSql",
+        "group": "ai@1"
+      },
+      {
+        "command": "database.backfillQueryMemorySummaries",
+        "group": "history@3"
+      },
+      {
+        "command": "database.compareSchemas",
+        "group": "inspect@6"
+      },
+      {
+        "command": "database.copyTableToConnection",
+        "group": "inspect@5"
+      },
+      {
+        "command": "database.findPastQuery",
+        "group": "history@2"
+      },
+      {
+        "command": "database.quickDocumentation",
+        "group": "inspect@1"
+      },
+      {
+        "command": "database.refreshExplorer",
+        "group": "inspect@2"
+      },
+      {
+        "command": "database.sessionMonitor",
+        "group": "inspect@4"
+      },
+      {
+        "command": "database.showErDiagram",
+        "group": "inspect@7"
+      },
+      {
+        "command": "database.showQueryHistory",
+        "group": "history@1"
+      },
+      {
+        "command": "database.showSqlMetadataStatus",
+        "group": "inspect@3"
+      }
+    ],
+    "editor/context": [
+      {
+        "command": "database.aiExplainSql",
+        "group": "ai@2",
+        "when": "editorLangId == sql"
+      },
+      {
+        "command": "database.aiFixSql",
+        "group": "ai@1",
+        "when": "editorLangId == sql"
+      },
+      {
+        "command": "database.cancelCurrentQuery",
+        "group": "navigation@2",
+        "when": "editorLangId == sql && database.queryRunning"
+      },
+      {
+        "command": "database.executeFile",
+        "group": "navigation@1",
+        "when": "editorLangId == sql"
+      },
+      {
+        "command": "database.findPastQuery",
+        "group": "history@1",
+        "when": "editorLangId == sql"
+      },
+      {
+        "command": "database.insertQuerySnippet",
+        "group": "inspect@2",
+        "when": "editorLangId == sql"
+      },
+      {
+        "command": "database.setSqlFileConnection",
+        "group": "navigation@0",
+        "when": "editorLangId == sql"
+      },
+      {
+        "command": "database.showSqlMetadataStatus",
+        "group": "inspect@1",
+        "when": "editorLangId == sql"
+      },
+      {
+        "command": "database.visualExplainAnalyzeSql",
+        "group": "inspect@4",
+        "when": "editorLangId == sql"
+      },
+      {
+        "command": "database.visualExplainSql",
+        "group": "inspect@3",
+        "when": "editorLangId == sql"
+      }
+    ],
+    "editor/title": [
+      {
+        "command": "database.cancelCurrentQuery",
+        "group": "navigation@2",
+        "when": "editorLangId == sql && database.queryRunning"
+      },
+      {
+        "command": "database.executeFile",
+        "group": "navigation@1",
+        "when": "editorLangId == sql"
+      }
+    ],
+    "editor/title/context": [
+      {
+        "command": "database.cancelCurrentQuery",
+        "group": "navigation@2",
+        "when": "editorLangId == sql && database.queryRunning"
+      },
+      {
+        "command": "database.executeFile",
+        "group": "navigation@1",
+        "when": "editorLangId == sql"
+      },
+      {
+        "command": "database.findPastQuery",
+        "group": "history@1",
+        "when": "editorLangId == sql"
+      },
+      {
+        "command": "database.insertQuerySnippet",
+        "group": "inspect@2",
+        "when": "editorLangId == sql"
+      },
+      {
+        "command": "database.setSqlFileConnection",
+        "group": "navigation@0",
+        "when": "editorLangId == sql"
+      },
+      {
+        "command": "database.showSqlMetadataStatus",
+        "group": "inspect@1",
+        "when": "editorLangId == sql"
+      },
+      {
+        "command": "database.visualExplainSql",
+        "group": "inspect@3",
+        "when": "editorLangId == sql"
+      }
+    ],
+    "view/item/context": [
+      {
+        "command": "database.compareSchemas",
+        "group": "inspect@5",
+        "when": "view == databaseExplorer && (viewItem == connection || viewItem == catalog || viewItem == schema)"
+      },
+      {
+        "command": "database.connect",
+        "group": "connection@1",
+        "when": "view == databaseExplorer && viewItem == connection"
+      },
+      {
+        "command": "database.deleteConnection",
+        "group": "connection@5",
+        "when": "view == databaseExplorer && viewItem == connection"
+      },
+      {
+        "command": "database.disconnect",
+        "group": "connection@2",
+        "when": "view == databaseExplorer && viewItem == connection"
+      },
+      {
+        "command": "database.dropObject",
+        "group": "danger@99",
+        "when": "view == databaseExplorer && (viewItem == schema || viewItem == table || viewItem == view || viewItem == column)"
+      },
+      {
+        "command": "database.editConnection",
+        "group": "connection@4",
+        "when": "view == databaseExplorer && viewItem == connection"
+      },
+      {
+        "command": "database.modifyTable",
+        "group": "navigation@2",
+        "when": "view == databaseExplorer && viewItem == table"
+      },
+      {
+        "command": "database.quickDocumentation",
+        "group": "inspect@1",
+        "when": "view == databaseExplorer && (viewItem == schema || viewItem == table || viewItem == view || viewItem == column || viewItem == function || viewItem == procedure || viewItem == trigger)"
+      },
+      {
+        "command": "database.refreshExplorer",
+        "group": "navigation@5",
+        "when": "view == databaseExplorer"
+      },
+      {
+        "command": "database.renameObject",
+        "group": "modify@1",
+        "when": "view == databaseExplorer && (viewItem == schema || viewItem == table || viewItem == view || viewItem == column)"
+      },
+      {
+        "command": "database.sessionMonitor",
+        "group": "inspect@4",
+        "when": "view == databaseExplorer && (viewItem == connection || viewItem == catalog)"
+      },
+      {
+        "command": "database.showErDiagram",
+        "group": "inspect@6",
+        "when": "view == databaseExplorer && (viewItem == connection || viewItem == catalog || viewItem == schema)"
+      },
+      {
+        "command": "database.testConnection",
+        "group": "connection@3",
+        "when": "view == databaseExplorer && viewItem == connection"
+      },
+      {
+        "group": "actions@1",
+        "submenu": "database.objectActions",
+        "when": "view == databaseExplorer && (viewItem == table || viewItem == view || viewItem == schema || viewItem == column)"
+      },
+      {
+        "group": "navigation@1",
+        "submenu": "database.new",
+        "when": "view == databaseExplorer && (viewItem == connection || viewItem == catalog || viewItem == schema || viewItem == tables || viewItem == views || viewItem == table)"
+      },
+      {
+        "group": "navigation@3",
+        "submenu": "database.copyPaste",
+        "when": "view == databaseExplorer"
+      },
+      {
+        "group": "scripts@1",
+        "submenu": "database.sqlScripts",
+        "when": "view == databaseExplorer && (viewItem == table || viewItem == view)"
+      },
+      {
+        "group": "tools@1",
+        "submenu": "database.tools",
+        "when": "view == databaseExplorer && (viewItem == connection || viewItem == catalog || viewItem == schema || viewItem == table || viewItem == view || viewItem == function || viewItem == procedure || viewItem == trigger)"
+      }
+    ],
+    "view/title": [
+      {
+        "command": "database.addConnection",
+        "group": "navigation@2",
+        "when": "view == databaseExplorer"
+      },
+      {
+        "command": "database.findPastQuery",
+        "group": "navigation@0",
+        "when": "view == databaseExplorer"
+      },
+      {
+        "command": "database.findPastQuery",
+        "group": "navigation@0",
+        "when": "view == databaseQueryMap"
+      },
+      {
+        "command": "database.openSqlConsole",
+        "group": "navigation@1",
+        "when": "view == databaseExplorer"
+      },
+      {
+        "command": "database.refreshExplorer",
+        "group": "navigation@3",
+        "when": "view == databaseExplorer"
+      }
+    ]
+  },
+  "keybindings": [
+    {
+      "command": "database.executeFile",
+      "key": "ctrl+enter",
+      "mac": "cmd+enter",
+      "when": "editorTextFocus && editorLangId == sql"
+    },
+    {
+      "command": "database.findPastQuery",
+      "key": "ctrl+alt+h",
+      "mac": "cmd+alt+h"
+    },
+    {
+      "command": "database.focusExplorer",
+      "key": "ctrl+alt+d",
+      "when": "editorTextFocus"
+    },
+    {
+      "command": "database.focusResults",
+      "key": "ctrl+alt+r",
+      "when": "editorTextFocus"
+    },
+    {
+      "command": "database.openQueryFile",
+      "key": "ctrl+alt+shift+q",
+      "mac": "cmd+alt+shift+q"
+    },
+    {
+      "command": "database.openSqlConsole",
+      "key": "ctrl+shift+q",
+      "mac": "cmd+shift+q"
+    }
+  ],
+  "configuration": {
+    "database.ai.copilot.vendor": {
+      "default": "copilot",
+      "description": "Legacy VS Code Language Model vendor selector used by SQL AI features.",
+      "markdownDeprecationMessage": "Use `database.ai.vscodeLanguageModel.vendor` instead.",
+      "type": "string"
+    },
+    "database.ai.openAiCompatible.apiKey": {
+      "default": "",
+      "markdownDescription": "API key for the OpenAI-compatible provider. This is stored in VS Code settings; use `database.ai.openAiCompatible.apiKeyEnvVar` if you prefer environment-based secrets.",
+      "type": "string"
+    },
+    "database.ai.openAiCompatible.apiKeyEnvVar": {
+      "default": "DATABASE_AI_API_KEY",
+      "description": "Environment variable read for the OpenAI-compatible API key when database.ai.openAiCompatible.apiKey is empty.",
+      "type": "string"
+    },
+    "database.ai.openAiCompatible.baseUrl": {
+      "default": "",
+      "description": "Base URL for an OpenAI-compatible Chat Completions API, for example a self-hosted gateway ending in /v1.",
+      "type": "string"
+    },
+    "database.ai.openAiCompatible.model": {
+      "default": "",
+      "description": "Model name sent to the OpenAI-compatible Chat Completions API.",
+      "type": "string"
+    },
+    "database.ai.provider": {
+      "default": "vscodeLanguageModel",
+      "description": "AI provider used by SQL AI features.",
+      "enum": [
+        "copilot",
+        "openAiCompatible",
+        "vscodeLanguageModel"
+      ],
+      "type": "string"
+    },
+    "database.ai.vscodeLanguageModel.vendor": {
+      "default": "copilot",
+      "description": "Preferred VS Code language model vendor. Leave empty to use the first available registered language model.",
+      "type": "string"
+    },
+    "database.dataProfile.sampleRows": {
+      "default": 5000,
+      "description": "Maximum table rows sampled for one-click data profiling.",
+      "minimum": 100,
+      "type": "number"
+    },
+    "database.defaultMaxRows": {
+      "default": 500,
+      "description": "Maximum rows fetched for select/with queries by default. Set to 0 to fetch all rows.",
+      "minimum": 0,
+      "type": "number"
+    },
+    "database.grid.density": {
+      "default": "compact",
+      "enum": [
+        "comfortable",
+        "compact"
+      ],
+      "type": "string"
+    },
+    "database.grid.enableVirtualization": {
+      "default": true,
+      "type": "boolean"
+    },
+    "database.history.maxItems": {
+      "default": 1000,
+      "type": "number"
+    },
+    "database.query.timeoutMs": {
+      "default": 300000,
+      "type": "number"
+    },
+    "database.queryMemory.maxItems": {
+      "default": 2000,
+      "description": "Maximum local query memory records retained for semantic-style search.",
+      "minimum": 100,
+      "type": "number"
+    },
+    "database.resultTabs.persistPinned": {
+      "default": true,
+      "type": "boolean"
+    },
+    "database.resultTabs.reuseUnpinned": {
+      "default": true,
+      "description": "Deprecated. Result tabs now reuse the active unpinned tab automatically and only open a new tab when the active tab is pinned.",
+      "type": "boolean"
+    },
+    "database.safety.confirmDestructiveQueries": {
+      "default": true,
+      "type": "boolean"
+    },
+    "database.safety.confirmDestructiveQueriesOnAllConnections": {
+      "default": false,
+      "description": "Show destructive SQL confirmation on all connections, not only connections marked production.",
+      "type": "boolean"
+    }
+  }
+}
