@@ -32,7 +32,28 @@ function externalPackages(script: string): Set<string> {
   return new Set([...script.matchAll(/--external:([^ ]+)/g)].map((match) => match[1]));
 }
 
+function workflowJob(workflow: string, jobName: string): string {
+  const lines = workflow.split(/\r?\n/);
+  const escapedName = jobName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const startPattern = new RegExp(`^(\\s*)${escapedName}:\\s*(?:#.*)?$`);
+  const start = lines.findIndex((line) => startPattern.test(line));
+  if (start < 0) throw new Error(`Workflow job not found: ${jobName}`);
+
+  const indentation = lines[start].match(/^\s*/)?.[0] ?? '';
+  const nextJobPattern = new RegExp(`^${indentation}[^\\s#][^:]*:\\s*(?:#.*)?$`);
+  const relativeEnd = lines.slice(start + 1).findIndex((line) => nextJobPattern.test(line));
+  const end = relativeEnd < 0 ? lines.length : start + 1 + relativeEnd;
+  return lines.slice(start, end).join('\n');
+}
+
 describe('package scripts', () => {
+  it('isolates a workflow job from later same-indentation jobs', () => {
+    const workflow = `jobs:\n  unit-tests:\n    steps:\n      - run: npm run lint\n  other-job:\n    steps:\n      - run: npm test\n`;
+
+    expect(workflowJob(workflow, 'unit-tests')).toContain('run: npm run lint');
+    expect(workflowJob(workflow, 'unit-tests')).not.toContain('run: npm test');
+  });
+
   it('runs architecture checks as part of validation', () => {
     const scripts = packageJson().scripts ?? {};
 
@@ -99,23 +120,18 @@ describe('package scripts', () => {
     expect(captureScript).not.toContain('--code-version');
   });
 
-  it('rebuilds packaged runtime assets before unit tests import dist chunks in CI', () => {
+  it('runs unit-test CI validation steps in dependency order', () => {
     const workflow = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
-    const buildIndex = workflow.indexOf('run: npm run build');
-    const testIndex = workflow.indexOf('run: npm test');
+    const unitTestsJob = workflowJob(workflow, 'unit-tests');
+    const lintIndex = unitTestsJob.indexOf('run: npm run lint');
+    const architectureIndex = unitTestsJob.indexOf('run: npm run check:architecture');
+    const buildIndex = unitTestsJob.indexOf('run: npm run build');
+    const testIndex = unitTestsJob.indexOf('run: npm test');
 
-    expect(buildIndex).toBeGreaterThan(-1);
-    expect(testIndex).toBeGreaterThan(-1);
-    expect(buildIndex).toBeLessThan(testIndex);
-  });
-
-  it('checks architecture before running the full unit suite in CI', () => {
-    const workflow = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
-    const architectureIndex = workflow.indexOf('run: npm run check:architecture');
-    const testIndex = workflow.indexOf('run: npm test');
-
-    expect(architectureIndex).toBeGreaterThan(-1);
-    expect(testIndex).toBeGreaterThan(architectureIndex);
+    expect(lintIndex).toBeGreaterThan(-1);
+    expect(architectureIndex).toBeGreaterThan(lintIndex);
+    expect(buildIndex).toBeGreaterThan(architectureIndex);
+    expect(testIndex).toBeGreaterThan(buildIndex);
   });
 
   it('uses package.json as the only publish version', () => {
