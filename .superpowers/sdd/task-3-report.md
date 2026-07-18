@@ -62,3 +62,53 @@ Observed exit code: `0`.
 
 - Vitest emits the pre-existing Vite CJS Node API deprecation warning despite all focused tests passing.
 - The shared worktree still contains unrelated modifications to `.superpowers/sdd/progress.md` and `.superpowers/sdd/task-1-report.md`, plus extensive `node_modules` changes; none were included in the implementation commit.
+
+## Review-Fix Addendum
+
+### Commit
+
+- Review fixes: `db0db08` (`fix: preserve public surface array semantics`)
+
+### RED Evidence
+
+Command:
+
+```text
+npx vitest run tests/publicSurfaceCompatibility.test.ts
+```
+
+Observed exit code: `1`; 2 tests failed and 3 passed.
+
+- The semantic-array test received `['a-first', 'z-last']` instead of the declared enum order `['z-last', 'a-first']`.
+- The locale-independence test received command order `a, ä, z` instead of code-unit order `a, z, ä`.
+- Defaults, input non-mutation, and the existing manifest fixture check passed before the fix.
+
+After production changes, the four focused behavior tests passed and only the compatibility fixture test failed, demonstrating that the reviewed fixture still encoded the old array reordering. Regenerating it from the unchanged manifest restored compatibility.
+
+### GREEN Evidence
+
+Command:
+
+```text
+npx vitest run tests/publicSurfaceCompatibility.test.ts tests/commandSurface.test.ts
+```
+
+Final observed exit code: `0`.
+
+- Focused Vitest run: 2 test files passed, 13 tests passed, 0 failed.
+- `publicSurfaceCompatibility` passed 6 tests and `commandSurface` passed 7 tests.
+- `git diff --cached --check` passed before the review-fix commit.
+
+### Review Fixes
+
+- Replaced locale-sensitive comparison with an explicit `<`/`>` code-unit comparator for activation events, command identifiers, and object keys.
+- Sorts only activation events and contributed commands, whose declaration order is not user-visible.
+- Preserves all nested array order, including configuration `enum`/`enumDescriptions`, menu entries, and keybindings; menu groups and competing keybindings can make declaration order observable.
+- Canonicalizes object keys recursively without reordering arrays.
+- Regenerated the fixture from the current `package.json`; provider and grid-density enum values now match manifest declaration order.
+- Added focused tests for semantic array preservation, locale-independent deterministic ordering, canonical top-level/nested object keys, absent-section defaults, and input non-mutation.
+
+### Remaining Concerns
+
+- Vitest continues to emit the pre-existing Vite CJS Node API deprecation warning after all focused tests pass.
+- Unrelated shared-worktree changes remain untouched.
