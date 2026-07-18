@@ -109,6 +109,15 @@ describe('package scripts', () => {
     expect(buildIndex).toBeLessThan(testIndex);
   });
 
+  it('checks architecture before running the full unit suite in CI', () => {
+    const workflow = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+    const architectureIndex = workflow.indexOf('run: npm run check:architecture');
+    const testIndex = workflow.indexOf('run: npm test');
+
+    expect(architectureIndex).toBeGreaterThan(-1);
+    expect(testIndex).toBeGreaterThan(architectureIndex);
+  });
+
   it('uses package.json as the only publish version', () => {
     const workflow = readFileSync(join(root, '.github', 'workflows', 'publish-extension.yml'), 'utf8');
 
