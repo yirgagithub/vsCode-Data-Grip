@@ -84,19 +84,29 @@ export const persistedRecords = rawPersistedRecords;
 export function createInMemoryExtensionContext(initial: {
   globalState?: Record<string, unknown>;
   workspaceState?: Record<string, unknown>;
+  secrets?: Record<string, string>;
 } = {}): vscode.ExtensionContext {
-  const globalState = new Map(Object.entries(initial.globalState ?? {}));
-  const workspaceState = new Map(Object.entries(initial.workspaceState ?? {}));
-  const secrets = new Map<string, string>();
+  const jsonClone = <T>(value: T): T => {
+    try {
+      const serialized = JSON.stringify(value);
+      if (serialized === undefined) throw new Error('top-level value is not representable');
+      return JSON.parse(serialized) as T;
+    } catch (error) {
+      throw new Error(`Memento values must be JSON-compatible: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  const globalState = new Map(Object.entries(initial.globalState ?? {}).map(([key, value]) => [key, jsonClone(value)]));
+  const workspaceState = new Map(Object.entries(initial.workspaceState ?? {}).map(([key, value]) => [key, jsonClone(value)]));
+  const secrets = new Map<string, string>(Object.entries(initial.secrets ?? {}));
   const secretListeners = new Set<(event: { key: string }) => unknown>();
 
   const memento = (values: Map<string, unknown>) => ({
     get<T>(key: string, fallback?: T): T | undefined {
-      return values.has(key) ? structuredClone(values.get(key)) as T : fallback;
+      return values.has(key) ? jsonClone(values.get(key)) as T : fallback;
     },
     async update(key: string, value: unknown): Promise<void> {
       if (value === undefined) values.delete(key);
-      else values.set(key, structuredClone(value));
+      else values.set(key, jsonClone(value));
     },
     keys(): readonly string[] {
       return [...values.keys()];
@@ -128,11 +138,13 @@ export function compatibilityContext(): vscode.ExtensionContext {
   return createInMemoryExtensionContext({
     globalState: { 'database.connections': persistedRecords.connections },
     workspaceState: {
+      'database.selectedConnectionId': 'legacy-connection',
       'database.queryConsoles': persistedRecords.queryConsoles,
       'database.queryHistory': persistedRecords.queryHistory,
       'database.queryMemory': persistedRecords.queryMemory,
       'database.resultTabs': persistedRecords.resultSessions,
       'database.sqlDocumentConnections': persistedRecords.documentConnections
-    }
+    },
+    secrets: { 'database.connection.legacy-connection.password': 'synthetic-secret' }
   });
 }
