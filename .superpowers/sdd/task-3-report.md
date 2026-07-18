@@ -1,74 +1,64 @@
-# Task 3 Report: SQL Server Temporal Result Preservation
+# Task 3 Report — Freeze the Public Extension Surface
 
-## Implementation
+## Status
 
-- Added exported `formatSqlServerTemporalValue` using `Date#toISOString()`, which is based on UTC components and therefore cannot shift a stored SQL Server calendar date through the machine's local timezone.
-- SQL Server `date` becomes `YYYY-MM-DD`; `time` becomes `HH:mm:ss.sss`; `datetime`, `datetime2`, and `smalldatetime` become timezone-free `YYYY-MM-DDTHH:mm:ss.sss`; `datetimeoffset` remains an ISO instant ending in `Z`.
-- Null remains null and milliseconds available on the JavaScript `Date` are retained.
-- Connection setup registers mssql `valueHandler` entries for only Date, Time, DateTime, DateTime2, SmallDateTime, and DateTimeOffset. Existing handlers are not replaced, making repeated connection registration idempotent. Non-temporal tokens are untouched.
-- The integration-style mock test verifies all six handlers are installed before querying, repeated connection preserves handler identities, and an integer result remains numeric.
+DONE_WITH_CONCERNS
 
-## Strict TDD Evidence
+## Commit
 
-### RED
+- Implementation: `cc8f9dd` (`test: freeze extension public surface`)
+
+## RED Evidence
 
 Command:
 
-`npm test -- tests/temporalResultValues.test.ts tests/additionalDrivers.test.ts`
+```text
+npx vitest run tests/publicSurfaceCompatibility.test.ts
+```
 
-Observed exit code 1: 8 failures and 8 passes. All seven pure formatter cases failed with `formatSqlServerTemporalValue is not a function`; the registration test failed because `valueHandler.has(type)` was false. These are the expected missing-feature failures.
+Observed exit code: `1`.
 
-### GREEN
+- `tests/publicSurfaceCompatibility.test.ts` failed to load `../scripts/compatibility/publicSurface` because the projection module did not exist.
+- Vitest collected no tests, matching the expected missing-module failure before production implementation.
 
-Focused command:
+## GREEN Evidence
 
-`npm test -- tests/temporalResultValues.test.ts tests/additionalDrivers.test.ts`
+Command:
 
-Observed exit code 0: 2 files passed, 16 tests passed.
+```text
+npx vitest run tests/publicSurfaceCompatibility.test.ts tests/commandSurface.test.ts
+```
 
-`npm run lint` completed with exit code 0 (`tsc -p ./ --noEmit`).
+Observed exit code: `0`.
 
-`npm test` completed with exit code 0: 35 files passed and 2 skipped; 408 tests passed and 7 skipped.
+- Focused Vitest run: 2 test files passed, 8 tests passed, 0 failed.
+- `publicSurfaceCompatibility` passed 1 test and `commandSurface` passed 7 tests.
+- `git diff --cached --check` passed before the implementation commit.
 
-Full suite command:
+## Files
 
-`npm test`
+- Created `scripts/compatibility/publicSurface.js`.
+- Created `tests/fixtures/compatibility/public-surface.json`.
+- Created `tests/publicSurfaceCompatibility.test.ts`.
 
-Observed exit code 0: 35 files passed and 2 skipped; 408 tests passed and 7 skipped.
+## Fixture Review
 
-Type-check command:
+- Generated the fixture directly from the current `package.json` through `projectPublicSurface`.
+- Confirmed the snapshot is limited to activation events, contributed commands, menus, keybindings, and configuration properties.
+- Confirmed deterministic ordering: activation events are sorted, commands and keybindings are sorted by command identifier, and nested menu/configuration objects and arrays are recursively sorted.
+- Reviewed the 892-line fixture for generated noise and credentials. It contains the shipped configuration schema, including API-key setting names/descriptions, but the captured API-key default is the existing empty string; no credential value or secret is present.
+- Snapshot counts reviewed: 36 activation events, 56 contributed commands, and 6 keybindings.
 
-`npm run lint`
+## Self-Review
 
-Observed exit code 0 (`tsc -p ./ --noEmit`).
+- Compared the implementation and test against every Task 3 interface and step plus the plan's global constraints.
+- Confirmed `projectPublicSurface` does not mutate the manifest's top-level activation, command, or keybinding arrays because it sorts copies.
+- Confirmed missing manifest sections project to stable empty arrays/objects.
+- Confirmed the compatibility test reads the real manifest and reviewed fixture rather than mocks.
+- Confirmed no product behavior, command identifiers, configuration keys, plan/spec documents, or later-task files were changed.
+- Committed only the three Task 3 production/test artifacts; unrelated shared-worktree changes were left untouched.
 
-## datetimeoffset Representation Limit
+## Concerns
 
-Inspection of installed `tedious` 19.2.1 (`lib/value-parser.js`, `readDateTimeOffset`) shows that the parser reads but discards the two encoded offset bytes, then constructs a UTC JavaScript `Date`. By the time mssql's `valueHandler` runs, the original textual offset (for example `+02:00`) is unavailable. The formatter therefore emits the preserved instant in canonical UTC form with `Z`; it cannot honestly reconstruct or retain the discarded original offset. JavaScript `Date` also limits fractional precision to milliseconds, so any sub-millisecond SQL Server precision already discarded by the driver cannot be recovered.
-
-## Self-review
-
-- Scope is limited to the requested driver and tests plus this report; no execution timestamp or localization code changed.
-- UTC-derived slicing ensures timezone-free SQL Server types do not gain `Z` and avoids local calendar shifts.
-- Handler registration neither overwrites pre-existing custom handlers nor changes non-temporal values.
-- No bundled runtime artifact change was required because the runtime exposes the same mssql module-level type tokens and `valueHandler` map.
-
-## Review Fix: Deterministic Handler Ownership
-
-The Important review finding showed that registration previously retained a foreign handler already mapped to a temporal token. QueryDeck must deterministically own all six temporal mappings while preserving unrelated global mappings.
-
-### RED
-
-After seeding the mssql mock map with a foreign Date handler and an unrelated non-temporal handler:
-
-`npm test -- tests/temporalResultValues.test.ts tests/additionalDrivers.test.ts`
-
-Observed exit code 1: 1 failed and 15 passed. The expected assertion failed because the Date token still referenced `foreignTemporalHandler`.
-
-### GREEN
-
-Registration now uses six stable module-level QueryDeck handler functions and sets each temporal token unconditionally. Repeated connects install the same function identities, while the unrelated map entry is never cleared or modified.
-
-`npm test -- tests/temporalResultValues.test.ts tests/additionalDrivers.test.ts`
-
-Observed exit code 0: 2 files passed, 16 tests passed.
+- Vitest emits the pre-existing Vite CJS Node API deprecation warning despite all focused tests passing.
+- The shared worktree still contains unrelated modifications to `.superpowers/sdd/progress.md` and `.superpowers/sdd/task-1-report.md`, plus extensive `node_modules` changes; none were included in the implementation commit.
