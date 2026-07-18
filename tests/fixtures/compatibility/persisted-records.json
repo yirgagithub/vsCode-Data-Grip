@@ -1,0 +1,173 @@
+{
+  "connections": [
+    {
+      "id": "legacy-connection",
+      "name": "Synthetic PostgreSQL",
+      "type": "postgres",
+      "host": "db.invalid",
+      "port": 5432,
+      "database": "synthetic_app",
+      "username": "synthetic_user",
+      "sslMode": "prefer",
+      "color": "blue",
+      "defaultSchema": "public",
+      "connectTimeoutMs": 10000,
+      "queryTimeoutMs": 30000,
+      "production": false,
+      "readOnlyDefault": true
+    }
+  ],
+  "queryConsoles": [
+    {
+      "id": "legacy-console",
+      "connectionId": "legacy-connection",
+      "documentUri": "file:///synthetic/query-console.sql",
+      "schemaName": "public",
+      "pinned": true,
+      "sortOrder": 10,
+      "lastOpenedAt": 1700000000100,
+      "lastTouchedAt": 1700000000200,
+      "lastExecutedRange": {
+        "startLine": 0,
+        "startColumn": 0,
+        "endLine": 0,
+        "endColumn": 49
+      },
+      "createdAt": 1700000000000,
+      "updatedAt": 1700000000200
+    }
+  ],
+  "queryHistory": [
+    {
+      "id": "legacy-history",
+      "connectionId": "legacy-connection",
+      "databaseType": "postgres",
+      "sql": "select synthetic_id from synthetic_table",
+      "sourceOrigin": "sqlFile",
+      "sourceFile": "bound.sql",
+      "documentUri": "file:///synthetic/bound.sql",
+      "schemaName": "public",
+      "sourceRange": {
+        "startLine": 0,
+        "startColumn": 0,
+        "endLine": 0,
+        "endColumn": 49
+      },
+      "favorite": true,
+      "executedAt": 1700000000300,
+      "durationMs": 12,
+      "rowCount": 1,
+      "status": "completed",
+      "outputColumns": ["synthetic_id"],
+      "tables": ["synthetic_table"],
+      "columns": ["synthetic_id"],
+      "memoryTitle": "Synthetic identifiers",
+      "memorySummary": "Reads synthetic identifiers.",
+      "memorySummaryStatus": "ready"
+    }
+  ],
+  "queryMemory": [
+    {
+      "id": "legacy-memory",
+      "sourceKind": "history",
+      "sourceId": "legacy-history",
+      "connectionId": "legacy-connection",
+      "databaseType": "postgres",
+      "databaseName": "synthetic_app",
+      "connectionName": "Synthetic PostgreSQL",
+      "sql": "select synthetic_id from synthetic_table",
+      "title": "Synthetic identifiers",
+      "summary": "Reads synthetic identifiers.",
+      "summaryStatus": "ready",
+      "tables": ["synthetic_table"],
+      "columns": ["synthetic_id"],
+      "outputColumns": ["synthetic_id"],
+      "sourceFile": "bound.sql",
+      "documentUri": "file:///synthetic/bound.sql",
+      "sourceRange": {
+        "startLine": 0,
+        "startColumn": 0,
+        "endLine": 0,
+        "endColumn": 49
+      },
+      "favorite": true,
+      "status": "completed",
+      "rowCount": 1,
+      "durationMs": 12,
+      "executedAt": 1700000000300,
+      "firstExecutedAt": 1700000000300,
+      "lastExecutedAt": 1700000000300,
+      "runCount": 1,
+      "historyIds": ["legacy-history"],
+      "latestHistoryId": "legacy-history",
+      "indexedAt": 1700000000400,
+      "updatedAt": 1700000000400
+    }
+  ],
+  "resultSessions": [
+    {
+      "id": "legacy-result-session",
+      "title": "Legacy query",
+      "customTitle": "Synthetic result",
+      "pinned": true,
+      "connectionId": "legacy-connection",
+      "databaseType": "postgres",
+      "databaseName": "synthetic_app",
+      "schemaName": "public",
+      "queryText": "select synthetic_id from synthetic_table",
+      "sourceOrigin": "sqlFile",
+      "sourceFile": "bound.sql",
+      "sourceDocumentUri": "file:///synthetic/bound.sql",
+      "sourceQueryId": "legacy-history",
+      "sourceSectionIndex": 0,
+      "sourceRange": {
+        "startLine": 0,
+        "startColumn": 0,
+        "endLine": 0,
+        "endColumn": 49
+      },
+      "executionStatus": "completed",
+      "executionStartedAt": 1700000000300,
+      "executionFinishedAt": 1700000000312,
+      "executionTimeMs": 12,
+      "rowCount": 1,
+      "maxRows": 500,
+      "rowOffset": 0,
+      "resultSets": [
+        {
+          "id": "synthetic-result-set",
+          "title": "Result 1",
+          "fields": [{ "name": "synthetic_id", "dataTypeName": "integer" }],
+          "rows": [{ "synthetic_id": 42 }],
+          "rowCount": 1,
+          "hasMore": false,
+          "maxRows": 500,
+          "command": "SELECT",
+          "durationMs": 12
+        }
+      ],
+      "activeResultSetIndex": 0,
+      "filters": [{ "column": "synthetic_id", "operator": "equals", "value": "42" }],
+      "sort": [{ "column": "synthetic_id", "direction": "asc" }],
+      "columnState": [{ "column": "synthetic_id", "width": 120, "hidden": false }],
+      "scrollState": { "top": 0, "left": 0 },
+      "createdAt": 1700000000300,
+      "updatedAt": 1700000000312
+    }
+  ],
+  "documentConnections": [
+    {
+      "id": "legacy-document-binding",
+      "documentUri": "file:///synthetic/bound.sql",
+      "connectionId": "legacy-connection",
+      "lastTouchedAt": 1700000000500,
+      "lastExecutedRange": {
+        "startLine": 0,
+        "startColumn": 0,
+        "endLine": 0,
+        "endColumn": 49
+      },
+      "updatedAt": 1700000000500
+    }
+  ]
+}

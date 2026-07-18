@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { describe, expect, it, vi } from 'vitest';
 import { ResultSessionStore } from '../src/persistence/resultSessionStore';
 import type { QueryResultTab } from '../src/types';
+import { compatibilityContext } from './helpers/inMemoryExtensionContext';
 
 vi.mock('vscode', () => ({
   workspace: {
@@ -10,6 +11,13 @@ vi.mock('vscode', () => ({
 }));
 
 describe('ResultSessionStore temporal values', () => {
+  it('reads the reviewed legacy result session fixture', () => {
+    const record = new ResultSessionStore(compatibilityContext()).getTabs()
+      .find(({ id }) => id === 'legacy-result-session');
+
+    expect(record?.resultSets[0].rows).toEqual([{ synthetic_id: 42 }]);
+  });
+
   it('persists and restores temporal strings without conversion', async () => {
     const temporalRow = {
       date_value: '2025-11-09',
