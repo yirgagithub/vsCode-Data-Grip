@@ -33,3 +33,13 @@ Status: DONE_WITH_CONCERNS
 
 - `npm ci` reported 10 dependency vulnerabilities: 3 low, 3 moderate, 3 high, and 1 critical. No dependency upgrades were attempted because they are outside this final-review remediation scope.
 - Live database integration tests remained opt-in and were skipped by the standard full test command (7 tests skipped total).
+
+## Final re-review blocker
+
+- Same-feature imports are no longer added to the feature dependency graph, so a feature public entry may legitimately import or re-export its own internals without producing a feature-cycle false positive.
+- Exact file self-imports remain rejected separately as `circular module dependency: file imports itself`.
+- Cross-feature two- and three-feature cycle coverage remains in place.
+- Focused architecture verification: 2 files passed, 15 tests passed.
+- `npm run check:architecture`: passed with zero violations.
+- `npm run lint`: passed.
+- `npm test`: 40 files passed, 2 opt-in integration files skipped; 451 tests passed, 7 skipped.
