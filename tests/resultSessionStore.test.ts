@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { describe, expect, it, vi } from 'vitest';
 import { ResultSessionStore } from '../src/persistence/resultSessionStore';
 import type { QueryResultTab } from '../src/types';
-import { compatibilityContext } from './helpers/inMemoryExtensionContext';
+import { compatibilityContext, createInMemoryExtensionContext } from './helpers/inMemoryExtensionContext';
 
 vi.mock('vscode', () => ({
   workspace: {
@@ -25,15 +25,7 @@ describe('ResultSessionStore temporal values', () => {
       timestamp_value: '2025-11-09 14:23:45.123456',
       timestamp_tz_value: '2025-11-09T14:23:45.123456+05:30'
     };
-    let persisted: QueryResultTab[] = [];
-    const context = {
-      workspaceState: {
-        get: vi.fn((_key: string, fallback: QueryResultTab[]) => persisted.length ? persisted : fallback),
-        update: vi.fn(async (_key: string, value: QueryResultTab[]) => {
-          persisted = JSON.parse(JSON.stringify(value)) as QueryResultTab[];
-        })
-      }
-    } as never;
+    const context = createInMemoryExtensionContext();
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({ get: vi.fn(() => true) } as never);
     const store = new ResultSessionStore(context);
     const tab = {
