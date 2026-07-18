@@ -33,6 +33,13 @@ function externalPackages(script: string): Set<string> {
 }
 
 describe('package scripts', () => {
+  it('runs architecture checks as part of validation', () => {
+    const scripts = packageJson().scripts ?? {};
+
+    expect(scripts['check:architecture']).toBe('node scripts/architecture/checkArchitecture.js');
+    expect(scripts.validate).toBe('npm run lint && npm run check:architecture && npm test && npm run build');
+  });
+
   it('keeps heavy runtime packages lazy and builds packaged runtime chunks', () => {
     const scripts = packageJson().scripts ?? {};
     const externalized = externalPackages(scripts['bundle:extension'] ?? '');
