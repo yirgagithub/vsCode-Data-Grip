@@ -98,4 +98,13 @@ describe('lazy runtime chunks', () => {
 
     expect(typeof moduleExports.types?.getTypeParser).toBe('function');
   });
+
+  it('packages the SQL Server temporal value handler contract', () => {
+    const moduleExports = requireFromRoot(join(root, 'dist/runtime/mssqlRuntime.js')) as Record<string, unknown>;
+
+    expect(moduleExports.valueHandler).toBeInstanceOf(Map);
+    for (const exportName of ['Date', 'Time', 'DateTime', 'DateTime2', 'SmallDateTime', 'DateTimeOffset']) {
+      expect(moduleExports[exportName], `mssqlRuntime.${exportName}`).toBeDefined();
+    }
+  });
 });
