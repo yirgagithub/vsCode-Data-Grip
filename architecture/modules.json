@@ -1,0 +1,17 @@
+{
+  "layers": ["core", "feature", "adapter", "app", "legacy"],
+  "roots": {
+    "core": "src/core/",
+    "feature": "src/features/",
+    "adapter": "src/adapters/",
+    "app": "src/app/"
+  },
+  "featurePublicEntry": "index.ts",
+  "legacyRoots": [
+    "src/ai/", "src/controllers/", "src/database/", "src/explorer/", "src/mcp/",
+    "src/persistence/", "src/providers/", "src/runtime/", "src/services/", "src/utils/",
+    "src/webviews/", "src/extension.ts", "src/mcpServer.ts", "src/types.ts",
+    "src/vendorModules.d.ts"
+  ],
+  "legacyDependencyExceptions": []
+}
