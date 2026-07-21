@@ -4,3 +4,9 @@
 *.vsix
 .vscode-test/
 e2e/out/
+/.github/
+/.gstack/
+/.superpowers/
+/.vscode/
+/docs/
+/dist/
