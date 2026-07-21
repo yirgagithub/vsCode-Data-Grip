@@ -1019,6 +1019,7 @@
     "lint": "tsc -p ./ --noEmit",
     "check:architecture": "node scripts/architecture/checkArchitecture.js",
     "validate": "npm run lint && npm run check:architecture && npm test && npm run build",
+    "pretest": "npm run bundle:extension && npm run bundle:runtimes",
     "test": "vitest run",
     "test:live": "vitest run tests/liveDatabaseDrivers.integration.test.ts",
     "compile:e2e": "tsc -p e2e",
