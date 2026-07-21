@@ -1,3 +1,0 @@
-[2026-05-15T19:31:18.471Z] GET http://127.0.0.1:5177/.gstack/design-reports/results-fixture.html → 200 (2ms, 4301B)
-[2026-05-15T19:31:18.474Z] GET http://127.0.0.1:5177/media/results/results.css → 200 (1ms, 7811B)
-[2026-05-15T19:31:18.474Z] GET http://127.0.0.1:5177/media/results/results.js → 200 (6ms, 204357B)

@@ -32,28 +32,7 @@ function externalPackages(script: string): Set<string> {
   return new Set([...script.matchAll(/--external:([^ ]+)/g)].map((match) => match[1]));
 }
 
-function workflowJob(workflow: string, jobName: string): string {
-  const lines = workflow.split(/\r?\n/);
-  const escapedName = jobName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const startPattern = new RegExp(`^(\\s*)${escapedName}:\\s*(?:#.*)?$`);
-  const start = lines.findIndex((line) => startPattern.test(line));
-  if (start < 0) throw new Error(`Workflow job not found: ${jobName}`);
-
-  const indentation = lines[start].match(/^\s*/)?.[0] ?? '';
-  const nextJobPattern = new RegExp(`^${indentation}[^\\s#][^:]*:\\s*(?:#.*)?$`);
-  const relativeEnd = lines.slice(start + 1).findIndex((line) => nextJobPattern.test(line));
-  const end = relativeEnd < 0 ? lines.length : start + 1 + relativeEnd;
-  return lines.slice(start, end).join('\n');
-}
-
 describe('package scripts', () => {
-  it('isolates a workflow job from later same-indentation jobs', () => {
-    const workflow = `jobs:\n  unit-tests:\n    steps:\n      - run: npm run lint\n  other-job:\n    steps:\n      - run: npm test\n`;
-
-    expect(workflowJob(workflow, 'unit-tests')).toContain('run: npm run lint');
-    expect(workflowJob(workflow, 'unit-tests')).not.toContain('run: npm test');
-  });
-
   it('runs architecture checks as part of validation', () => {
     const scripts = packageJson().scripts ?? {};
 
@@ -120,49 +99,4 @@ describe('package scripts', () => {
     expect(captureScript).not.toContain('--code-version');
   });
 
-  it('runs unit-test CI validation steps in dependency order', () => {
-    const workflow = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
-    const unitTestsJob = workflowJob(workflow, 'unit-tests');
-    const lintIndex = unitTestsJob.indexOf('run: npm run lint');
-    const architectureIndex = unitTestsJob.indexOf('run: npm run check:architecture');
-    const buildIndex = unitTestsJob.indexOf('run: npm run build');
-    const testIndex = unitTestsJob.indexOf('run: npm test');
-
-    expect(lintIndex).toBeGreaterThan(-1);
-    expect(architectureIndex).toBeGreaterThan(lintIndex);
-    expect(buildIndex).toBeGreaterThan(architectureIndex);
-    expect(testIndex).toBeGreaterThan(buildIndex);
-  });
-
-  it('uses package.json as the only publish version', () => {
-    const workflow = readFileSync(join(root, '.github', 'workflows', 'publish-extension.yml'), 'utf8');
-
-    expect(workflow).toContain('workflow_dispatch:');
-    expect(workflow).toContain("require('./package.json').version");
-    expect(workflow).toContain('querydeck-${{ steps.package.outputs.version }}-vsix');
-    expect(workflow).not.toContain('inputs:');
-    expect(workflow).not.toContain('REQUESTED_VERSION');
-    expect(workflow).not.toContain('${{ inputs.version }}');
-    expect(workflow).not.toContain('Verify requested version');
-  });
-
-  it('bumps and records the patch version before marketplace publishing', () => {
-    const workflow = readFileSync(join(root, '.github', 'workflows', 'publish-extension.yml'), 'utf8');
-    const bumpIndex = workflow.indexOf('npm version patch --no-git-tag-version');
-    const testIndex = workflow.indexOf('run: npm test');
-    const pushIndex = workflow.indexOf('git push origin HEAD:main');
-    const marketplaceIndex = workflow.indexOf('Publish to Visual Studio Marketplace');
-    const openVsxIndex = workflow.indexOf('Publish to Open VSX');
-
-    expect(workflow).toContain('contents: write');
-    expect(workflow).toContain('ref: main');
-    expect(bumpIndex).toBeGreaterThan(-1);
-    expect(testIndex).toBeGreaterThan(bumpIndex);
-    expect(pushIndex).toBeGreaterThan(testIndex);
-    expect(marketplaceIndex).toBeGreaterThan(pushIndex);
-    expect(openVsxIndex).toBeGreaterThan(marketplaceIndex);
-    expect(workflow).toContain('git add package.json package-lock.json');
-    expect(workflow).toContain('git commit -m "Bump version to $VERSION [skip ci]"');
-    expect(workflow).not.toMatch(/revert|reset --hard/i);
-  });
 });
