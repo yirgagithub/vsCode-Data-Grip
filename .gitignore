@@ -4,6 +4,7 @@
 *.vsix
 .vscode-test/
 e2e/out/
+/node_modules/
 /.github/
 /.gstack/
 /.superpowers/
