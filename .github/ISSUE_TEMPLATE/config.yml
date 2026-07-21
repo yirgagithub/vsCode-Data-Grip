@@ -1,5 +1,0 @@
-blank_issues_enabled: true
-contact_links:
-  - name: Security or privacy report
-    url: https://github.com/yirgagithub/vsCode-Data-Grip/security/advisories/new
-    about: Please do not post credentials, customer data, or private schema details in public issues.
